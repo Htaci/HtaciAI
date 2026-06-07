@@ -1,0 +1,11 @@
+﻿<Solution>
+  <Project Path="HtaciAI.Android/HtaciAI.Android.csproj">
+    <Deploy />
+  </Project>
+  <Project Path="HtaciAI.Browser/HtaciAI.Browser.csproj" />
+  <Project Path="HtaciAI.Desktop/HtaciAI.Desktop.csproj" />
+  <Project Path="HtaciAI.iOS/HtaciAI.iOS.csproj">
+    <Deploy />
+  </Project>
+  <Project Path="HtaciAI/HtaciAI.csproj" />
+</Solution>
