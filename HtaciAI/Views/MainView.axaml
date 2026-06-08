@@ -1,26 +1,75 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-                xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-                xmlns:vm="using:HtaciAI.ViewModels"
-                mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
-                x:Class="HtaciAI.Views.MainView"
-                x:DataType="vm:MainViewModel">
-    <Design.DataContext>
-        <!-- This only sets the DataContext for the previewer in an IDE,
-to set the actual DataContext for runtime, set the DataContext property in code (look at App.axaml.cs) -->
-        <vm:MainViewModel />
-    </Design.DataContext>
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:HtaciAI.Views"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             x:Class="HtaciAI.Views.MainView"
+             x:DataType="views:MainView"
+             d:DesignWidth="430" d:DesignHeight="932">
+    <Grid>
+        <!-- 菜单栏页面 -->
+        <Grid>
+            <!-- 这里是菜单栏内的内容 -->
+             <TextBlock>这里是菜单栏按钮，先不实现内容，先实现页面导航，留作展示</TextBlock>
+        </Grid>
+        <!-- 主要内容区域 -->
+        <Grid>
+            <!-- 顶部导航按钮（打开导航菜单栏页面） -->
+            <Button Background="Transparent"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
+                    Margin="8,8,0,0"
+                    Width="50"
+                    Height="40"
+                    Click="OnNavigateButtonClick">
+                <Button.Styles>
+                    <Style Selector="Button:pressed">
+                        <Setter Property="Background" Value="Gray"/>
+                    </Style>
+                </Button.Styles>
+                <Image x:Name="NavigateIcon"
+                    Width="25"
+                    Height="20"
+                    Stretch="Fill"/>
+            </Button>
+            <!-- 顶部功能切换按钮 -->
+            <Border HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
 
-    <TextBlock Text="{Binding Greeting}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-    <Border BorderBrush="Gray" 
-            BorderThickness="1" 
-            Margin="10"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Bottom">
-        <StackPanel>
-            <TextBlock Text="This is the MainView content." Margin="5"/>
-            <!-- Add more UI elements here -->
-        </StackPanel>
-    </Border>
+                    Height="40"
+                    Width="150"
+                    Margin="0,8,0,0"
+                    CornerRadius="30"
+                    Background="Transparent"
+>
+                    <Grid>
+                        <!-- 高亮提示 -->
+                        <Border Background="#25FFFFFF"
+                                Width="75"
+                                HorizontalAlignment="Left"
+                                BoxShadow="0 0 32 0 #20000000"
+                                BorderBrush="#50FFFFFF"
+                                
+                                CornerRadius="30"></Border>
+                        <!-- 询问 -->
+                        <TextBlock HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    Margin="24,0,0,0">询问</TextBlock>
+                        <!-- 闲聊 -->
+                        <TextBlock HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,24,0">询问</TextBlock>
+                    </Grid>
+            </Border>
+
+            <!-- 内容页面容器 -->
+            <Grid>
+
+            </Grid>
+
+
+            
+        </Grid>
+
+    </Grid>
+    
 </UserControl>

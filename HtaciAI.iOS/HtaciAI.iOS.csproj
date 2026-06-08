@@ -4,6 +4,8 @@
     <TargetFramework>net10.0-ios</TargetFramework>
     <SupportedOSPlatformVersion>13.0</SupportedOSPlatformVersion>
     <Nullable>enable</Nullable>
+    <!-- Debug 模式下使用解释器，避免模拟器 AOT 崩溃 -->
+    <UseInterpreter Condition="'$(Configuration)' == 'Debug'">true</UseInterpreter>
   </PropertyGroup>
 
   <ItemGroup>

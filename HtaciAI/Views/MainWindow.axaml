@@ -1,22 +1,23 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="using:HtaciAI.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:views="using:HtaciAI.Views"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="HtaciAI.Views.MainWindow"
+        x:DataType="views:MainWindow"
         Icon="/Assets/avalonia-logo.ico"
         Title="HtaciAI">
-            <Border BorderBrush="Gray" 
-            BorderThickness="1" 
-            Margin="10"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Bottom">
         <StackPanel>
-            <TextBlock Text="This is the MainView content." Margin="5"/>
-            <!-- Add more UI elements here -->
-        </StackPanel>
-    </Border>
-        <TextBlock Text="Hello, World!" HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <Border BorderBrush="Gray"
+                BorderThickness="1"
+                Margin="10"
+                HorizontalAlignment="Stretch">
+            <StackPanel>
+                <TextBlock Text="This is the MainView content." Margin="5"/>
+                <!-- Add more UI elements here -->
+            </StackPanel>
+        </Border>
+        <TextBlock Text="{Binding Greeting}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="24"/>
+    </StackPanel>
 </Window>
