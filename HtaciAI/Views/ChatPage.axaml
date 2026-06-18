@@ -1,0 +1,69 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="HtaciAI.ChatPage">
+    <!-- 这是普通聊天页面 -->
+   <Grid>
+	   <!-- 历史聊天记录列表 -->
+       <Grid HorizontalAlignment="Left"
+                   Background="Red"
+                   Width="200">
+           <!-- 创建新会话的按钮 -->
+		   <Border Background="Beige"
+                   Height="30"
+                   HorizontalAlignment="Stretch"
+                   VerticalAlignment="Top">
+			   <TextBlock HorizontalAlignment="Center"
+                          VerticalAlignment="Center">
+				   创建新会话
+               </TextBlock>
+           </Border>
+           <ScrollViewer Background="Blue"
+                         HorizontalAlignment="Stretch"
+                         VerticalAlignment="Stretch"
+                         Margin="0,30,0,0">
+			   <StackPanel>
+				   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+                   <TextBlock>aaa</TextBlock>
+               </StackPanel>
+               
+           </ScrollViewer>
+       </Grid>
+   </Grid>
+</UserControl>

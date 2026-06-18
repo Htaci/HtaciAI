@@ -6,7 +6,7 @@ using Avalonia.Android;
 namespace HtaciAI.Android
 {
     [Application]
-    public class Application : AvaloniaAndroidApplication<App>
+    public class Application : AvaloniaAndroidApplication<HtaciAI.Mobile.App>
     {
         protected Application(nint javaReference, JniHandleOwnership transfer) : base(javaReference, transfer)
         {

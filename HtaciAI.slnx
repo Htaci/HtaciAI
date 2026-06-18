@@ -8,4 +8,6 @@
     <Deploy />
   </Project>
   <Project Path="HtaciAI/HtaciAI.csproj" />
+  <Project Path="HtaciAI.Mobile/HtaciAI.Mobile.csproj" />
+  <Project Path="HtaciAI.Shared/HtaciAI.Shared.csproj" />
 </Solution>

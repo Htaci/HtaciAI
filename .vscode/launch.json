@@ -1,0 +1,44 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Desktop",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build-desktop",
+            "program": "${workspaceFolder}/HtaciAI.Desktop/bin/Debug/net10.0/HtaciAI.Desktop.dll",
+            "cwd": "${workspaceFolder}/HtaciAI.Desktop",
+            "console": "internalConsole",
+            "stopAtEntry": false,
+            "env": {
+                "DOTNET_ENVIRONMENT": "Development"
+            }
+        },
+        {
+            "name": "Launch Desktop (Release)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build-desktop-release",
+            "program": "${workspaceFolder}/HtaciAI.Desktop/bin/Release/net10.0/HtaciAI.Desktop.dll",
+            "cwd": "${workspaceFolder}/HtaciAI.Desktop",
+            "console": "internalConsole",
+            "stopAtEntry": false,
+            "env": {
+                "DOTNET_ENVIRONMENT": "Production"
+            }
+        },
+        {
+            "name": "Run iOS Simulator",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "dotnet build -f net10.0-ios ${workspaceFolder}/HtaciAI.iOS/HtaciAI.iOS.csproj && dotnet build -t:Run -f net10.0-ios ${workspaceFolder}/HtaciAI.iOS/HtaciAI.iOS.csproj -p:_DeviceName='iPhone 17'",
+            "cwd": "${workspaceFolder}"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Desktop + iOS Simulator",
+            "configurations": ["Launch Desktop", "Run iOS Simulator"]
+        }
+    ]
+}

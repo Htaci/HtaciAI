@@ -1,0 +1,112 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-desktop",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "HtaciAI.Desktop/HtaciAI.Desktop.csproj"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "build-desktop-release",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "-c", "Release",
+                "HtaciAI.Desktop/HtaciAI.Desktop.csproj"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "build-ios",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "HtaciAI.iOS/HtaciAI.iOS.csproj"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "run-ios-simulator",
+            "dependsOn": ["build-ios"],
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "-t:Run",
+                "-f", "net10.0-ios",
+                "HtaciAI.iOS/HtaciAI.iOS.csproj",
+                "-p:_DeviceName=iPhone 17"
+            ],
+            "problemMatcher": "$msCompile",
+            "isBackground": true
+        },
+        {
+            "label": "publish-ios",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "publish",
+                "-c", "Release",
+                "-f", "net10.0-ios",
+                "HtaciAI.iOS/HtaciAI.iOS.csproj"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "clean",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "clean"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "build-preview",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "HtaciAI/HtaciAI.csproj"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": {
+                "kind": "build"
+            }
+        },
+        {
+            "label": "rebuild-preview-clean",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "clean",
+                "HtaciAI/HtaciAI.csproj"
+            ],
+            "problemMatcher": "$msCompile",
+            "hide": true
+        },
+        {
+            "label": "rebuild-preview",
+            "dependsOn": ["rebuild-preview-clean"],
+            "dependsOrder": "sequence",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "HtaciAI/HtaciAI.csproj"
+            ],
+            "problemMatcher": "$msCompile"
+        }
+    ]
+}

@@ -23,6 +23,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\HtaciAI\HtaciAI.csproj" />
+    <ProjectReference Include="..\HtaciAI.Mobile\HtaciAI.Mobile.csproj" />
   </ItemGroup>
 </Project>
