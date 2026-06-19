@@ -13,51 +13,49 @@
         Width="1300" Height="750"
         MinWidth="920" MinHeight="550"
         WindowStartupLocation="CenterScreen">
-      <Window.Styles>
-    <Style Selector="Window">
-      <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
-      <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
-      <Setter Property="WindowDecorations" Value="BorderOnly"/>
-      <Setter Property="CanResize" Value="True"/>
-      <Setter Property="Background">
-        <Setter.Value>
-          <SolidColorBrush Color="Transparent" Opacity="1"/>
-        </Setter.Value>
-      </Setter>
-    </Style>
 
-               <!-- 为 Close 按钮提供显式 template，确保能控制内部 Border 的背景 -->
-    <Style Selector="Button#Close">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="Black"/>
-      <Setter Property="Template">
-        <ControlTemplate>
-          <Border Name="PART_Border" Background="{TemplateBinding Background}" CornerRadius="3">
-            <ContentPresenter
-              Content="{TemplateBinding Content}"
-              ContentTemplate="{TemplateBinding ContentTemplate}"
-              Foreground="{TemplateBinding Foreground}"
-              HorizontalAlignment="Center"
-              VerticalAlignment="Center"
-              Margin="{TemplateBinding Padding}" />
-          </Border>
-        </ControlTemplate>
-      </Setter>
-    </Style>
+    <Window.Styles>
+        <Style Selector="Window">
+            <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+            <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+            <Setter Property="WindowDecorations" Value="BorderOnly"/>
+            <Setter Property="CanResize" Value="True"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <SolidColorBrush Color="Transparent" Opacity="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-    <!-- 鼠标悬停时改变 template 内部 Border 的背景（覆盖主题的 pointerover 状态） -->
-    <Style Selector="Button#Close:pointerover /template/ Border#PART_Border">
-      <Setter Property="Background" Value="Red"/> <!-- 可换成你想要的红色 -->
-    </Style>
+        <Style Selector="Button#CloseBtn">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="Black"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Name="PART_Border" Background="{TemplateBinding Background}" CornerRadius="3">
+                        <ContentPresenter
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            Foreground="{TemplateBinding Foreground}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Margin="{TemplateBinding Padding}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
 
-    <!-- 鼠标悬停时图标变白 -->
-    <Style Selector="Button#Close:pointerover">
-      <Setter Property="Foreground" Value="White"/>
-    </Style>
+        <Style Selector="Button#CloseBtn:pointerover /template/ Border#PART_Border">
+            <Setter Property="Background" Value="Red"/>
+        </Style>
 
+        <Style Selector="Button#CloseBtn:pointerover">
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
     </Window.Styles>
 
     <Grid>
+        <!-- 顶部标题栏 -->
         <Border Background="Transparent"
                 Height="40"
                 VerticalAlignment="Top"
@@ -65,41 +63,85 @@
                 BorderThickness="0,0,0,1"
                 PointerPressed="Form_OnDrag">
             <Grid>
-                <!-- 标签页内容 -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,200,0" >
-				    <StackPanel Orientation="Horizontal">
-						<Border Background="LightGray" Margin="5"  CornerRadius="8">
-							<TextBlock Margin="10,0,10,0" VerticalAlignment="Center" HorizontalAlignment="Center">
-								首页
-                            </TextBlock>
-                        </Border>
-                    </StackPanel>
-				    <Button x:Name="Add" Background="Transparent" Padding="0"  VerticalAlignment="Center" Width="30" Height="30" Margin="5,0,0,0" CornerRadius="50">
-                        <TextBlock Text="&#xe710;" FontFamily="Segoe Fluent Icons" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12"/>
+                <!-- 标签页头 + 新增按钮 -->
+                <StackPanel x:Name="TabHeaderPanel"
+                            Orientation="Horizontal"
+                            Margin="0,0,200,0">
+                    <Button x:Name="AddTabBtn"
+                            Background="Transparent"
+                            Padding="0"
+                            VerticalAlignment="Center"
+                            Width="30" Height="30"
+                            Margin="5,0,0,0"
+                            CornerRadius="50"
+                            Click="OnAddTabClick">
+                        <TextBlock Text="&#xe710;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontSize="12"/>
                     </Button>
-				    
                 </StackPanel>
+
                 <!-- 窗口控制按钮 -->
-                <Button x:Name="Close" Background="Transparent" HorizontalAlignment="Right" VerticalAlignment="Top" Width="50" Height="40" Margin="0,0,0,0" Click="CloseButton_Click">
-                    <TextBlock Text="&#xe8bb;" FontFamily="Segoe Fluent Icons" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12"/>
+                <Button x:Name="CloseBtn"
+                        Background="Transparent"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Width="50" Height="40"
+                        Click="CloseButton_Click">
+                    <TextBlock Text="&#xe8bb;"
+                               FontFamily="Segoe Fluent Icons"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontSize="12"/>
                 </Button>
-                <Button x:Name="Maximize" Background="Transparent" HorizontalAlignment="Right" VerticalAlignment="Top" Width="50" Height="40" Margin="0,0,50,0">
-                    <TextBlock Text="&#xe922;" FontFamily="Segoe Fluent Icons" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12"/>
+                <Button x:Name="Maximize"
+                        Background="Transparent"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Width="50" Height="40"
+                        Margin="0,0,50,0">
+                    <TextBlock Text="&#xe922;"
+                               FontFamily="Segoe Fluent Icons"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontSize="12"/>
                 </Button>
-                <Button x:Name="Minimize" Background="Transparent" HorizontalAlignment="Right" VerticalAlignment="Top" Width="50" Height="40" Margin="0,0,100,0">
-                    <TextBlock Text="&#xe921;" FontFamily="Segoe Fluent Icons" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12"/>
+                <Button x:Name="Minimize"
+                        Background="Transparent"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Width="50" Height="40"
+                        Margin="0,0,100,0">
+                    <TextBlock Text="&#xe921;"
+                               FontFamily="Segoe Fluent Icons"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontSize="12"/>
                 </Button>
-                <Button x:Name="Refresh" Background="Transparent" FontFamily="Segoe Fluent Icons" HorizontalAlignment="Right" VerticalAlignment="Top" Width="50" Height="40" Margin="0,0,150,0" IsTabStop="False" IsDefault="False" IsCancel="False" Focusable="False">
-                    <TextBlock Text="&#xe713;" FontFamily="Segoe Fluent Icons" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="14"/>
+                <Button x:Name="Refresh"
+                        Background="Transparent"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Width="50" Height="40"
+                        Margin="0,0,150,0"
+                        IsTabStop="False"
+                        Focusable="False">
+                    <TextBlock Text="&#xe713;"
+                               FontFamily="Segoe Fluent Icons"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontSize="14"/>
                 </Button>
             </Grid>
-
         </Border>
-        
-        <!-- 内容容器 -->
-        <Grid Margin="0,40,0,0">
-			<local:ChatPage/>
-        </Grid>
+
+        <!-- 内容区域 -->
+        <ContentControl x:Name="TabContent"
+                        Margin="0,40,0,0">
+            
+        </ContentControl>
     </Grid>
 
 </Window>

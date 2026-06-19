@@ -1,0 +1,48 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="HtaciAI.Views.NewTabPage">
+    <Grid >
+        <WrapPanel Orientation="Horizontal"
+                   Margin="10">
+            <Border Background="LightGray"
+                    CornerRadius="10"
+                    Padding="10"
+                    >
+				<Grid>
+				    <TextBlock Text="&#xe8f2;"
+                               FontFamily="Segoe Fluent Icons"
+                               FontSize="18"
+                               VerticalAlignment="Top"
+                               HorizontalAlignment="Left"/>
+                    <TextBlock Text="智能对话"
+                               FontSize="15"
+                               VerticalAlignment="Top"
+                               HorizontalAlignment="Left"
+                               Margin="30,0,0,0"/>	
+                </Grid>
+            </Border>
+        </WrapPanel>
+        <StackPanel Spacing="16">
+
+            <Button x:Name="SmartChatBtn"
+                    HorizontalAlignment="Stretch"
+                    Width="200"
+                    Height="48"
+                    CornerRadius="10"
+                    Click="OnSmartChatClick">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <TextBlock Text="&#xe8f2;"
+                               FontFamily="Segoe Fluent Icons"
+                               FontSize="18"
+                               VerticalAlignment="Center"/>
+                    <TextBlock Text="智能对话"
+                               FontSize="15"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+        </StackPanel>
+    </Grid>
+</UserControl>
