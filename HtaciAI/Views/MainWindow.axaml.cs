@@ -8,6 +8,7 @@ namespace HtaciAI.Views;
 
 public partial class MainWindow : Window
 {
+    private int _selectedIndex;
     private readonly List<Control> _tabContents = new();
     private readonly List<Border> _tabHeaders = new();
     private readonly List<TextBlock> _tabTitleBlocks = new();
@@ -17,7 +18,9 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = this;
 
-        AddTab("新标签页", new NewTabPage());
+        var initialPage = new NewTabPage();
+        initialPage.SmartChatSelected += OnSmartChatSelected;
+        AddTab("新标签页", initialPage);
     }
 
     private void OnAddTabClick(object? sender, RoutedEventArgs e)
@@ -44,6 +47,11 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 添加新标签页
+    /// </summary>
+    /// <param name="title"></param>
+    /// <param name="content"></param>
     private void AddTab(string title, Control content)
     {
         var index = _tabHeaders.Count;
@@ -54,14 +62,20 @@ public partial class MainWindow : Window
         TabHeaderPanel.Children.Insert(TabHeaderPanel.Children.Count - 1, header);
         SelectTab(index);
     }
-
+    /// <summary>
+    /// 创建标签页头部
+    /// </summary>
+    /// <param name="title"></param>
+    /// <param name="index"></param>
+    /// <returns></returns>
     private Border CreateTabHeader(string title, int index)
     {
         var titleBlock = new TextBlock
         {
             Text = title,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            Margin = new Avalonia.Thickness(10, 0)
+            Margin = new Avalonia.Thickness(10, 0),
+            FontSize = 12,
         };
         _tabTitleBlocks.Add(titleBlock);
 
@@ -76,10 +90,10 @@ public partial class MainWindow : Window
                 Margin = new Avalonia.Thickness(0, -1, 0, 0)
             },
             Background = Brushes.Transparent,
-            Foreground = Brushes.Gray,
+            Foreground = Brushes.Transparent,
             Width = 0,
             Height = 16,
-            CornerRadius = new Avalonia.CornerRadius(8),
+            CornerRadius = new Avalonia.CornerRadius(12),
             Padding = new Avalonia.Thickness(0),
             Margin = new Avalonia.Thickness(0),
             Tag = index
@@ -97,10 +111,22 @@ public partial class MainWindow : Window
         {
             Background = Brushes.Transparent,
             Margin = new Avalonia.Thickness(5),
-            CornerRadius = new Avalonia.CornerRadius(8),
+            CornerRadius = new Avalonia.CornerRadius(10),
             Tag = index,
             Child = headerGrid,
-            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand)
+            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+            BorderBrush = new SolidColorBrush(Color.Parse("#D9DDE3")),
+            BorderThickness = new Avalonia.Thickness(1),
+
+            // 添加小阴影效果
+            BoxShadow = new BoxShadows(new BoxShadow
+            {
+                OffsetX = 0,          // 水平偏移
+                OffsetY = 1,          // 垂直偏移（向下 2 像素）
+                Blur = 2,             // 模糊半径
+                Spread = 0,           // 扩散大小
+                Color = Color.FromArgb(30, 0, 0, 0)  // 半透明黑色
+            })
         };
 
         border.PointerEntered += (s, e) =>
@@ -108,8 +134,8 @@ public partial class MainWindow : Window
             closeBtn.Width = 16;
             closeBtn.Margin = new Avalonia.Thickness(6, 0, 6, 0);
             titleBlock.Margin = new Avalonia.Thickness(10, 0, 2, 0);
-            closeBtn.Background = Brushes.LightGray;
-            closeBtn.Foreground = Brushes.Black;
+            closeBtn.Background = Brushes.Transparent;
+            closeBtn.Foreground = Brushes.Gray;
         };
 
         border.PointerExited += (s, e) =>
@@ -125,6 +151,11 @@ public partial class MainWindow : Window
         return border;
     }
 
+    /// <summary>
+    /// 关闭标签页
+    /// </summary>
+    /// <param name="sender"></param>
+    /// <param name="e"></param>
     private void OnTabCloseClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button btn && btn.Tag is int index)
@@ -150,11 +181,12 @@ public partial class MainWindow : Window
         for (int i = 0; i < _tabHeaders.Count; i++)
             _tabHeaders[i].Tag = i;
 
-        var selectedIndex = GetSelectedIndex();
-        if (selectedIndex >= _tabContents.Count)
-            selectedIndex = _tabContents.Count - 1;
+        if (_selectedIndex > index)
+            _selectedIndex--;
+        else if (_selectedIndex >= _tabContents.Count)
+            _selectedIndex = _tabContents.Count - 1;
 
-        SelectTab(selectedIndex);
+        SelectTab(_selectedIndex);
     }
 
     private void OnTabHeaderClick(object? sender, PointerPressedEventArgs e)
@@ -170,22 +202,15 @@ public partial class MainWindow : Window
         for (int i = 0; i < _tabHeaders.Count; i++)
         {
             _tabHeaders[i].Background = i == index
-                ? Brushes.LightGray
+                ? new SolidColorBrush(Color.Parse("#FFFFFF"))
                 : Brushes.Transparent;
         }
 
+        _selectedIndex = index;
         TabContent.Content = _tabContents[index];
     }
 
-    private int GetSelectedIndex()
-    {
-        for (int i = 0; i < _tabHeaders.Count; i++)
-        {
-            if (_tabHeaders[i].Background == Brushes.LightGray)
-                return i;
-        }
-        return -1;
-    }
+    private int GetSelectedIndex() => _selectedIndex;
 
     private void CloseButton_Click(object? sender, RoutedEventArgs e)
     {

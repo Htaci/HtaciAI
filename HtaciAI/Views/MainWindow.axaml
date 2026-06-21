@@ -10,8 +10,8 @@
         Icon="/Assets/avalonia-logo.ico"
         Title="HtaciAI"
         TransparencyLevelHint="Mica"
-        Width="1300" Height="750"
-        MinWidth="920" MinHeight="550"
+        Width="1200" Height="750"
+        MinWidth="1200" MinHeight="550"
         WindowStartupLocation="CenterScreen">
 
     <Window.Styles>

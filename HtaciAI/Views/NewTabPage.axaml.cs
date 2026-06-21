@@ -5,7 +5,6 @@ using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
-using Avalonia.Styling;
 
 namespace HtaciAI.Views;
 
@@ -24,8 +23,8 @@ public partial class NewTabPage : UserControl
         CardsPanel.Children.Add(CreateCard(new CardData
         {
             Title = "智能对话",
-            Description = "深度语境理解，支持多轮连贯对话，精准捕捉每一次意图。",
-            Tags = new[] { "多轮对话", "意图识别" },
+            Description = "基础对话和网络搜索，聚焦于回答你想知道的问题。",
+            Tags = new[] { "基础对话", "网络搜索" },
             MainColor = Color.FromArgb(0xFF, 0x4A, 0x90, 0xD9),
             LightBg = Color.FromArgb(0xFF, 0xEE, 0xF4, 0xFB),
             GlowAlpha = 0x26,
@@ -37,8 +36,8 @@ public partial class NewTabPage : UserControl
         CardsPanel.Children.Add(CreateCard(new CardData
         {
             Title = "通用智能体",
-            Description = "全能型 AI 助手，处理各类复杂任务，跨领域知识融合。",
-            Tags = new[] { "通用能力", "知识融合" },
+            Description = "综合型 AI 助手，可以直接操作/访问你的设备帮你完成各种任务。",
+            Tags = new[] { "代理操作", "能力综合" },
             MainColor = Color.FromArgb(0xFF, 0x54, 0x6E, 0x7A),
             LightBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
             GlowAlpha = 0x1A,
@@ -50,8 +49,8 @@ public partial class NewTabPage : UserControl
         CardsPanel.Children.Add(CreateCard(new CardData
         {
             Title = "浏览器智能体",
-            Description = "自主浏览网页、采集信息，在浏览器中完成端到端的复杂任务。",
-            Tags = new[] { "Web Agent", "自主执行" },
+            Description = "自主浏览网页、采集信息、模拟操作，在浏览器中完成端到端的复杂任务。",
+            Tags = new[] { "Web Agent", "自动化操作" },
             MainColor = Color.FromArgb(0xFF, 0x2E, 0xAF, 0x7D),
             LightBg = Color.FromArgb(0xFF, 0xED, 0xF8, 0xF3),
             GlowAlpha = 0x26,
@@ -64,7 +63,7 @@ public partial class NewTabPage : UserControl
         {
             Title = "代码智能体",
             Description = "智能编写、审查与重构代码，覆盖主流语言，提升开发效率。",
-            Tags = new[] { "Code Agent", "多语言" },
+            Tags = new[] { "Code Agent", "项目开发" },
             MainColor = Color.FromArgb(0xFF, 0x7B, 0x5E, 0xA7),
             LightBg = Color.FromArgb(0xFF, 0xF3, 0xEF, 0xF8),
             GlowAlpha = 0x26,
@@ -85,6 +84,7 @@ public partial class NewTabPage : UserControl
             TagFg = Color.FromArgb(0xFF, 0xD4, 0x89, 0x1A),
             OnClick = null
         }));
+
     }
 
     private Border CreateCard(CardData data)
@@ -94,9 +94,11 @@ public partial class NewTabPage : UserControl
         {
             Width = 52,
             Height = 52,
+            
             CornerRadius = new CornerRadius(16),
             Background = new SolidColorBrush(data.LightBg),
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top,
             BoxShadow = new BoxShadows(new BoxShadow
             {
                 OffsetX = 0, OffsetY = 4, Blur = 14, Spread = 0,
@@ -111,7 +113,8 @@ public partial class NewTabPage : UserControl
             FontSize = 17.6,
             FontWeight = FontWeight.Bold,
             Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0x1A, 0x1A, 0x2E)),
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            Margin = new Thickness(0,10,0,0)
         };
 
         // ---- 描述 ----
@@ -143,16 +146,27 @@ public partial class NewTabPage : UserControl
             });
         }
 
-        // ---- 内容区 ----
-        var contentStack = new StackPanel
+        // ---- 上半部分 ----
+        var topContent = new StackPanel
         {
             Spacing = 8,
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
         };
-        contentStack.Children.Add(iconWrapper);
-        contentStack.Children.Add(titleBlock);
-        contentStack.Children.Add(descBlock);
-        contentStack.Children.Add(tagsPanel);
+        topContent.Children.Add(iconWrapper);
+        topContent.Children.Add(titleBlock);
+        topContent.Children.Add(descBlock);
+
+        // ---- 卡片内部布局（上内容 + 标签固定在底部）----
+        var cardInner = new Grid
+        {
+            RowDefinitions = new RowDefinitions("*,Auto")
+        };
+        cardInner.Children.Add(topContent);
+        cardInner.Children.Add(tagsPanel);
+        Grid.SetRow(topContent, 0);
+        Grid.SetRow(tagsPanel, 1);
+        // 标签底部间距
+        tagsPanel.Margin = new Thickness(0, 10, 0, 0);
 
         // ---- 光晕（大圆，RadialGradientBrush，模糊边缘）----
         var glowBrush = new RadialGradientBrush
@@ -191,28 +205,26 @@ public partial class NewTabPage : UserControl
         // ---- 卡片主体 ----
         var card = new Border
         {
-            Width = 255,
+            Width = 260,
             Margin = new Thickness(10),
             Padding = new Thickness(24, 28, 24, 24),
             CornerRadius = new CornerRadius(24),
             Background = Brushes.White,
             Cursor = new Cursor(StandardCursorType.Hand),
+            ClipToBounds = true,
             BoxShadow = BoxShadows.Parse("0 4 16 0 #14000000, 0 2 6 0 #0A000000"),
             Child = new Grid
             {
-                Children = { contentStack, glowCanvas }
+                Children = { cardInner, glowCanvas }
             }
         };
 
-        // 悬停过渡动画
-        var transform = new TranslateTransform(0, 0);
-        card.RenderTransform = transform;
-
+        // 悬停过渡动画（用 Margin 上移模拟抬起）
         card.Transitions = new Transitions
         {
-            new DoubleTransition
+            new ThicknessTransition
             {
-                Property = TranslateTransform.YProperty,
+                Property = Border.MarginProperty,
                 Duration = TimeSpan.FromMilliseconds(400),
                 Easing = new CubicEaseOut()
             }
@@ -228,7 +240,7 @@ public partial class NewTabPage : UserControl
 
         card.PointerEntered += (s, e) =>
         {
-            transform.Y = -8;
+            card.Margin = new Thickness(10, 2, 10, 18);
             card.BoxShadow = BoxShadows.Parse("0 12 32 0 #1E000000, 0 4 10 0 #0C000000");
             glowCircle.Opacity = 1;
             iconWrapper.CornerRadius = new CornerRadius(18);
@@ -236,7 +248,7 @@ public partial class NewTabPage : UserControl
 
         card.PointerExited += (s, e) =>
         {
-            transform.Y = 0;
+            card.Margin = new Thickness(10);
             card.BoxShadow = BoxShadows.Parse("0 4 16 0 #14000000, 0 2 6 0 #0A000000");
             glowCircle.Opacity = 0;
             iconWrapper.CornerRadius = new CornerRadius(16);
@@ -244,7 +256,11 @@ public partial class NewTabPage : UserControl
 
         if (data.OnClick != null)
         {
-            card.PointerPressed += (s, e) => data.OnClick();
+            card.PointerPressed += (s, e) =>
+            {
+                data.OnClick();
+                e.Handled = true;
+            };
         }
 
         return card;
