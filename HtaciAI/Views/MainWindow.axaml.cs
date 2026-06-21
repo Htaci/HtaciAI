@@ -115,18 +115,7 @@ public partial class MainWindow : Window
             Tag = index,
             Child = headerGrid,
             Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
-            BorderBrush = new SolidColorBrush(Color.Parse("#D9DDE3")),
-            BorderThickness = new Avalonia.Thickness(1),
-
-            // 添加小阴影效果
-            BoxShadow = new BoxShadows(new BoxShadow
-            {
-                OffsetX = 0,          // 水平偏移
-                OffsetY = 1,          // 垂直偏移（向下 2 像素）
-                Blur = 2,             // 模糊半径
-                Spread = 0,           // 扩散大小
-                Color = Color.FromArgb(30, 0, 0, 0)  // 半透明黑色
-            })
+            BorderThickness = new Avalonia.Thickness(0)
         };
 
         border.PointerEntered += (s, e) =>
@@ -136,6 +125,11 @@ public partial class MainWindow : Window
             titleBlock.Margin = new Avalonia.Thickness(10, 0, 2, 0);
             closeBtn.Background = Brushes.Transparent;
             closeBtn.Foreground = Brushes.Gray;
+
+            if ((int)border.Tag != _selectedIndex)
+            {
+                border.Background = new SolidColorBrush(Color.Parse("#FFFFFF"));
+            }
         };
 
         border.PointerExited += (s, e) =>
@@ -145,6 +139,11 @@ public partial class MainWindow : Window
             titleBlock.Margin = new Avalonia.Thickness(10, 0);
             closeBtn.Background = Brushes.Transparent;
             closeBtn.Foreground = Brushes.Gray;
+
+            if ((int)border.Tag != _selectedIndex)
+            {
+                border.Background = Brushes.Transparent;
+            }
         };
 
         border.PointerPressed += OnTabHeaderClick;
@@ -201,9 +200,25 @@ public partial class MainWindow : Window
 
         for (int i = 0; i < _tabHeaders.Count; i++)
         {
-            _tabHeaders[i].Background = i == index
-                ? new SolidColorBrush(Color.Parse("#FFFFFF"))
-                : Brushes.Transparent;
+            var header = _tabHeaders[i];
+            if (i == index)
+            {
+                header.Background = new SolidColorBrush(Color.Parse("#FFFFFF"));
+                header.BorderBrush = new SolidColorBrush(Color.Parse("#D9DDE3"));
+                header.BorderThickness = new Avalonia.Thickness(1);
+                header.BoxShadow = new BoxShadows(new BoxShadow
+                {
+                    OffsetX = 0, OffsetY = 1, Blur = 2, Spread = 0,
+                    Color = Color.FromArgb(30, 0, 0, 0)
+                });
+            }
+            else
+            {
+                header.Background = Brushes.Transparent;
+                header.BorderBrush = null;
+                header.BorderThickness = new Avalonia.Thickness(0);
+                header.BoxShadow = default;
+            }
         }
 
         _selectedIndex = index;
