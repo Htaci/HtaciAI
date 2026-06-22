@@ -1,0 +1,52 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
+             x:Class="HtaciAI.Views.NewChatView">
+    <Grid x:Name="FullRoot" Background="Transparent" PointerPressed="OnBackgroundPressed">
+        <Grid HorizontalAlignment="Center" VerticalAlignment="Center" Width="500" Background="Transparent">
+        <StackPanel Spacing="20">
+            <TextBlock Text="有什么我可以帮助你的？"
+                       FontSize="24"
+                       FontWeight="SemiBold"
+                       Foreground="#1A1A2E"
+                       HorizontalAlignment="Center"/>
+
+            <!-- 输入框 -->
+            <Border CornerRadius="16"
+                    Background="#FFFFFF"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1">
+                <TextBox x:Name="InputBox"
+                         MinHeight="80"
+                         CornerRadius="16"
+                         MaxHeight="200"
+                         Padding="16"
+                         FontSize="14"
+                         Foreground="#1A1A2E"
+                         Watermark="输入你的问题..."
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         BorderThickness="0"/>
+            </Border>
+
+            <!-- 发送按钮 -->
+            <Button x:Name="SendBtn"
+                    HorizontalAlignment="Right"
+                    Width="48"
+                    Height="48"
+                    CornerRadius="24"
+                    Background="#4A90D9"
+                    Click="OnSendClick">
+                <TextBlock Text="&#xe74f;"
+                           FontFamily="Segoe Fluent Icons"
+                           FontSize="16"
+                           Foreground="White"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"/>
+            </Button>
+        </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

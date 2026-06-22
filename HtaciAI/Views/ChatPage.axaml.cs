@@ -8,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Styling;
+using HtaciAI.Views;
 
 namespace HtaciAI;
 
@@ -18,6 +19,7 @@ public partial class ChatPage : UserControl
         InitializeComponent();
         SetupNewChatButton();
         LoadTestData();
+        ShowNewChatView();
     }
 
     private void SetupNewChatButton()
@@ -46,9 +48,26 @@ public partial class ChatPage : UserControl
 
         NewChatBtn.PointerPressed += (s, e) =>
         {
-            OnNewChatClick(this, e);
+            ShowNewChatView();
             e.Handled = true;
         };
+    }
+
+    private void ShowNewChatView()
+    {
+        var view = new NewChatView();
+        view.SendRequested += OnSendRequested;
+        RightPanel.Content = view;
+    }
+
+    private void ShowChatView()
+    {
+        RightPanel.Content = new ChatView();
+    }
+
+    private void OnSendRequested(object? sender, string text)
+    {
+        ShowChatView();
     }
 
     /// <summary>
@@ -118,8 +137,4 @@ public partial class ChatPage : UserControl
         return border;
     }
 
-    private void OnNewChatClick(object? sender, RoutedEventArgs e)
-    {
-        // TODO: 创建新会话逻辑
-    }
 }

@@ -64,13 +64,9 @@
             </Grid>
         </Border>
 
-        <!-- ====== 右侧聊天区域 ====== -->
-        <Border Grid.Column="1" Background="#FFFFFF">
-            <TextBlock Text="选择一个会话开始聊天"
-                       Foreground="#9CA3AF"
-                       FontSize="16"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center"/>
-        </Border>
+        <!-- ====== 右侧内容区域 ====== -->
+        <ContentControl x:Name="RightPanel"
+                        Grid.Column="1"
+                        Background="#FFFFFF"/>
     </Grid>
 </UserControl>
