@@ -14,38 +14,100 @@
                        HorizontalAlignment="Center"/>
 
             <!-- 输入框 -->
-            <Border CornerRadius="16"
+            <Border CornerRadius="8"
                     Background="#FFFFFF"
                     BorderBrush="#E5E7EB"
                     BorderThickness="1">
-                <TextBox x:Name="InputBox"
-                         MinHeight="80"
-                         CornerRadius="16"
+                <Grid>
+					 <TextBox x:Name="InputBox"
+                         MinHeight="100"
+                         CornerRadius="8"
                          MaxHeight="200"
-                         Padding="16"
+                         Padding="16,16,16,38"
                          FontSize="14"
                          Foreground="#1A1A2E"
-                         Watermark="输入你的问题..."
+                         Watermark="告诉我你想要摘下哪颗星，我会帮助你完成任务"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          BorderThickness="0"/>
+
+                    <!-- 功能栏 -->
+                    <Grid VerticalAlignment="Bottom"
+                          Background="Red">
+                        <!-- 发送按钮 -->
+                        <Button x:Name="SendBtn"
+                            HorizontalAlignment="Right"
+                            
+                            Width="28"
+                            Height="28"
+                            Padding="0"
+                            CornerRadius="8"
+                            Background="#4A90D9"
+                            Margin="5"
+                            Click="OnSendClick">
+                            <TextBlock Text="&#xe724;"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="14"
+                                       Foreground="White"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Button>
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Left">
+							<!-- 添加文件 -->
+                            <Button x:Name="AddFileBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent" 
+                                Margin="5"
+                                Click="OnSendClick">
+                                <TextBlock Text="&#xe723;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <!-- 知识库 -->
+                            <Button x:Name="KnowledgeBaseBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent" 
+                                Margin="5"
+                                Click="OnSendClick">
+                                <TextBlock Text="&#xe7be;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <!-- 工具库 -->
+                            <Button x:Name="ToolsBaseBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent" 
+                                Margin="5"
+                                Click="OnSendClick">
+                                <TextBlock Text="&#xe90f;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                        </StackPanel>
+                        
+                    </Grid>
+                </Grid>
+
+
             </Border>
 
-            <!-- 发送按钮 -->
-            <Button x:Name="SendBtn"
-                    HorizontalAlignment="Right"
-                    Width="48"
-                    Height="48"
-                    CornerRadius="24"
-                    Background="#4A90D9"
-                    Click="OnSendClick">
-                <TextBlock Text="&#xe74f;"
-                           FontFamily="Segoe Fluent Icons"
-                           FontSize="16"
-                           Foreground="White"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"/>
-            </Button>
+
         </StackPanel>
         </Grid>
     </Grid>
