@@ -26,18 +26,18 @@
                          Padding="16,16,16,38"
                          FontSize="14"
                          Foreground="#1A1A2E"
-                         Watermark="告诉我你想要摘下哪颗星，我会帮助你完成任务"
+                         Watermark="在这里输入你的问题"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          BorderThickness="0"/>
 
                     <!-- 功能栏 -->
                     <Grid VerticalAlignment="Bottom"
-                          Background="Red">
+                          Background="Transparent">
                         <!-- 发送按钮 -->
                         <Button x:Name="SendBtn"
                             HorizontalAlignment="Right"
-                            
+                            IsEnabled="False"
                             Width="28"
                             Height="28"
                             Padding="0"
@@ -45,6 +45,7 @@
                             Background="#4A90D9"
                             Margin="5"
                             Click="OnSendClick">
+                            
                             <TextBlock Text="&#xe724;"
                                        FontFamily="Segoe Fluent Icons"
                                        FontSize="14"
@@ -63,6 +64,17 @@
                                 Background="Transparent" 
                                 Margin="5"
                                 Click="OnSendClick">
+                                <ToolTip.Tip>
+                                    <StackPanel>
+                                        <!-- 第一行：主要提示，类似菜单标题 -->
+                                        <TextBlock Text="上传文件" 
+                                                   FontWeight="Bold" />
+                                        <!-- 第二行：次要提示，类似菜单描述 
+                                        <TextBlock Text="文本"
+                                                   FontSize="12" 
+                                                   Foreground="Gray" />-->
+                                    </StackPanel>
+                                </ToolTip.Tip>
                                 <TextBlock Text="&#xe723;"
                                            FontFamily="Segoe Fluent Icons"
                                            FontSize="14"
@@ -78,6 +90,17 @@
                                 Background="Transparent" 
                                 Margin="5"
                                 Click="OnSendClick">
+                                <ToolTip.Tip>
+                                    <StackPanel>
+                                        <!-- 第一行：主要提示，类似菜单标题 -->
+                                        <TextBlock Text="知识库" 
+                                                   FontWeight="Bold" />
+                                        <!-- 第二行：次要提示，类似菜单描述 
+                                        <TextBlock Text="文本"
+                                                   FontSize="12" 
+                                                   Foreground="Gray" />-->
+                                    </StackPanel>
+                                </ToolTip.Tip>
                                 <TextBlock Text="&#xe7be;"
                                            FontFamily="Segoe Fluent Icons"
                                            FontSize="14"
@@ -93,6 +116,17 @@
                                 Background="Transparent" 
                                 Margin="5"
                                 Click="OnSendClick">
+                                <ToolTip.Tip>
+                                    <StackPanel>
+                                        <!-- 第一行：主要提示，类似菜单标题 -->
+                                        <TextBlock Text="工具库" 
+                                                   FontWeight="Bold" />
+                                        <!-- 第二行：次要提示，类似菜单描述 
+                                        <TextBlock Text="文本"
+                                                   FontSize="12" 
+                                                   Foreground="Gray" />-->
+                                    </StackPanel>
+                                </ToolTip.Tip>
                                 <TextBlock Text="&#xe90f;"
                                            FontFamily="Segoe Fluent Icons"
                                            FontSize="14"
