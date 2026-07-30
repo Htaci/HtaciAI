@@ -7,7 +7,7 @@
     <Grid ColumnDefinitions="260,*">
         <!-- ====== 左侧导航栏 ====== -->
         <Border Grid.Column="0"
-                Background="#F9FAFB"
+                Background="#99F9FAFB"
                 BorderBrush="#E5E7EB"
                 BorderThickness="0,0,1,0">
             <Grid RowDefinitions="Auto,Auto,*"
@@ -67,6 +67,6 @@
         <!-- ====== 右侧内容区域 ====== -->
         <ContentControl x:Name="RightPanel"
                         Grid.Column="1"
-                        Background="#FFFFFF"/>
+                        Background="#99FFFFFF"/>
     </Grid>
 </UserControl>

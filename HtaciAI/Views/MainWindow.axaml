@@ -4,12 +4,13 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="using:HtaciAI"
         xmlns:views="using:HtaciAI.Views"
+        xmlns:controls="using:HtaciAI.Controls"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="HtaciAI.Views.MainWindow"
         x:DataType="views:MainWindow"
         Icon="/Assets/avalonia-logo.ico"
         Title="HtaciAI"
-        TransparencyLevelHint="Mica"
+        TransparencyLevelHint="Transparent"
         Width="1200" Height="750"
         MinWidth="1200" MinHeight="550"
         WindowStartupLocation="CenterScreen">
@@ -54,8 +55,33 @@
         </Style>
     </Window.Styles>
 
-    <Grid>
-        <!-- 顶部标题栏 -->
+    <Panel>
+        <!-- 背景层1：柔和渐变底色 -->
+        <Border IsHitTestVisible="False">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                    <GradientStop Color="#F5FAFC" Offset="0"/>
+                    <GradientStop Color="#FCF5FA" Offset="1"/>
+                </LinearGradientBrush>
+            </Border.Background>
+        </Border>
+
+        <!-- 背景层2：大块模糊光球动画 -->
+        <controls:FluidBackgroundControl HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+
+        <!-- 背景层3：径向柔和遮罩 -->
+        <Border IsHitTestVisible="False">
+            <Border.Background>
+                <RadialGradientBrush Center="50%,50%" GradientOrigin="50%,50%">
+                    <GradientStop Color="Transparent" Offset="0"/>
+                    <GradientStop Color="#30FFFFFF" Offset="1"/>
+                </RadialGradientBrush>
+            </Border.Background>
+        </Border>
+
+        <!-- 前景层：原有UI内容 -->
+        <Grid>
+            <!-- 顶部标题栏 -->
         <Border Background="Transparent"
                 Height="40"
                 VerticalAlignment="Top"
@@ -142,6 +168,7 @@
                         Margin="0,40,0,0">
             
         </ContentControl>
-    </Grid>
+        </Grid>
+    </Panel>
 
 </Window>
