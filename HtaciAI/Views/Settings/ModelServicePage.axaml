@@ -5,38 +5,67 @@
              mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
              x:Class="HtaciAI.Views.Settings.ModelServicePage">
     <Grid Background="Transparent"
-          ColumnDefinitions="260,*">
-        <!-- 模型服务商滚动列表 -->
-        <Border BorderBrush="#E5E7EB"
-                BorderThickness="1,0,1,0">
-			<Grid>
-			    <!-- 服务商模型滚动列表 -->	
-                <ScrollViewer Grid.Row="2"
-                              HorizontalScrollBarVisibility="Disabled"
-                              VerticalScrollBarVisibility="Auto"
-                              Margin="0,0,0,55"
-                              >
-                    <StackPanel x:Name="ModServerList"
-                                Spacing="2"/>
-                </ScrollViewer>
-                <Border Height="35"
-                        VerticalAlignment="Bottom"
-                        Background="Transparent"
-                        Margin="10"
-                        BorderBrush="#E5E7EB"
-                        BorderThickness="2,2,2,2"
-                        CornerRadius="15">
-					<TextBlock VerticalAlignment="Center"
-                               HorizontalAlignment="Center">
-					    + 添加模型服务商
-                    </TextBlock>
-                </Border>
-            </Grid>
-        </Border>
-        <TextBlock Text="这是模型服务页面"
-                   FontSize="14"
-                   Foreground="#9CA3AF"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center"/>
+          >
+        <ScrollViewer>
+	        <StackPanel Margin="20">
+		        <TextBlock Text="模型管理"
+				           FontSize="18"
+				           FontWeight="DemiBold"
+				           HorizontalAlignment="Left"
+				           VerticalAlignment="Top"/>
+		        <TextBlock Text="在此处管理和配置您的模型服务。您可以添加、删除或修改自定义模型服务的设置，以便更好地满足您的需求。"
+				           FontSize="14"
+				           Foreground="#9CA3AF"
+				           HorizontalAlignment="Left"
+				           VerticalAlignment="Top"
+				           Margin="0,10,0,20"/>
+                <TextBlock Text="内置模型" FontWeight="DemiBold" Margin="0,0,0,10"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
+		        <!-- 在这里添加更多的模型管理控件和布局 -->
+				<Border 
+                            HorizontalAlignment="Stretch"
+                            MinHeight="35"
+                            Margin="0,0,0,0"
+                            CornerRadius="8"
+                            BoxShadow="0 0 1 0 Gray" 
+                            >
+						<StackPanel>
+							<Border Background="#ECF9FD" CornerRadius="8,8,0,0" Height="35">
+                                <Grid>
+									<TextBlock Text="模型名称" FontWeight="DemiBold" Margin="20,0,0,4"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                    <TextBlock Text="每百万输入" FontWeight="DemiBold" Margin="220,0,0,4"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                    <TextBlock Text="缓存命中" FontWeight="DemiBold" Margin="320,0,0,4"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                    <TextBlock Text="每百万输出" FontWeight="DemiBold" Margin="420,0,0,4"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                    <TextBlock Text="模型能力" FontWeight="DemiBold" Margin="520,0,0,4"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                            <StackPanel Margin="0,0,0,10"
+                                        >
+                                <Grid >
+						            <TextBlock Text="DeepSeek V4 Flash(0731)" FontSize="12" Margin="20,10,0,0" Foreground="Gray"/>
+                                    <TextBlock Text="¥1.00" FontSize="12" Margin="220,10,0,0" Foreground="Gray"/>
+                                    <TextBlock Text="¥0.02" FontSize="12" Margin="320,10,0,0" Foreground="Gray"/>
+                                    <TextBlock Text="¥2.00" FontSize="12" Margin="420,10,0,0" Foreground="Gray"/>
+                                    <TextBlock Text="推理、工具、补全" FontSize="12" Margin="520,10,0,0" Foreground="Gray"/>
+                                </Grid>
+                                 <Grid >
+						            <TextBlock Text="DeepSeek V4 Pro(preview)" FontSize="12" Margin="20,10,0,0" Foreground="Gray"/>
+                                    <TextBlock Text="¥3.00" FontSize="12" Margin="220,10,0,0" Foreground="Gray"/>
+                                    <TextBlock Text="¥0.03" FontSize="12" Margin="320,10,0,0" Foreground="Gray"/>
+                                    <TextBlock Text="¥6.00" FontSize="12" Margin="420,10,0,0" Foreground="Gray"/>
+                                    <TextBlock Text="推理、工具、补全" FontSize="12" Margin="520,10,0,0" Foreground="Gray"/>
+                                    
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+            </StackPanel>
+        </ScrollViewer>
+
     </Grid>
 </UserControl>
