@@ -86,7 +86,7 @@
                 Height="40"
                 VerticalAlignment="Top"
                 BorderBrush="LightGray"
-                BorderThickness="0,0,0,1"
+                BorderThickness="0,0,0,0"
                 PointerPressed="Form_OnDrag">
             <Grid>
                 <!-- 标签页头 + 新增按钮 -->
@@ -146,14 +146,15 @@
                                VerticalAlignment="Center"
                                FontSize="12"/>
                 </Button>
-                <Button x:Name="Refresh"
+                <Button x:Name="Settings"
                         Background="Transparent"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Top"
                         Width="50" Height="40"
                         Margin="0,0,150,0"
                         IsTabStop="False"
-                        Focusable="False">
+                        Focusable="False"
+                        Click="OnSettingsClick">
                     <TextBlock Text="&#xe713;"
                                FontFamily="Segoe Fluent Icons"
                                HorizontalAlignment="Center"

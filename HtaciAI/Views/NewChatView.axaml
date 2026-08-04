@@ -26,7 +26,7 @@
                          Padding="16,16,16,38"
                          FontSize="14"
                          Foreground="#1A1A2E"
-                         Watermark="在这里输入你的问题"
+                         PlaceholderText="在这里输入你的问题"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          BorderThickness="0"/>

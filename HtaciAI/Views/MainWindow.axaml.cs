@@ -18,15 +18,14 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = this;
 
-        var initialPage = new NewTabPage();
-        initialPage.SmartChatSelected += OnSmartChatSelected;
-        AddTab("新标签页", initialPage);
+        AddTab("智能对话", new ChatPage());
     }
 
     private void OnAddTabClick(object? sender, RoutedEventArgs e)
     {
         var newTabPage = new NewTabPage();
         newTabPage.SmartChatSelected += OnSmartChatSelected;
+        newTabPage.WorkspaceSelected += OnWorkspaceSelected;
         AddTab("新标签页", newTabPage);
     }
 
@@ -41,6 +40,23 @@ public partial class MainWindow : Window
 
             _tabContents[index] = new ChatPage();
             _tabTitleBlocks[index].Text = "智能对话";
+
+            if (index == GetSelectedIndex())
+                TabContent.Content = _tabContents[index];
+        }
+    }
+
+    private void OnWorkspaceSelected(object? sender, System.EventArgs e)
+    {
+        if (sender is NewTabPage newTabPage)
+        {
+            newTabPage.WorkspaceSelected -= OnWorkspaceSelected;
+
+            var index = _tabContents.IndexOf(newTabPage);
+            if (index < 0) return;
+
+            _tabContents[index] = new WorkspacePage();
+            _tabTitleBlocks[index].Text = "工作空间";
 
             if (index == GetSelectedIndex())
                 TabContent.Content = _tabContents[index];
@@ -120,11 +136,14 @@ public partial class MainWindow : Window
 
         border.PointerEntered += (s, e) =>
         {
-            closeBtn.Width = 16;
-            closeBtn.Margin = new Avalonia.Thickness(6, 0, 6, 0);
-            titleBlock.Margin = new Avalonia.Thickness(10, 0, 2, 0);
-            closeBtn.Background = Brushes.Transparent;
-            closeBtn.Foreground = Brushes.Gray;
+            if (index > 0)
+            {
+                closeBtn.Width = 16;
+                closeBtn.Margin = new Avalonia.Thickness(6, 0, 6, 0);
+                titleBlock.Margin = new Avalonia.Thickness(10, 0, 2, 0);
+                closeBtn.Background = Brushes.Transparent;
+                closeBtn.Foreground = Brushes.Gray;
+            }
 
             if ((int)border.Tag != _selectedIndex)
             {
@@ -134,11 +153,14 @@ public partial class MainWindow : Window
 
         border.PointerExited += (s, e) =>
         {
-            closeBtn.Width = 0;
-            closeBtn.Margin = new Avalonia.Thickness(0);
-            titleBlock.Margin = new Avalonia.Thickness(10, 0);
-            closeBtn.Background = Brushes.Transparent;
-            closeBtn.Foreground = Brushes.Gray;
+            if (index > 0)
+            {
+                closeBtn.Width = 0;
+                closeBtn.Margin = new Avalonia.Thickness(0);
+                titleBlock.Margin = new Avalonia.Thickness(10, 0);
+                closeBtn.Background = Brushes.Transparent;
+                closeBtn.Foreground = Brushes.Gray;
+            }
 
             if ((int)border.Tag != _selectedIndex)
             {
@@ -159,12 +181,7 @@ public partial class MainWindow : Window
     {
         if (sender is Button btn && btn.Tag is int index)
         {
-            if (_tabHeaders.Count <= 1)
-            {
-                this.Close();
-                return;
-            }
-
+            if (index == 0) return;
             RemoveTab(index);
             e.Handled = true;
         }
@@ -226,6 +243,19 @@ public partial class MainWindow : Window
     }
 
     private int GetSelectedIndex() => _selectedIndex;
+
+    private void OnSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        var index = _tabContents.FindIndex(c => c is SettingsPage);
+        if (index >= 0)
+        {
+            SelectTab(index);
+        }
+        else
+        {
+            AddTab("设置", new SettingsPage());
+        }
+    }
 
     private void CloseButton_Click(object? sender, RoutedEventArgs e)
     {

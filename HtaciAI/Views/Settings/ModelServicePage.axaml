@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
+             x:Class="HtaciAI.Views.Settings.ModelServicePage">
+    <Grid Background="Transparent"
+          ColumnDefinitions="260,*">
+        <!-- 模型服务商滚动列表 -->
+        <Border BorderBrush="#E5E7EB"
+                BorderThickness="1,0,1,0">
+			<Grid>
+			    <!-- 服务商模型滚动列表 -->	
+                <ScrollViewer Grid.Row="2"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto"
+                              Margin="0,0,0,55"
+                              >
+                    <StackPanel x:Name="ModServerList"
+                                Spacing="2"/>
+                </ScrollViewer>
+                <Border Height="35"
+                        VerticalAlignment="Bottom"
+                        Background="Transparent"
+                        Margin="10"
+                        BorderBrush="#E5E7EB"
+                        BorderThickness="2,2,2,2"
+                        CornerRadius="15">
+					<TextBlock VerticalAlignment="Center"
+                               HorizontalAlignment="Center">
+					    + 添加模型服务商
+                    </TextBlock>
+                </Border>
+            </Grid>
+        </Border>
+        <TextBlock Text="这是模型服务页面"
+                   FontSize="14"
+                   Foreground="#9CA3AF"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"/>
+    </Grid>
+</UserControl>

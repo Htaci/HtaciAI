@@ -1,0 +1,34 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+             x:Class="HtaciAI.Views.SettingsPage">
+    <Grid ColumnDefinitions="260,*">
+        <!-- ====== 左侧：设置分类导航 ====== -->
+        <Border Grid.Column="0"
+                Background="Transparent"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,0,0,0">
+            <Grid RowDefinitions="Auto,*"
+                  Margin="12,14">
+                <TextBlock Text="设置"
+                           FontSize="18"
+                           FontWeight="Bold"
+                           Foreground="#1A1A2E"
+                           Margin="4,0,0,12"/>
+
+                <!-- 导航项列表 -->
+                <ScrollViewer Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="NavPanel" Spacing="2"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- ====== 右侧：对应子页面 ====== -->
+        <ContentControl x:Name="PageHost"
+                        Grid.Column="1"/>
+    </Grid>
+</UserControl>

@@ -1,0 +1,24 @@
+namespace HtaciAI.Models;
+
+/// <summary>
+/// 工作空间列表的展示方式
+/// </summary>
+public enum WorkspaceDisplayMode
+{
+    /// <summary>双列表：工作空间列表与会话列表分开两级</summary>
+    DualList,
+    /// <summary>树状结构：工作空间下直接展开会话</summary>
+    Tree
+}
+
+/// <summary>
+/// 应用设置（暂存于内存，持久化后续实现）
+/// </summary>
+public static class AppSettings
+{
+    /// <summary>工作空间展示方式，默认双列表</summary>
+    public static WorkspaceDisplayMode DisplayMode { get; set; } = WorkspaceDisplayMode.DualList;
+
+    /// <summary>树状结构下是否自动折叠（选中一个工作空间时收起其他）</summary>
+    public static bool TreeAutoCollapse { get; set; }
+}

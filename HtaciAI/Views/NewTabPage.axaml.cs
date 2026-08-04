@@ -11,6 +11,7 @@ namespace HtaciAI.Views;
 public partial class NewTabPage : UserControl
 {
     public event EventHandler? SmartChatSelected;
+    public event EventHandler? WorkspaceSelected;
 
     public NewTabPage()
     {
@@ -20,37 +21,50 @@ public partial class NewTabPage : UserControl
 
     private void CreateCards()
     {
-        CardsPanel.Children.Add(CreateCard(new CardData
-        {
-            Title = "智能对话",
-            Description = "基础对话和网络搜索，聚焦于回答你想知道的问题。",
-            Tags = new[] { "基础对话", "网络搜索" },
-            MainColor = Color.FromArgb(0xFF, 0x4A, 0x90, 0xD9),
-            LightBg = Color.FromArgb(0xFF, 0xEE, 0xF4, 0xFB),
-            GlowAlpha = 0x26,
-            TagBg = Color.FromArgb(0xFF, 0xED, 0xF4, 0xFC),
-            TagFg = Color.FromArgb(0xFF, 0x3A, 0x7B, 0xC8),
-            OnClick = () => SmartChatSelected?.Invoke(this, EventArgs.Empty)
-        }));
+        //CardsPanel.Children.Add(CreateCard(new CardData
+        //{
+        //    Title = "智能对话",
+        //    Description = "基础对话和网络搜索，聚焦于回答你想知道的问题。",
+        //    Tags = new[] { "基础对话", "网络搜索" },
+        //    MainColor = Color.FromArgb(0xFF, 0x4A, 0x90, 0xD9),
+        //    LightBg = Color.FromArgb(0xFF, 0xEE, 0xF4, 0xFB),
+        //    GlowAlpha = 0x26,
+        //    TagBg = Color.FromArgb(0xFF, 0xED, 0xF4, 0xFC),
+        //    TagFg = Color.FromArgb(0xFF, 0x3A, 0x7B, 0xC8),
+        //    OnClick = () => SmartChatSelected?.Invoke(this, EventArgs.Empty)
+        //}));
 
         CardsPanel.Children.Add(CreateCard(new CardData
         {
-            Title = "通用智能体",
-            Description = "综合型 AI 助手，可以直接操作/访问你的设备帮你完成各种任务。",
-            Tags = new[] { "代理操作", "能力综合" },
+            Title = "工作空间",
+            Description = "管理 AI 的工作空间",
+
             MainColor = Color.FromArgb(0xFF, 0x54, 0x6E, 0x7A),
             LightBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
             GlowAlpha = 0x1A,
             TagBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
             TagFg = Color.FromArgb(0xFF, 0x45, 0x5A, 0x64),
-            OnClick = null
+            OnClick = () => WorkspaceSelected?.Invoke(this, EventArgs.Empty)
         }));
+
+        //CardsPanel.Children.Add(CreateCard(new CardData
+        //{
+        //    Title = "通用智能体",
+        //    Description = "综合型 AI 助手，可以直接操作/访问你的设备帮你完成各种任务。",
+        //    Tags = new[] { "代理操作", "能力综合" },
+        //    MainColor = Color.FromArgb(0xFF, 0x54, 0x6E, 0x7A),
+        //    LightBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
+        //    GlowAlpha = 0x1A,
+        //    TagBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
+        //    TagFg = Color.FromArgb(0xFF, 0x45, 0x5A, 0x64),
+        //    OnClick = null
+        //}));
 
         CardsPanel.Children.Add(CreateCard(new CardData
         {
-            Title = "浏览器智能体",
-            Description = "自主浏览网页、采集信息、模拟操作，在浏览器中完成端到端的复杂任务。",
-            Tags = new[] { "Web Agent", "自动化操作" },
+            Title = "插件与技能",
+            Description = "管理已安装的插件与技能",
+            Tags = new[] { "Plugin", "Skills" },
             MainColor = Color.FromArgb(0xFF, 0x2E, 0xAF, 0x7D),
             LightBg = Color.FromArgb(0xFF, 0xED, 0xF8, 0xF3),
             GlowAlpha = 0x26,
@@ -59,11 +73,23 @@ public partial class NewTabPage : UserControl
             OnClick = null
         }));
 
+        //CardsPanel.Children.Add(CreateCard(new CardData
+        //{
+        //    Title = "浏览器智能体",
+        //    Description = "自主浏览网页、采集信息、模拟操作，在浏览器中完成端到端的复杂任务。",
+        //    Tags = new[] { "Web Agent", "自动化操作" },
+        //    MainColor = Color.FromArgb(0xFF, 0x2E, 0xAF, 0x7D),
+        //    LightBg = Color.FromArgb(0xFF, 0xED, 0xF8, 0xF3),
+        //    GlowAlpha = 0x26,
+        //    TagBg = Color.FromArgb(0xFF, 0xE8, 0xF7, 0xF1),
+        //    TagFg = Color.FromArgb(0xFF, 0x25, 0x9A, 0x6A),
+        //    OnClick = null
+        //}));
+
         CardsPanel.Children.Add(CreateCard(new CardData
         {
-            Title = "代码智能体",
-            Description = "智能编写、审查与重构代码，覆盖主流语言，提升开发效率。",
-            Tags = new[] { "Code Agent", "项目开发" },
+            Title = "插件与技能市场",
+            Description = "管理和发现新的插件与技能，扩展 AI 的功能。",
             MainColor = Color.FromArgb(0xFF, 0x7B, 0x5E, 0xA7),
             LightBg = Color.FromArgb(0xFF, 0xF3, 0xEF, 0xF8),
             GlowAlpha = 0x26,
@@ -72,11 +98,24 @@ public partial class NewTabPage : UserControl
             OnClick = null
         }));
 
+        //CardsPanel.Children.Add(CreateCard(new CardData
+        //{
+        //    Title = "代码智能体",
+        //    Description = "智能编写、审查与重构代码，覆盖主流语言，提升开发效率。",
+        //    Tags = new[] { "Code Agent", "项目开发" },
+        //    MainColor = Color.FromArgb(0xFF, 0x7B, 0x5E, 0xA7),
+        //    LightBg = Color.FromArgb(0xFF, 0xF3, 0xEF, 0xF8),
+        //    GlowAlpha = 0x26,
+        //    TagBg = Color.FromArgb(0xFF, 0xF1, 0xED, 0xF6),
+        //    TagFg = Color.FromArgb(0xFF, 0x6A, 0x4F, 0x94),
+        //    OnClick = null
+        //}));
+
         CardsPanel.Children.Add(CreateCard(new CardData
         {
-            Title = "闲聊",
-            Description = "轻松随意的日常交流伙伴，温暖、有趣、随时在线陪伴。",
-            Tags = new[] { "情感陪伴", "随时在线" },
+            Title = "自动化",
+            Description = "规划定时任务和自动化流程",
+            Tags = new[] { "Automation", "Scheduling" },
             MainColor = Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
             LightBg = Color.FromArgb(0xFF, 0xFF, 0xF9, 0xF0),
             GlowAlpha = 0x26,
@@ -84,6 +123,19 @@ public partial class NewTabPage : UserControl
             TagFg = Color.FromArgb(0xFF, 0xD4, 0x89, 0x1A),
             OnClick = null
         }));
+
+        //CardsPanel.Children.Add(CreateCard(new CardData
+        //{
+        //    Title = "闲聊",
+        //    Description = "轻松随意的日常交流伙伴，温暖、有趣、随时在线陪伴。",
+        //    Tags = new[] { "情感陪伴", "随时在线" },
+        //    MainColor = Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
+        //    LightBg = Color.FromArgb(0xFF, 0xFF, 0xF9, 0xF0),
+        //    GlowAlpha = 0x26,
+        //    TagBg = Color.FromArgb(0xFF, 0xFE, 0xF7, 0xEC),
+        //    TagFg = Color.FromArgb(0xFF, 0xD4, 0x89, 0x1A),
+        //    OnClick = null
+        //}));
 
     }
 

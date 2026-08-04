@@ -1,0 +1,169 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="540" d:DesignHeight="700"
+        x:Class="HtaciAI.Views.CreateWorkspaceWindow"
+        Title="创建新工作空间"
+        Width="540" MinWidth="540" MaxWidth="540"
+        Height="700" MinHeight="700"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- 标题 -->
+        <TextBlock Grid.Row="0"
+                   Text="创建新工作空间"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"
+                   Margin="24,18,24,6"/>
+
+        <!-- 表单 -->
+        <ScrollViewer Grid.Row="1"
+                      Margin="24,8,24,8"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="14">
+                <!-- 工作空间名称 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="工作空间名称"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="NameBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             PlaceholderText="未设置时默认为第一个文件夹的名称"/>
+                </StackPanel>
+
+                <!-- 工作目录 -->
+                <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="工作目录"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="#374151"
+                                   VerticalAlignment="Center"/>
+                        <Button x:Name="AddFolderBtn"
+                                Grid.Column="1"
+                                Height="28"
+                                CornerRadius="6"
+                                Background="#546E7A"
+                                Foreground="White"
+                                Padding="12,0"
+                                Cursor="Hand"
+                                Click="OnAddFolderClick">
+                            <StackPanel Orientation="Horizontal"
+                                        Spacing="4"
+                                        VerticalAlignment="Center">
+                                <TextBlock Text="&#xe710;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="11"/>
+                                <TextBlock Text="添加"
+                                           FontSize="12"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <StackPanel x:Name="FolderList" Spacing="2"/>
+                    <TextBlock Text="至少需要一个工作目录；未添加任何目录时默认分配临时目录"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <!-- 默认模型 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="默认模型"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="ModelCombo" Height="34" CornerRadius="6"/>
+                </StackPanel>
+
+                <!-- Agent 框架 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Agent 框架"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="FrameworkCombo" Height="34" CornerRadius="6"/>
+                </StackPanel>
+
+                <!-- 默认权限模式 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="默认权限模式"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="PermissionCombo"
+                              Height="34"
+                              CornerRadius="6"
+                              SelectionChanged="OnPermissionChanged"/>
+                    <TextBlock x:Name="PermissionHint"
+                               FontSize="11"
+                               Foreground="#6B7280"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <!-- 提示词 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="提示词（可选）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="PromptBox"
+                             MinHeight="80"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             Padding="10,8"
+                             CornerRadius="6"
+                             PlaceholderText="为该工作空间配置的系统提示词"/>
+                </StackPanel>
+
+                <!-- 环境变量 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="环境变量（可选）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="EnvVarsBox"
+                             MinHeight="60"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             Padding="10,8"
+                             CornerRadius="6"
+                             PlaceholderText="KEY=VALUE，每行一个"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 底部按钮 -->
+        <Grid Grid.Row="2"
+              ColumnDefinitions="*,Auto,Auto"
+              Margin="24,8,24,18">
+            <Button Grid.Column="1"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#E5E7EB"
+                    Foreground="#374151"
+                    Margin="0,0,10,0"
+                    Cursor="Hand"
+                    Click="OnCancelClick">
+                <TextBlock Text="取消" FontSize="13"/>
+            </Button>
+            <Button Grid.Column="2"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#546E7A"
+                    Foreground="White"
+                    Cursor="Hand"
+                    Click="OnCreateClick">
+                <TextBlock Text="创建" FontSize="13"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Window>
