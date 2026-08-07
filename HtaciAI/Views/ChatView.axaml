@@ -2,13 +2,189 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
+             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
              x:Class="HtaciAI.Views.ChatView">
-    <Grid>
-        <TextBlock Text="ChatView - 待实现"
-                   Foreground="#9CA3AF"
-                   FontSize="16"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center"/>
+    <Grid RowDefinitions="*,Auto" Background="Transparent">
+        <!-- 消息列表 -->
+        <ScrollViewer x:Name="MessagesScroll"
+                      Grid.Row="0"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="MessagesPanel" Spacing="12" Margin="24,20"/>
+        </ScrollViewer>
+
+
+        <!-- 输入框 -->
+            <Border Grid.Row="1"
+                    CornerRadius="8"
+                    Background="#FFFFFF"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    MinHeight="100"
+                    Margin="15"
+                    VerticalAlignment="Bottom"
+                    HorizontalAlignment="Stretch">
+                <Grid>
+					 <TextBox x:Name="InputBox"
+                         MinHeight="100"
+                         CornerRadius="8"
+                         MaxHeight="200"
+                         Padding="16,16,16,38"
+                         FontSize="14"
+                         Foreground="#1A1A2E"
+                         PlaceholderText="在这里输入你的问题，Enter 发送，Shift+Enter 换行"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         BorderThickness="0"
+                         KeyDown="OnInputKeyDown"/>
+
+                    <!-- 功能栏 -->
+                    <Grid VerticalAlignment="Bottom"
+                          Background="Transparent">
+                        <!-- 发送按钮 -->
+                        <Button x:Name="SendBtn"
+                            HorizontalAlignment="Right"
+                            Width="28"
+                            Height="28"
+                            Padding="0"
+                            CornerRadius="8"
+                            Background="#4A90D9"
+                            Margin="5"
+                            Click="OnSendClick">
+                            
+                            <TextBlock Text="&#xe724;"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="14"
+                                       Foreground="White"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Button>
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Left">
+							<!-- 添加文件 -->
+                            <Button x:Name="AddFileBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                Margin="5">
+                                <ToolTip.Tip>
+                                    <StackPanel>
+                                        <!-- 第一行：主要提示，类似菜单标题 -->
+                                        <TextBlock Text="上传文件" 
+                                                   FontWeight="Bold" />
+                                        <!-- 第二行：次要提示，类似菜单描述 
+                                        <TextBlock Text="文本"
+                                                   FontSize="12" 
+                                                   Foreground="Gray" />-->
+                                    </StackPanel>
+                                </ToolTip.Tip>
+                                <TextBlock Text="&#xe723;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <!-- 知识库 -->
+                            <Button x:Name="KnowledgeBaseBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                Margin="5">
+                                <ToolTip.Tip>
+                                    <StackPanel>
+                                        <!-- 第一行：主要提示，类似菜单标题 -->
+                                        <TextBlock Text="知识库" 
+                                                   FontWeight="Bold" />
+                                        <!-- 第二行：次要提示，类似菜单描述 
+                                        <TextBlock Text="文本"
+                                                   FontSize="12" 
+                                                   Foreground="Gray" />-->
+                                    </StackPanel>
+                                </ToolTip.Tip>
+                                <TextBlock Text="&#xe7be;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                            <!-- 工具库 -->
+                            <Button x:Name="ToolsBaseBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                Margin="5">
+                                <ToolTip.Tip>
+                                    <StackPanel>
+                                        <!-- 第一行：主要提示，类似菜单标题 -->
+                                        <TextBlock Text="工具库" 
+                                                   FontWeight="Bold" />
+                                        <!-- 第二行：次要提示，类似菜单描述 
+                                        <TextBlock Text="文本"
+                                                   FontSize="12" 
+                                                   Foreground="Gray" />-->
+                                    </StackPanel>
+                                </ToolTip.Tip>
+                                <TextBlock Text="&#xe90f;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                        </StackPanel>
+                        
+                    </Grid>
+                </Grid>
+
+
+            </Border>
+        <!-- 底部输入区 
+        <Border Grid.Row="1"
+                Padding="16,12"
+                Background="#F9FAFB"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,1,0,0">
+            <Border CornerRadius="8"
+                    Background="#FFFFFF"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1">
+                <Grid>
+                    <TextBox x:Name="InputBox"
+                             MinHeight="58"
+                             MaxHeight="140"
+                             Padding="12,10,48,10"
+                             FontSize="14"
+                             Foreground="#1A1A2E"
+                             PlaceholderText="在这里输入消息，Enter 发送，Shift+Enter 换行"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             BorderThickness="0"
+                             Margin="0,0,0,42"
+                             KeyDown="OnInputKeyDown"/>
+                    <Button x:Name="SendBtn"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Bottom"
+                            Width="30"
+                            Height="30"
+                            Padding="0"
+                            Margin="0,0,6,6"
+                            CornerRadius="8"
+                            Background="#4A90D9"
+                            Click="OnSendClick">
+                        <TextBlock Text="&#xe724;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="14"
+                                   Foreground="White"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Button>
+                </Grid>
+            </Border>
+        </Border>-->
     </Grid>
 </UserControl>

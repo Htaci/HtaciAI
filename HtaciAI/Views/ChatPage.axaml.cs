@@ -1,24 +1,34 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
+using HtaciAI.Data;
+using HtaciAI.Models;
+using HtaciAI.Services;
 using HtaciAI.Views;
 
 namespace HtaciAI;
 
+/// <summary>
+/// 智能对话页：左侧会话列表 + 右侧视图（未打开会话→NewChatView，打开会话→ChatView）。
+/// </summary>
 public partial class ChatPage : UserControl
 {
+    private string? _currentSessionId;
+    private readonly List<ChatSession> _sessions = new();
+
     public ChatPage()
     {
         InitializeComponent();
         SetupNewChatButton();
-        LoadTestData();
+        _ = LoadSessionsAsync();
         ShowNewChatView();
     }
 
@@ -36,16 +46,8 @@ public partial class ChatPage : UserControl
             }
         };
 
-        NewChatBtn.PointerEntered += (s, e) =>
-        {
-            NewChatShadow.Opacity = 1;
-        };
-
-        NewChatBtn.PointerExited += (s, e) =>
-        {
-            NewChatShadow.Opacity = 0;
-        };
-
+        NewChatBtn.PointerEntered += (s, e) => NewChatShadow.Opacity = 1;
+        NewChatBtn.PointerExited += (s, e) => NewChatShadow.Opacity = 0;
         NewChatBtn.PointerPressed += (s, e) =>
         {
             ShowNewChatView();
@@ -53,88 +55,119 @@ public partial class ChatPage : UserControl
         };
     }
 
+    /// <summary>回到新建会话视图（右侧显示 NewChatView）。</summary>
     private void ShowNewChatView()
     {
+        _currentSessionId = null;
         var view = new NewChatView();
-        view.SendRequested += OnSendRequested;
+        view.SendRequested += OnNewChatSend;
         RightPanel.Content = view;
     }
 
-    private void ShowChatView()
+    private async void OnNewChatSend(object? sender, string text)
     {
-        RightPanel.Content = new ChatView();
+        if (sender is NewChatView nv) nv.SendRequested -= OnNewChatSend;
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        var session = new ChatSession
+        {
+            Title = text.Length > 24 ? text[..24] + "…" : text,
+            Model = ChatConfig.Model,
+        };
+        await ChatRepository.CreateAsync(session);
+        _currentSessionId = session.Id;
+
+        var view = new ChatView(session.Id);
+        view.Updated += OnSessionUpdated;
+        RightPanel.Content = view;
+        await view.InitializeAsync();
+        await view.SendMessageAsync(text);
+        await LoadSessionsAsync();
     }
 
-    private void OnSendRequested(object? sender, string text)
+    private async Task OpenSession(string id)
     {
-        ShowChatView();
+        _currentSessionId = id;
+        var view = new ChatView(id);
+        view.Updated += OnSessionUpdated;
+        RightPanel.Content = view;
+        await view.InitializeAsync();
+        await LoadSessionsAsync();
     }
 
-    /// <summary>
-    /// 从数据源加载历史记录列表（后续接入 SQLine 时替换测试数据调用）
-    /// </summary>
-    public void LoadHistoryItems(IEnumerable<string> items)
+    private async void OnSessionUpdated() => await LoadSessionsAsync();
+
+    // ---- 会话列表 ----
+
+    private async Task LoadSessionsAsync()
     {
+        _sessions.Clear();
+        _sessions.AddRange(await ChatRepository.GetAllAsync());
+
         HistoryList.Children.Clear();
-
-        foreach (var item in items)
-        {
-            HistoryList.Children.Add(CreateHistoryItem(item));
-        }
+        foreach (var s in _sessions)
+            HistoryList.Children.Add(CreateSessionItem(s));
     }
 
-    private void LoadTestData()
+    private Border CreateSessionItem(ChatSession s)
     {
-        LoadHistoryItems(new[]
-        {
-            "关于 Avalonia 的 MVVM 模式",
-            "C# 中的 async/await 最佳实践",
-            "如何实现自定义控件",
-            "性能优化技巧讨论",
-            "项目结构设计思路",
-            "与 Rust 的互操作方案",
-        });
-    }
+        var isActive = s.Id == _currentSessionId;
 
-    private Border CreateHistoryItem(string text)
-    {
-        var textBlock = new TextBlock
+        var titleBlock = new TextBlock
         {
-            Text = text,
+            Text = s.Title,
             FontSize = 13,
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
-            Margin = new Avalonia.Thickness(12, 0)
+            Foreground = new SolidColorBrush(Color.Parse(isActive ? "#1A1A2E" : "#4B5563")),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0)
         };
-
-        var border = new Border
+        var timeBlock = new TextBlock
         {
-            Height = 36,
-            CornerRadius = new Avalonia.CornerRadius(8),
-            Background = Brushes.Transparent,
-            Cursor = new Cursor(StandardCursorType.Arrow),
-            Child = textBlock
+            Text = FormatTime(s.UpdatedAt),
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0)
         };
 
-        border.PointerEntered += (s, e) =>
+        var item = new Border
         {
-            border.Background = new SolidColorBrush(Color.Parse("#F1F3F5"));
-            border.Cursor = new Cursor(StandardCursorType.Hand);
+            Height = 38,
+            CornerRadius = new CornerRadius(8),
+            Background = isActive ? new SolidColorBrush(Color.Parse("#E8F0FA")) : Brushes.Transparent,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                Children = { titleBlock, timeBlock }
+            }
         };
+        Grid.SetColumn(timeBlock, 1);
 
-        border.PointerExited += (s, e) =>
+        item.PointerEntered += (s2, e2) =>
         {
-            border.Background = Brushes.Transparent;
-            border.Cursor = new Cursor(StandardCursorType.Arrow);
+            if (!isActive) item.Background = new SolidColorBrush(Color.Parse("#F1F3F5"));
         };
-
-        border.PointerPressed += (s, e) =>
+        item.PointerExited += (s2, e2) =>
         {
-            // TODO: 选中历史会话，加载对应对话内容
-            e.Handled = true;
+            if (!isActive) item.Background = Brushes.Transparent;
+        };
+        item.PointerPressed += async (s2, e2) =>
+        {
+            await OpenSession(s.Id);
+            e2.Handled = true;
         };
 
-        return border;
+        return item;
     }
 
+    private static string FormatTime(long ms)
+    {
+        var dt = DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime();
+        var now = DateTimeOffset.Now;
+        if (dt.Date == now.Date) return dt.ToString("HH:mm");
+        if (dt.Date == now.AddDays(-1).Date) return "昨天";
+        return dt.ToString("M/d");
+    }
 }

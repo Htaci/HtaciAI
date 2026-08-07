@@ -17,6 +17,7 @@
 
 
         <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+        <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
 
         <PackageVersion Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />
 

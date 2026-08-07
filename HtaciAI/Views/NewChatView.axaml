@@ -26,10 +26,11 @@
                          Padding="16,16,16,38"
                          FontSize="14"
                          Foreground="#1A1A2E"
-                         PlaceholderText="在这里输入你的问题"
+                         PlaceholderText="在这里输入你的问题，Enter 发送，Shift+Enter 换行"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
-                         BorderThickness="0"/>
+                         BorderThickness="0"
+                         KeyDown="OnInputKeyDown"/>
 
                     <!-- 功能栏 -->
                     <Grid VerticalAlignment="Bottom"
@@ -37,7 +38,6 @@
                         <!-- 发送按钮 -->
                         <Button x:Name="SendBtn"
                             HorizontalAlignment="Right"
-                            IsEnabled="False"
                             Width="28"
                             Height="28"
                             Padding="0"
@@ -61,9 +61,8 @@
                                 Height="28"
                                 Padding="0"
                                 CornerRadius="8"
-                                Background="Transparent" 
-                                Margin="5"
-                                Click="OnSendClick">
+                                Background="Transparent"
+                                Margin="5">
                                 <ToolTip.Tip>
                                     <StackPanel>
                                         <!-- 第一行：主要提示，类似菜单标题 -->
@@ -87,9 +86,8 @@
                                 Height="28"
                                 Padding="0"
                                 CornerRadius="8"
-                                Background="Transparent" 
-                                Margin="5"
-                                Click="OnSendClick">
+                                Background="Transparent"
+                                Margin="5">
                                 <ToolTip.Tip>
                                     <StackPanel>
                                         <!-- 第一行：主要提示，类似菜单标题 -->
@@ -113,9 +111,8 @@
                                 Height="28"
                                 Padding="0"
                                 CornerRadius="8"
-                                Background="Transparent" 
-                                Margin="5"
-                                Click="OnSendClick">
+                                Background="Transparent"
+                                Margin="5">
                                 <ToolTip.Tip>
                                     <StackPanel>
                                         <!-- 第一行：主要提示，类似菜单标题 -->

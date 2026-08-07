@@ -19,6 +19,20 @@ public partial class NewChatView : UserControl
 
     private void OnSendClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        Send();
+    }
+
+    private void OnInputKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            e.Handled = true;
+            Send();
+        }
+    }
+
+    private void Send()
+    {
         var text = InputBox.Text?.Trim();
         if (!string.IsNullOrEmpty(text))
         {
