@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="540" d:DesignHeight="700"
         x:Class="HtaciAI.Views.CreateWorkspaceWindow"
+        Icon="/Assets/logo.ico"
         Title="创建新工作空间"
         Width="540" MinWidth="540" MaxWidth="540"
         Height="700" MinHeight="700"

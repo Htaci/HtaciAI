@@ -123,6 +123,24 @@ public static class ChatRepository
         return Convert.ToInt32(result);
     }
 
+    /// <summary>
+    /// 下一个 turn_id（会话内递增整数 1、2、3…）。用户与 AI 各占一个新 turn，
+    /// 因此每次 ChatAsync 会被调用两次（先用户后 AI）。历史数据为 GUID 时 CAST 为 0，忽略不计。
+    /// </summary>
+    public static async Task<string> GetNextTurnIdAsync(string sessionId)
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT COALESCE(MAX(CAST(turn_id AS INTEGER)), 0) + 1
+            FROM chat_message WHERE session_id = $session_id;
+            """;
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        var result = await cmd.ExecuteScalarAsync();
+        return Convert.ToInt64(result).ToString();
+    }
+
     public static async Task InsertAsync(ChatMessage m)
     {
         var now = Now();

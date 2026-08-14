@@ -11,6 +11,10 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+	<PropertyGroup>
+		<ApplicationIcon>Assets\logo.ico</ApplicationIcon>
+	</PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" >

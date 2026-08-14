@@ -10,6 +10,11 @@
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
 
+
+	<PropertyGroup>
+		<ApplicationIcon>Assets\logo.ico</ApplicationIcon>
+	</PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
@@ -24,5 +29,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\HtaciAI.Shared\HtaciAI.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Assets\Model_icon\" />
   </ItemGroup>
 </Project>

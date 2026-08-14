@@ -4,13 +4,57 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
              x:Class="HtaciAI.Views.ChatView">
+    <UserControl.Styles>
+        <!-- 思考卡片内容区专用：极细的灰色滚动条（4px，圆角滑块） -->
+        <Style Selector="ScrollViewer.thin-scrollbar ScrollBar">
+            <Setter Property="Width" Value="4"/>
+            <Setter Property="MinWidth" Value="4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Width="4">
+                            <Rectangle Fill="Transparent"/>
+                            <Track Name="PART_Track"
+                                   Orientation="Vertical"
+                                   IsDirectionReversed="True"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value}"
+                                   ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.DecreaseButton>
+                                <Track.IncreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.IncreaseButton>
+                                <Track.Thumb>
+                                    <Thumb MinHeight="24" IsTabStop="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="#D0D0D3"
+                                                        CornerRadius="2"
+                                                        Margin="0,2"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Styles>
+
     <Grid RowDefinitions="*,Auto" Background="Transparent">
         <!-- 消息列表 -->
         <ScrollViewer x:Name="MessagesScroll"
                       Grid.Row="0"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="MessagesPanel" Spacing="12" Margin="24,20"/>
+            <StackPanel x:Name="MessagesPanel" Spacing="12" Margin="34,20"/>
         </ScrollViewer>
 
 
@@ -52,13 +96,62 @@
                             Margin="5"
                             Click="OnSendClick">
                             
-                            <TextBlock Text="&#xe724;"
+                            <TextBlock Text="&#xe74a;"
                                        FontFamily="Segoe Fluent Icons"
                                        FontSize="14"
                                        Foreground="White"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"/>
                         </Button>
+                        	<!-- 模型选择与思考控制器 -->
+                            <Button x:Name="ModelAndThinkBtn"
+                                MinWidth="100"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                HorizontalAlignment="Right"
+                                Margin="5,5,40,5">
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <MenuItem Header="DeepSeek V4 Flash"  />
+                                        <MenuItem Header="DeepSeek V4 Pro"  />
+                                        <Separator/>
+                                        <MenuItem Header="思考模式">
+											<MenuItem Header="NoThink" Click="OnThinkingMenuClick" />
+                                            <MenuItem Header="none" Click="OnThinkingMenuClick" />
+                                            <MenuItem Header="low" Click="OnThinkingMenuClick" />
+                                            <MenuItem Header="high" Click="OnThinkingMenuClick" />
+                                            <MenuItem Header="max" Click="OnThinkingMenuClick" />
+                                        </MenuItem>
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                                <StackPanel Orientation="Horizontal">
+									<TextBlock Text="&#xf158;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           Margin="5"
+                                           HorizontalAlignment="Left"
+                                           VerticalAlignment="Center">
+                                    </TextBlock>
+	                                <TextBlock Text="DeepSeek V4 Flash"
+			                                   FontSize="12"
+			                                   Margin="0,0,0,0"
+			                                   HorizontalAlignment="Left"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Text="·"
+			                                   FontSize="12"
+			                                   Margin="5,0,5,0"
+			                                   HorizontalAlignment="Left"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="ThinkingLabel" Text="none"
+			                                   FontSize="12"
+			                                   Margin="0,0,10,0"
+			                                   HorizontalAlignment="Left"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+
                         <StackPanel Orientation="Horizontal"
                                     HorizontalAlignment="Left">
 							<!-- 添加文件 -->
