@@ -1,0 +1,149 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="480" d:DesignHeight="760"
+        x:Class="HtaciAI.Views.Settings.ModelEditWindow"
+        Icon="/Assets/logo.ico"
+        Title="模型"
+        Width="480" MinWidth="480" MaxWidth="480"
+        Height="760" MinHeight="760"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- 标题 -->
+        <TextBlock x:Name="TitleText"
+                   Grid.Row="0"
+                   Text="添加模型"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"
+                   Margin="24,18,24,6"/>
+
+        <!-- 表单 -->
+        <ScrollViewer Grid.Row="1"
+                      Margin="24,8,24,8"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="模型备注名称"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="DisplayNameBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             PlaceholderText="显示用，如：Kimi K2"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="模型调用 id"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="CallIdBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             PlaceholderText="请求中的模型名，如：deepseek-v4-flash"/>
+                </StackPanel>
+
+                <CheckBox x:Name="StreamingCheck"
+                          Content="支持流式输出（增量文本输出）"
+                          FontSize="13"
+                          Foreground="#374151"/>
+                <CheckBox x:Name="ThinkingCheck"
+                          Content="支持思考模式"
+                          FontSize="13"
+                          Foreground="#374151"/>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="支持的思考强度（逗号分隔）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="StrengthsBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             PlaceholderText="low, high, max"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="模型能力类型（逗号分隔）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="CapsBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             PlaceholderText="vision, reasoning, tools"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="上下文窗口大小"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="CtxBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             Text="-1"
+                             PlaceholderText="-1 = 未知"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="价格（每百万 token，留空 = 未设置）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                        <TextBox x:Name="InputBox" Height="34" Padding="10,0" CornerRadius="6" PlaceholderText="输入"/>
+                        <TextBox x:Name="CacheBox" Grid.Column="1" Height="34" Padding="10,0" CornerRadius="6" PlaceholderText="缓存命中"/>
+                        <TextBox x:Name="OutputBox" Grid.Column="2" Height="34" Padding="10,0" CornerRadius="6" PlaceholderText="输出"/>
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="价格货币单位"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="CurrencyCombo" Height="34" CornerRadius="6"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 底部按钮 -->
+        <Grid Grid.Row="2"
+              ColumnDefinitions="*,Auto,Auto"
+              Margin="24,8,24,18">
+            <Button Grid.Column="1"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#E5E7EB"
+                    Foreground="#374151"
+                    Margin="0,0,10,0"
+                    Cursor="Hand"
+                    Click="OnCancelClick">
+                <TextBlock Text="取消" FontSize="13"/>
+            </Button>
+            <Button Grid.Column="2"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#546E7A"
+                    Foreground="White"
+                    Cursor="Hand"
+                    Click="OnSaveClick">
+                <TextBlock Text="保存" FontSize="13"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Window>

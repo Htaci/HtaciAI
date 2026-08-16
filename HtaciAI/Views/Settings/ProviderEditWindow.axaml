@@ -1,0 +1,133 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="480" d:DesignHeight="660"
+        x:Class="HtaciAI.Views.Settings.ProviderEditWindow"
+        Icon="/Assets/logo.ico"
+        Title="服务商"
+        Width="480" MinWidth="480" MaxWidth="480"
+        Height="660" MinHeight="660"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- 标题 -->
+        <TextBlock x:Name="TitleText"
+                   Grid.Row="0"
+                   Text="添加服务商"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"
+                   Margin="24,18,24,6"/>
+
+        <!-- 表单 -->
+        <ScrollViewer Grid.Row="1"
+                      Margin="24,8,24,8"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="服务商名称"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="NameBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             PlaceholderText="如：月之暗面"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="API 类型"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="ProtocolCombo" Height="34" CornerRadius="6"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="目标 URL 地址"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="EndpointBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             PlaceholderText="https://api.example.com/v1/chat/completions"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="API Key"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="ApiKeyBox" Height="34" Padding="10,0" CornerRadius="6"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="思考开关字段"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="ThinkingCombo" Height="34" CornerRadius="6"/>
+                    <TextBlock Text="think：thinking: enabled/disabled；enable_thinking：true/false；none：不支持该字段"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <CheckBox x:Name="ArrayContentCheck"
+                          Content="支持数组格式的 message content（多模态消息）"
+                          FontSize="13"
+                          Foreground="#374151"/>
+                <CheckBox x:Name="StreamingCheck"
+                          Content="支持流式传输"
+                          FontSize="13"
+                          Foreground="#374151"/>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="描述（可选）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="DescriptionBox"
+                             MinHeight="60"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             Padding="10,8"
+                             CornerRadius="6"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 底部按钮 -->
+        <Grid Grid.Row="2"
+              ColumnDefinitions="*,Auto,Auto"
+              Margin="24,8,24,18">
+            <Button Grid.Column="1"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#E5E7EB"
+                    Foreground="#374151"
+                    Margin="0,0,10,0"
+                    Cursor="Hand"
+                    Click="OnCancelClick">
+                <TextBlock Text="取消" FontSize="13"/>
+            </Button>
+            <Button Grid.Column="2"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#546E7A"
+                    Foreground="White"
+                    Cursor="Hand"
+                    Click="OnSaveClick">
+                <TextBlock Text="保存" FontSize="13"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Window>

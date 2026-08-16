@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 
 namespace HtaciAI.Data;
@@ -38,6 +39,17 @@ public static class DatabaseService
         return conn;
     }
 
+    /// <summary>打开连接并启用外键（PRAGMA 是连接级设置，需每个连接单独开启）。</summary>
+    public static async Task<SqliteConnection> OpenWithForeignKeysAsync()
+    {
+        var conn = CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA foreign_keys=ON;";
+        await cmd.ExecuteNonQueryAsync();
+        return conn;
+    }
+
     private static void Migrate(SqliteConnection conn)
     {
         int version;
@@ -50,7 +62,15 @@ public static class DatabaseService
         if (version < 1)
         {
             RunMigrationV1(conn);
-            SetVersion(conn, 1);
+            version = 1;
+            SetVersion(conn, version);
+        }
+
+        if (version < 2)
+        {
+            RunMigrationV2(conn);
+            version = 2;
+            SetVersion(conn, version);
         }
     }
 
@@ -104,6 +124,56 @@ public static class DatabaseService
             BEGIN
                 DELETE FROM chat_message WHERE session_id = OLD.id;
             END;
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>模型管理：服务商表 + 模型表（自定义模型）。</summary>
+    private static void RunMigrationV2(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS ai_provider (
+                id                     TEXT PRIMARY KEY,
+                name                   TEXT NOT NULL,
+                description            TEXT,
+                protocol               TEXT NOT NULL DEFAULT 'OpenAIEx',
+                endpoint               TEXT NOT NULL,
+                api_key                TEXT,
+                thinking_field         TEXT NOT NULL DEFAULT 'think',
+                supports_array_content INTEGER NOT NULL DEFAULT 1,
+                supports_streaming     INTEGER NOT NULL DEFAULT 1,
+                is_enabled             INTEGER NOT NULL DEFAULT 1,
+                sort_order             INTEGER NOT NULL DEFAULT 0,
+                created_at             INTEGER NOT NULL,
+                updated_at             INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_model (
+                id                  TEXT PRIMARY KEY,
+                provider_id         TEXT NOT NULL,
+                call_id             TEXT NOT NULL,
+                display_name        TEXT NOT NULL,
+                supports_streaming  INTEGER NOT NULL DEFAULT 1,
+                supports_thinking   INTEGER NOT NULL DEFAULT 0,
+                thinking_strengths  TEXT,
+                capabilities        TEXT,
+                context_window      INTEGER NOT NULL DEFAULT -1,
+                price_input         REAL,
+                price_cache_hit     REAL,
+                price_output        REAL,
+                currency            TEXT NOT NULL DEFAULT 'CNY',
+                is_enabled          INTEGER NOT NULL DEFAULT 1,
+                sort_order          INTEGER NOT NULL DEFAULT 0,
+                created_at          INTEGER NOT NULL,
+                updated_at          INTEGER NOT NULL,
+                FOREIGN KEY (provider_id) REFERENCES ai_provider(id) ON DELETE CASCADE,
+                UNIQUE (provider_id, call_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_model_provider ON ai_model(provider_id);
             """;
 
         using var cmd = conn.CreateCommand();

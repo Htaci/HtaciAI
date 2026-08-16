@@ -25,11 +25,13 @@ public sealed class ChatGateway
     /// <summary>模型管理系统接入前：一律使用 DeepSeek V4 Flash 走 OpenAiExClient。</summary>
     public ChatGateway() : this(new OpenAiExClient(ChatConfig.Endpoint, ChatConfig.ApiKey, ChatConfig.Model)) { }
 
-    /// <summary>
-    /// 按模型 id 解析模型详情。当前模型管理系统尚未接入，恒返回 DeepSeek V4 Flash；
-    /// 后续在此接入真实的「模型 id → 详情」解析。
-    /// </summary>
-    public ModelDetails ResolveModel(string modelId) => ModelDetails.Default;
+    /// <summary>按模型 id（UUID 或调用 id）解析模型详情，来自服务商+模型两表。</summary>
+    public Task<ModelDetails?> ResolveModelAsync(string modelId)
+        => ModelCatalog.ResolveAsync(modelId);
+
+    /// <summary>按模型详情构建对应协议的客户端。</summary>
+    public IChatClient BuildClient(ModelDetails details)
+        => ModelCatalog.BuildClient(details);
 
     /// <summary>
     /// 处理一轮对话：
@@ -200,28 +202,41 @@ public sealed record ChatTurnResult(
     string? Error);
 
 /// <summary>
-/// 模型详情（「模型 id → 详情」解析的占位结构，模型管理系统接入后填充）。
+/// 模型详情（由 ModelCatalog 从服务商+模型两表装配，供网关解析、客户端构建与 UI 展示）。
 /// </summary>
-public sealed record ModelDetails(
-    string ModelId,
-    string DisplayName,
-    string Provider,
-    string Endpoint,
-    string ApiKey,
-    string ModelName,
-    bool SupportsThinking,
-    bool SupportsReasoningEffort)
+public sealed class ModelDetails
 {
-    /// <summary>当前唯一的模型：DeepSeek V4 Flash（OpenAI 兼容，走 OpenAiExClient）。</summary>
-    public static readonly ModelDetails Default = new(
-        "deepseek-v4-flash",
-        "DeepSeek V4 Flash",
-        "Htaci",
-        ChatConfig.Endpoint,
-        ChatConfig.ApiKey,
-        ChatConfig.Model,
-        SupportsThinking: true,
-        SupportsReasoningEffort: true);
+    public string ModelId { get; init; } = "";
+    public string DisplayName { get; init; } = "";
+    public string ProviderName { get; init; } = "";
+    public ModelProtocol Protocol { get; init; } = ModelProtocol.OpenAIEx;
+    public string Endpoint { get; init; } = "";
+    public string ApiKey { get; init; } = "";
+    /// <summary>发送给 API 的模型名（模型调用 id）。</summary>
+    public string ModelName { get; init; } = "";
+    public ThinkingFieldKind ThinkingField { get; init; } = ThinkingFieldKind.Think;
+    public bool SupportsThinking { get; init; }
+    public IReadOnlyList<string> ThinkingStrengths { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> Capabilities { get; init; } = Array.Empty<string>();
+    public bool SupportsArrayContent { get; init; } = true;
+    public bool SupportsStreaming { get; init; } = true;
+    public long ContextWindow { get; init; } = -1;
+
+    /// <summary>内置兜底模型：DeepSeek V4 Flash（模型管理系统接入前的临时默认）。</summary>
+    public static readonly ModelDetails Default = new()
+    {
+        ModelId = "deepseek-v4-flash",
+        DisplayName = "DeepSeek V4 Flash",
+        ProviderName = "Htaci",
+        Protocol = ModelProtocol.OpenAIEx,
+        Endpoint = ChatConfig.Endpoint,
+        ApiKey = ChatConfig.ApiKey,
+        ModelName = ChatConfig.Model,
+        ThinkingField = ThinkingFieldKind.Think,
+        SupportsThinking = true,
+        ThinkingStrengths = new[] { "low", "high", "max" },
+        Capabilities = new[] { "reasoning", "tools", "completion" },
+    };
 }
 
 /// <summary>tool_calls 与 chat_message.metadata 之间的 JSON 序列化辅助。</summary>

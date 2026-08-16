@@ -28,8 +28,8 @@ public sealed class OpenAiExClient : IChatClient
     private readonly string _endpoint;
     private readonly string _apiKey;
     private readonly string _model;
-    private readonly string _thinkingField;   // "thinking"
-    private readonly string _effortField;     // "reasoning_effort"
+    private readonly ThinkingFieldKind _thinkingField;   // think / enable_thinking / none
+    private readonly string _effortField;                // "reasoning_effort"（OpenAI 官方字段）
 
     public string ModelName => _model;
 
@@ -37,7 +37,7 @@ public sealed class OpenAiExClient : IChatClient
         string endpoint,
         string apiKey,
         string model,
-        string thinkingField = "thinking",
+        ThinkingFieldKind thinkingField = ThinkingFieldKind.Think,
         string effortField = "reasoning_effort")
     {
         _endpoint = endpoint;
@@ -183,18 +183,18 @@ public sealed class OpenAiExClient : IChatClient
         switch (options.Thinking)
         {
             case ThinkingMode.NoThink:
-                body[_thinkingField] = "disabled";
+                WriteThinkingToggle(body, enabled: false);
                 break;
             case ThinkingMode.Low:
-                body[_thinkingField] = "enabled";
+                WriteThinkingToggle(body, enabled: true);
                 body[_effortField] = "low";
                 break;
             case ThinkingMode.High:
-                body[_thinkingField] = "enabled";
+                WriteThinkingToggle(body, enabled: true);
                 body[_effortField] = "high";
                 break;
             case ThinkingMode.Max:
-                body[_thinkingField] = "enabled";
+                WriteThinkingToggle(body, enabled: true);
                 body[_effortField] = "max";
                 break;
             default:
@@ -203,6 +203,22 @@ public sealed class OpenAiExClient : IChatClient
         }
 
         return body;
+
+        // 思考开关按服务商声明的字段写法下发；None 时无法下发开关，仅靠强度字段
+        void WriteThinkingToggle(Dictionary<string, object?> body, bool enabled)
+        {
+            switch (_thinkingField)
+            {
+                case ThinkingFieldKind.Think:
+                    body["thinking"] = enabled ? "enabled" : "disabled";
+                    break;
+                case ThinkingFieldKind.EnableThinking:
+                    body["enable_thinking"] = enabled;
+                    break;
+                default:
+                    break;
+            }
+        }
     }
 
     /// <summary>从历史消息重建 OpenAI 格式消息数组（system 独立前置，不进 history）。</summary>
