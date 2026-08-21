@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
              x:Class="HtaciAI.Views.NewChatView">
     <Grid x:Name="FullRoot" Background="Transparent" PointerPressed="OnBackgroundPressed">
@@ -35,6 +36,10 @@
                     <!-- 功能栏 -->
                     <Grid VerticalAlignment="Bottom"
                           Background="Transparent">
+                        <controls:ModelSelectorControl x:Name="ModelSelector"
+                                                       HorizontalAlignment="Right"
+                                                       VerticalAlignment="Center"
+                                                       Margin="5,5,40,5"/>
                         <!-- 发送按钮 -->
                         <Button x:Name="SendBtn"
                             HorizontalAlignment="Right"
@@ -105,31 +110,9 @@
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Button>
-                            <!-- 工具库 -->
-                            <Button x:Name="ToolsBaseBtn"
-                                Width="28"
-                                Height="28"
-                                Padding="0"
-                                CornerRadius="8"
-                                Background="Transparent"
-                                Margin="5">
-                                <ToolTip.Tip>
-                                    <StackPanel>
-                                        <!-- 第一行：主要提示，类似菜单标题 -->
-                                        <TextBlock Text="工具库" 
-                                                   FontWeight="Bold" />
-                                        <!-- 第二行：次要提示，类似菜单描述 
-                                        <TextBlock Text="文本"
-                                                   FontSize="12" 
-                                                   Foreground="Gray" />-->
-                                    </StackPanel>
-                                </ToolTip.Tip>
-                                <TextBlock Text="&#xe90f;"
-                                           FontFamily="Segoe Fluent Icons"
-                                           FontSize="14"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"/>
-                            </Button>
+                            <!-- 工具库（可复用控件 ToolSelectorControl） -->
+                            <controls:ToolSelectorControl x:Name="ToolSelector"
+                                                          Margin="5"/>
                         </StackPanel>
                         
                     </Grid>

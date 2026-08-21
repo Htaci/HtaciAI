@@ -1,5 +1,8 @@
 namespace HtaciAI.Services;
 
+using System.Collections.Generic;
+using HtaciAI.Services.Tools;
+
 /// <summary>
 /// 思考模式：NoThink=显式关闭（thinking: disabled），Default=不传任何思考/强度字段（模型默认），
 /// Low/High/Max=开启思考（thinking: enabled）+ 对应推理强度字段。
@@ -13,8 +16,11 @@ public enum ThinkingMode
     Max,
 }
 
-/// <summary>客户端请求选项。thinking / 强度字段仅在明确设置时才写入请求体。</summary>
+/// <summary>客户端请求选项。thinking / 强度字段仅在明确设置时才写入请求体；Tools 非空时写入 tools 数组。</summary>
 public sealed class ChatRequestOptions
 {
     public ThinkingMode Thinking { get; set; } = ThinkingMode.Default;
+
+    /// <summary>当前激活的工具定义（去重后），非空时作为 tools 数组下发给 LLM。</summary>
+    public IReadOnlyList<ToolDefinition>? Tools { get; set; }
 }

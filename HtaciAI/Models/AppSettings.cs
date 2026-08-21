@@ -21,4 +21,12 @@ public static class AppSettings
 
     /// <summary>树状结构下是否自动折叠（选中一个工作空间时收起其他）</summary>
     public static bool TreeAutoCollapse { get; set; }
+
+    // ---- 脚本工具运行时（null = 自动检测系统 PATH）----
+
+    /// <summary>Python 解释器路径（如 C:\Python312\python.exe，null = 自动检测）</summary>
+    public static string? RuntimePythonPath { get; set; }
+
+    /// <summary>Node.js 可执行文件路径（如 C:\Program Files\nodejs\node.exe，null = 自动检测）</summary>
+    public static string? RuntimeNodePath { get; set; }
 }

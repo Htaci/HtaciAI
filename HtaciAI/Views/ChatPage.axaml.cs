@@ -66,18 +66,22 @@ public partial class ChatPage : UserControl
 
     private async void OnNewChatSend(object? sender, string text)
     {
-        if (sender is NewChatView nv) nv.SendRequested -= OnNewChatSend;
+        if (sender is not NewChatView nv) return;
+        nv.SendRequested -= OnNewChatSend;
         if (string.IsNullOrWhiteSpace(text)) return;
 
         var session = new ChatSession
         {
             Title = text.Length > 24 ? text[..24] + "…" : text,
-            Model = ChatConfig.Model,
+            Model = nv.SelectedModel?.ModelName ?? ChatConfig.Model,
+            Thinking = (int)nv.ThinkingMode,
         };
         await ChatRepository.CreateAsync(session);
         _currentSessionId = session.Id;
 
         var view = new ChatView(session.Id);
+        view.ThinkingMode = nv.ThinkingMode; // 首条消息沿用新建页选择的思考模式
+        view.SelectedToolIds = nv.SelectedToolIds; // 首条消息沿用新建页激活的工具
         view.Updated += OnSessionUpdated;
         RightPanel.Content = view;
         await view.InitializeAsync();

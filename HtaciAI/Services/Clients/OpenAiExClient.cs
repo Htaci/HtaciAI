@@ -9,13 +9,14 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Services;
 
 /// <summary>
 /// OpenAI API 协议兼容的扩展客户端。
 /// 以 OpenAI /chat/completions 协议为主，额外支持：
-///  - 思考开关字段（默认 "thinking": "enabled"/"disabled"）与推理强度字段（默认 "reasoning_effort"），
+///  - 思考开关字段（默认 "thinking": {"type":"enabled"/"disabled"}）与推理强度字段（默认 "reasoning_effort"），
 ///    仅在明确设置时才写入请求体，未设置时走模型默认行为；
 ///  - 解析 reasoning_content（思考内容）、role、tool_call_id、tool_calls；
 ///  - 多轮工具调用所需的完整消息重建（assistant.tool_calls / tool.tool_call_id）。
@@ -40,11 +41,33 @@ public sealed class OpenAiExClient : IChatClient
         ThinkingFieldKind thinkingField = ThinkingFieldKind.Think,
         string effortField = "reasoning_effort")
     {
-        _endpoint = endpoint;
+        _endpoint = NormalizeOpenAiEndpoint(endpoint);
         _apiKey = apiKey;
         _model = model;
         _thinkingField = thinkingField;
         _effortField = effortField;
+    }
+
+    /// <summary>
+    /// 规范化 OpenAI 兼容 Chat Completions 端点：
+    /// base URL（如 https://api.moonshot.cn）自动补全为 /v1/chat/completions；
+    /// 已含完整路径则原样返回，避免重复追加成 .../v1/chat/completions/v1/chat/completions。
+    /// </summary>
+    public static string NormalizeOpenAiEndpoint(string endpoint)
+    {
+        var url = endpoint?.Trim().TrimEnd('/') ?? string.Empty;
+        if (url.Length == 0) return url;
+
+        // 已含完整路径：直接返回
+        if (url.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+            return url;
+
+        // 已到版本目录（如 .../v1）：只需补 /chat/completions
+        if (url.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            return url + "/chat/completions";
+
+        // 其余一律视为 base URL：补 /v1/chat/completions
+        return url + "/v1/chat/completions";
     }
 
     public async Task<ChatStreamResult> StreamAsync(
@@ -202,7 +225,39 @@ public sealed class OpenAiExClient : IChatClient
                 break;
         }
 
+        // 工具：激活的工具非空时下发 tools 数组（OpenAI 兼容 function calling）。
+        if (options.Tools is { Count: > 0 })
+        {
+            body["tools"] = options.Tools.Select(t => new Dictionary<string, object?>
+            {
+                ["type"] = "function",
+                ["function"] = new Dictionary<string, object?>
+                {
+                    ["name"] = t.Name,
+                    ["description"] = t.Description,
+                    ["parameters"] = ParseParameters(t.InputSchemaJson),
+                },
+            }).ToList();
+        }
+
         return body;
+
+        // 把工具定义的入参 JSON Schema 解析为请求体对象；空/损坏时回退为开放 object。
+        static object ParseParameters(string schemaJson)
+        {
+            if (!string.IsNullOrWhiteSpace(schemaJson))
+            {
+                try
+                {
+                    return JsonDocument.Parse(schemaJson).RootElement.Clone();
+                }
+                catch (JsonException)
+                {
+                    // 忽略损坏的 schema，走回退
+                }
+            }
+            return new { type = "object", properties = new Dictionary<string, object>() };
+        }
 
         // 思考开关按服务商声明的字段写法下发；None 时无法下发开关，仅靠强度字段
         void WriteThinkingToggle(Dictionary<string, object?> body, bool enabled)
@@ -210,7 +265,9 @@ public sealed class OpenAiExClient : IChatClient
             switch (_thinkingField)
             {
                 case ThinkingFieldKind.Think:
-                    body["thinking"] = enabled ? "enabled" : "disabled";
+                    // DeepSeek OpenAI 兼容格式：{"thinking": {"type": "enabled"/"disabled"}}。
+                    // 开关字段必须是对象而非字符串，否则服务端返回 400（NoThink/Low/High/Max 均走此分支）。
+                    body["thinking"] = new Dictionary<string, object?> { ["type"] = enabled ? "enabled" : "disabled" };
                     break;
                 case ThinkingFieldKind.EnableThinking:
                     body["enable_thinking"] = enabled;

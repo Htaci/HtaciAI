@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace HtaciAI.Models;
 
 /// <summary>
-/// 思考开关字段的写法：think（thinking:"enabled"/"disabled"）、
+/// 思考开关字段的写法：think（{"thinking":{"type":"enabled"/"disabled"}}，DeepSeek OpenAI 兼容格式）、
 /// enable_thinking（enable_thinking:true/false）、none（不支持该开关字段）。
 /// </summary>
 public enum ThinkingFieldKind

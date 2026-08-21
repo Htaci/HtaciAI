@@ -10,6 +10,14 @@ namespace HtaciAI.Views.Settings;
 /// <summary>模型编辑对话框（添加/编辑），隶属于某个服务商。</summary>
 public partial class ModelEditWindow : Window
 {
+    /// <summary>思考强度可选值（wire 值，按展示顺序）。</summary>
+    private static readonly string[] ThinkingStrengthOptions =
+        { "minimal", "low", "medium", "high", "xhigh", "max" };
+
+    /// <summary>能力中文标签 → wire 值（保存时反查）。</summary>
+    private static readonly IReadOnlyDictionary<string, string> LabelToWire =
+        ModelCapabilities.Options.ToDictionary(o => o.Label, o => o.Wire, StringComparer.OrdinalIgnoreCase);
+
     private readonly string _providerId;
     private readonly AiModel? _existing;
 
@@ -30,14 +38,20 @@ public partial class ModelEditWindow : Window
         CurrencyCombo.ItemsSource = new List<string> { "CNY", "USD" };
         CurrencyCombo.SelectedIndex = 0;
 
+        // 标签选择：思考强度 + 模型能力
+        StrengthsPicker.Items = ThinkingStrengthOptions;
+        CapsPicker.Items = ModelCapabilities.Options.Select(o => o.Label).ToList();
+
         if (existing is not null)
         {
             DisplayNameBox.Text = existing.DisplayName;
             CallIdBox.Text = existing.CallId;
             StreamingCheck.IsChecked = existing.SupportsStreaming;
             ThinkingCheck.IsChecked = existing.SupportsThinking;
-            StrengthsBox.Text = string.Join(", ", existing.ThinkingStrengths);
-            CapsBox.Text = string.Join(", ", existing.Capabilities);
+            StrengthsPicker.SelectedItems = existing.ThinkingStrengths;
+            CapsPicker.SelectedItems = existing.Capabilities
+                .Select(c => ModelCapabilities.Labels.TryGetValue(c, out var label) ? label : c)
+                .ToList();
             CtxBox.Text = existing.ContextWindow.ToString();
             InputBox.Text = existing.PriceInput?.ToString("0.####");
             CacheBox.Text = existing.PriceCacheHit?.ToString("0.####");
@@ -75,8 +89,10 @@ public partial class ModelEditWindow : Window
         m.CallId = callId;
         m.SupportsStreaming = StreamingCheck.IsChecked ?? true;
         m.SupportsThinking = ThinkingCheck.IsChecked ?? false;
-        m.ThinkingStrengths = SplitList(StrengthsBox.Text);
-        m.Capabilities = SplitList(CapsBox.Text);
+        m.ThinkingStrengths = (StrengthsPicker.SelectedItems ?? Array.Empty<string>()).ToList();
+        m.Capabilities = (CapsPicker.SelectedItems ?? Array.Empty<string>())
+            .Select(label => LabelToWire.TryGetValue(label, out var wire) ? wire : label)
+            .ToList();
         m.ContextWindow = ParseLong(CtxBox.Text, -1);
         m.PriceInput = ParseDouble(InputBox.Text);
         m.PriceCacheHit = ParseDouble(CacheBox.Text);
@@ -86,12 +102,6 @@ public partial class ModelEditWindow : Window
         Result = m;
         Close();
     }
-
-    private static List<string> SplitList(string? text)
-        => (text ?? "")
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(s => s.Length > 0)
-            .ToList();
 
     private static long ParseLong(string? text, long fallback)
         => long.TryParse(text?.Trim(), out var v) ? v : fallback;

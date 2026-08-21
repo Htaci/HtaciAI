@@ -15,15 +15,23 @@ namespace HtaciAI.Services;
 /// </summary>
 public sealed class ChatGateway
 {
-    private readonly IChatClient _client;
-
     /// <summary>一次用户消息内，工具调用的最大轮数上限。</summary>
     public int MaxToolRounds { get; init; } = 10;
 
-    public ChatGateway(IChatClient client) => _client = client;
-
-    /// <summary>模型管理系统接入前：一律使用 DeepSeek V4 Flash 走 OpenAiExClient。</summary>
-    public ChatGateway() : this(new OpenAiExClient(ChatConfig.Endpoint, ChatConfig.ApiKey, ChatConfig.Model)) { }
+    /// <summary>
+    /// 按模型 id（UUID 或调用 id）解析客户端；模型不存在/未启用/为空时回退内置默认模型。
+    /// 每次发送前按当前选中模型调用，确保所选模型被真正调用而非固定 DeepSeek。
+    /// </summary>
+    public async Task<IChatClient> ResolveClientAsync(string? modelId)
+    {
+        if (!string.IsNullOrWhiteSpace(modelId))
+        {
+            var details = await ModelCatalog.ResolveAsync(modelId);
+            if (details is not null)
+                return ModelCatalog.BuildClient(details);
+        }
+        return new OpenAiExClient(ChatConfig.Endpoint, ChatConfig.ApiKey, ChatConfig.Model);
+    }
 
     /// <summary>按模型 id（UUID 或调用 id）解析模型详情，来自服务商+模型两表。</summary>
     public Task<ModelDetails?> ResolveModelAsync(string modelId)
@@ -45,6 +53,7 @@ public sealed class ChatGateway
         IReadOnlyList<ChatMessage> history,
         string userText,
         ChatRequestOptions options,
+        IChatClient client,
         IToolExecutor? tools,
         Func<ChatMessage, Task> persist,
         Func<ChatMessage, ChatRoundSink> beginRound,
@@ -62,7 +71,7 @@ public sealed class ChatGateway
             Role = "user",
             Content = userText,
             Status = "completed",
-            ModelName = _client.ModelName,
+            ModelName = client.ModelName,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -84,7 +93,7 @@ public sealed class ChatGateway
                 SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
                 Role = "assistant",
                 Status = "completed",
-                ModelName = _client.ModelName,
+                ModelName = client.ModelName,
                 CreatedAt = now,
                 UpdatedAt = now,
             };
@@ -94,7 +103,7 @@ public sealed class ChatGateway
             ChatStreamResult result;
             try
             {
-                result = await _client.StreamAsync(messages, systemPrompt, options, sink.OnContent, sink.OnThinking, ct);
+                result = await client.StreamAsync(messages, systemPrompt, options, sink.OnContent, sink.OnThinking, ct);
             }
             catch (Exception ex)
             {

@@ -12,6 +12,7 @@ public partial class NewTabPage : UserControl
 {
     public event EventHandler? SmartChatSelected;
     public event EventHandler? WorkspaceSelected;
+    public event EventHandler? ToolsSelected;
 
     public NewTabPage()
     {
@@ -45,6 +46,19 @@ public partial class NewTabPage : UserControl
             TagBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
             TagFg = Color.FromArgb(0xFF, 0x45, 0x5A, 0x64),
             OnClick = () => WorkspaceSelected?.Invoke(this, EventArgs.Empty)
+        }));
+
+        CardsPanel.Children.Add(CreateCard(new CardData
+        {
+            Title = "工具",
+            Description = "管理工具和工具集，创建新的工具",
+            Tags = new[] { "Tools", "管理" },
+            MainColor = Color.FromArgb(0xFF, 0x0E, 0xA5, 0xA6),
+            LightBg = Color.FromArgb(0xFF, 0xEA, 0xF7, 0xF7),
+            GlowAlpha = 0x26,
+            TagBg = Color.FromArgb(0xFF, 0xE6, 0xF5, 0xF5),
+            TagFg = Color.FromArgb(0xFF, 0x0B, 0x8A, 0x8B),
+            OnClick = () => ToolsSelected?.Invoke(this, EventArgs.Empty)
         }));
 
         //CardsPanel.Children.Add(CreateCard(new CardData

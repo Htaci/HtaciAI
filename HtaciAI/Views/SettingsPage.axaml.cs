@@ -19,6 +19,7 @@ public partial class SettingsPage : UserControl
         _sections.Add(("模型服务", new ModelServicePage()));
         _sections.Add(("默认配置", new DefaultConfigPage()));
         _sections.Add(("常规设置", new GeneralSettingsPage()));
+        _sections.Add(("环境配置", new RuntimeSettingsPage()));
         _sections.Add(("个性化设置", new PersonalizationPage()));
         _sections.Add(("数据管理", new DataManagementPage()));
         _sections.Add(("关于我们", new AboutPage()));

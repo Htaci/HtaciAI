@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="using:HtaciAI.Controls"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
              x:Class="HtaciAI.Views.ChatView">
     <UserControl.Styles>
@@ -69,7 +70,7 @@
                     VerticalAlignment="Bottom"
                     HorizontalAlignment="Stretch">
                 <Grid>
-					 <TextBox x:Name="InputBox"
+                     <TextBox x:Name="InputBox"
                          MinHeight="100"
                          CornerRadius="8"
                          MaxHeight="200"
@@ -95,7 +96,7 @@
                             Background="#4A90D9"
                             Margin="5"
                             Click="OnSendClick">
-                            
+
                             <TextBlock Text="&#xe74a;"
                                        FontFamily="Segoe Fluent Icons"
                                        FontSize="14"
@@ -103,58 +104,15 @@
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"/>
                         </Button>
-                        	<!-- 模型选择与思考控制器 -->
-                            <Button x:Name="ModelAndThinkBtn"
-                                MinWidth="100"
-                                Height="28"
-                                Padding="0"
-                                CornerRadius="8"
-                                Background="Transparent"
-                                HorizontalAlignment="Right"
-                                Margin="5,5,40,5">
-                                <Button.Flyout>
-                                    <MenuFlyout>
-                                        <MenuItem Header="DeepSeek V4 Flash"  />
-                                        <MenuItem Header="DeepSeek V4 Pro"  />
-                                        <Separator/>
-                                        <MenuItem Header="思考模式">
-											<MenuItem Header="NoThink" Click="OnThinkingMenuClick" />
-                                            <MenuItem Header="none" Click="OnThinkingMenuClick" />
-                                            <MenuItem Header="low" Click="OnThinkingMenuClick" />
-                                            <MenuItem Header="high" Click="OnThinkingMenuClick" />
-                                            <MenuItem Header="max" Click="OnThinkingMenuClick" />
-                                        </MenuItem>
-                                    </MenuFlyout>
-                                </Button.Flyout>
-                                <StackPanel Orientation="Horizontal">
-									<TextBlock Text="&#xf158;"
-                                           FontFamily="Segoe Fluent Icons"
-                                           FontSize="14"
-                                           Margin="5"
-                                           HorizontalAlignment="Left"
-                                           VerticalAlignment="Center">
-                                    </TextBlock>
-	                                <TextBlock Text="DeepSeek V4 Flash"
-			                                   FontSize="12"
-			                                   Margin="0,0,0,0"
-			                                   HorizontalAlignment="Left"
-                                               VerticalAlignment="Center"/>
-                                    <TextBlock Text="·"
-			                                   FontSize="12"
-			                                   Margin="5,0,5,0"
-			                                   HorizontalAlignment="Left"
-                                               VerticalAlignment="Center"/>
-                                    <TextBlock x:Name="ThinkingLabel" Text="none"
-			                                   FontSize="12"
-			                                   Margin="0,0,10,0"
-			                                   HorizontalAlignment="Left"
-                                               VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Button>
+                        <!-- 模型选择与思考控制器（可复用控件 ModelSelectorControl） -->
+                        <controls:ModelSelectorControl x:Name="ModelSelector"
+                                                       HorizontalAlignment="Right"
+                                                       VerticalAlignment="Center"
+                                                       Margin="5,5,40,5"/>
 
                         <StackPanel Orientation="Horizontal"
                                     HorizontalAlignment="Left">
-							<!-- 添加文件 -->
+                            <!-- 添加文件 -->
                             <Button x:Name="AddFileBtn"
                                 Width="28"
                                 Height="28"
@@ -165,11 +123,11 @@
                                 <ToolTip.Tip>
                                     <StackPanel>
                                         <!-- 第一行：主要提示，类似菜单标题 -->
-                                        <TextBlock Text="上传文件" 
+                                        <TextBlock Text="上传文件"
                                                    FontWeight="Bold" />
-                                        <!-- 第二行：次要提示，类似菜单描述 
+                                        <!-- 第二行：次要提示，类似菜单描述
                                         <TextBlock Text="文本"
-                                                   FontSize="12" 
+                                                   FontSize="12"
                                                    Foreground="Gray" />-->
                                     </StackPanel>
                                 </ToolTip.Tip>
@@ -190,11 +148,11 @@
                                 <ToolTip.Tip>
                                     <StackPanel>
                                         <!-- 第一行：主要提示，类似菜单标题 -->
-                                        <TextBlock Text="知识库" 
+                                        <TextBlock Text="知识库"
                                                    FontWeight="Bold" />
-                                        <!-- 第二行：次要提示，类似菜单描述 
+                                        <!-- 第二行：次要提示，类似菜单描述
                                         <TextBlock Text="文本"
-                                                   FontSize="12" 
+                                                   FontSize="12"
                                                    Foreground="Gray" />-->
                                     </StackPanel>
                                 </ToolTip.Tip>
@@ -204,39 +162,17 @@
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Button>
-                            <!-- 工具库 -->
-                            <Button x:Name="ToolsBaseBtn"
-                                Width="28"
-                                Height="28"
-                                Padding="0"
-                                CornerRadius="8"
-                                Background="Transparent"
-                                Margin="5">
-                                <ToolTip.Tip>
-                                    <StackPanel>
-                                        <!-- 第一行：主要提示，类似菜单标题 -->
-                                        <TextBlock Text="工具库" 
-                                                   FontWeight="Bold" />
-                                        <!-- 第二行：次要提示，类似菜单描述 
-                                        <TextBlock Text="文本"
-                                                   FontSize="12" 
-                                                   Foreground="Gray" />-->
-                                    </StackPanel>
-                                </ToolTip.Tip>
-                                <TextBlock Text="&#xe90f;"
-                                           FontFamily="Segoe Fluent Icons"
-                                           FontSize="14"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"/>
-                            </Button>
+                            <!-- 工具库（可复用控件 ToolSelectorControl） -->
+                            <controls:ToolSelectorControl x:Name="ToolSelector"
+                                                          Margin="5"/>
                         </StackPanel>
-                        
+
                     </Grid>
                 </Grid>
 
 
             </Border>
-        <!-- 底部输入区 
+        <!-- 底部输入区
         <Border Grid.Row="1"
                 Padding="16,12"
                 Background="#F9FAFB"

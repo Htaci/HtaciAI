@@ -1,0 +1,97 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="600"
+             x:Class="HtaciAI.Views.ToolsPage">
+    <Grid ColumnDefinitions="280,*">
+        <!-- ====== 左侧：工具集列表 ====== -->
+        <Border Grid.Column="0"
+                Background="#99F9FAFB"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,0,1,0">
+            <Grid RowDefinitions="Auto,*"
+                  Margin="12,16">
+                <!-- 标题 + 新建工具集 -->
+                <Grid Grid.Row="0"
+                      ColumnDefinitions="*,Auto">
+                    <TextBlock Text="工具集"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="#1A1A2E"
+                               VerticalAlignment="Center"
+                               Margin="12,0,0,12"/>
+                    <Border x:Name="AddToolsetBtn"
+                            Grid.Column="1"
+                            Width="32"
+                            Height="32"
+                            CornerRadius="8"
+                            Background="Transparent"
+                            Margin="0,0,4,8"
+                            Cursor="Arrow">
+                        <TextBlock Text="&#xe710;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="14"
+                                   Foreground="#1A1A2E"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
+
+                <!-- 工具集列表 -->
+                <ScrollViewer Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="ToolsetList"
+                                Spacing="2"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- ====== 右侧：工具列表 ====== -->
+        <Grid Grid.Column="1"
+              RowDefinitions="Auto,*"
+              Margin="24,20">
+            <!-- 顶部：标题 + 创建新工具 -->
+            <Grid Grid.Row="0"
+                  ColumnDefinitions="*,Auto"
+                  Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="工具"
+                               FontSize="20"
+                               FontWeight="Bold"
+                               Foreground="#1A1A2E"/>
+                    <TextBlock Text="管理工具与工具集，为 AI 提供可调用的能力"
+                               FontSize="12"
+                               Foreground="#9CA3AF"
+                               Margin="0,4,0,0"/>
+                </StackPanel>
+                <Border x:Name="CreateToolBtn"
+                        Grid.Column="1"
+                        Height="36"
+                        CornerRadius="18"
+                        Background="#1A1A2E"
+                        Padding="16,0"
+                        VerticalAlignment="Center"
+                        Cursor="Arrow">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <TextBlock Text="&#xe710;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="13"
+                                   Foreground="#FFFFFF"/>
+                        <TextBlock Text="创建新工具"
+                                   FontSize="13"
+                                   Foreground="#FFFFFF"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- 工具列表 -->
+            <ContentControl x:Name="ToolListHost"
+                            Grid.Row="1"/>
+        </Grid>
+    </Grid>
+</UserControl>

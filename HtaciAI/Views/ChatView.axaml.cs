@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -18,6 +19,7 @@ using Avalonia.Media;
 using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services;
+using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Views;
 
@@ -31,9 +33,41 @@ public partial class ChatView : UserControl
     private ChatSession _session = new();
     private readonly List<ChatMessage> _messages = new();
     private readonly ChatGateway _gateway = new();
-    private readonly IToolExecutor _toolExecutor = new StubToolExecutor();
-    private ThinkingMode _thinkingMode = ThinkingMode.Default;
+    private readonly IToolExecutor _toolExecutor = new ToolExecutorDispatcher();
     private bool _busy;
+
+    /// <summary>当前正在流式渲染的 turn：同一 turn 只渲染一次模型头，多轮工具调用的内容追加到同一根。</summary>
+    private string? _activeTurnId;
+    private StackPanel? _activeTurnRoot;
+
+    /// <summary>当前思考模式：透传模型选择器，供外部（新建会话流程）初始化。</summary>
+    public ThinkingMode ThinkingMode
+    {
+        get => ModelSelector.ThinkingMode;
+        set => ModelSelector.ThinkingMode = value;
+    }
+
+    /// <summary>当前激活的工具 id 集合：透传工具选择器，供外部（新建会话流程）初始化。</summary>
+    public IReadOnlyList<string> SelectedToolIds
+    {
+        get => ToolSelector.SelectedToolIds;
+        set => ToolSelector.SelectedToolIds = value;
+    }
+
+    /// <summary>把注册表中的工具集与已启用工具注入工具选择器。</summary>
+    private void LoadTools()
+    {
+        var registry = ToolRegistry.Instance;
+        ToolSelector.Toolsets = registry.GetToolsets();
+        ToolSelector.Tools = registry.GetEnabled();
+    }
+
+    /// <summary>解析当前激活的工具定义（去重后）；无激活工具时返回 null（不发送 tools）。</summary>
+    private IReadOnlyList<ToolDefinition>? ResolveActiveTools()
+    {
+        if (ToolSelector.SelectedToolIds.Count == 0) return null;
+        return ToolRegistry.Instance.ResolveByIds(ToolSelector.SelectedToolIds);
+    }
 
     /// <summary>会话标题/时间变化时触发，供 ChatPage 刷新列表。</summary>
     public event Action? Updated;
@@ -46,6 +80,7 @@ public partial class ChatView : UserControl
     {
         InitializeComponent();
         _sessionId = sessionId;
+        LoadTools();
         if (_sessionId is null)
             ShowLoadFailed();
     }
@@ -62,11 +97,18 @@ public partial class ChatView : UserControl
         {
             _session = await ChatRepository.GetAsync(_sessionId)
                        ?? new ChatSession { Id = _sessionId, Title = "会话" };
+            // 模型列表：加载已启用的模型（含服务商），为空时控件内部回退内置默认模型
+            ModelSelector.Models = await ModelCatalog.ListEnabledAsync();
+            // 恢复会话记录的模型选中态（按调用 id 匹配）
+            if (!string.IsNullOrEmpty(_session.Model))
+            {
+                var saved = ModelSelector.Models.FirstOrDefault(m => m.ModelName == _session.Model);
+                if (saved is not null)
+                    ModelSelector.SelectedModel = saved;
+            }
             _messages.Clear();
             _messages.AddRange(await ChatRepository.GetBySessionAsync(_sessionId));
-            MessagesPanel.Children.Clear();
-            foreach (var m in _messages)
-                AddMessage(m);
+            RenderHistory();
             ScrollToEnd();
         }
         catch (Exception ex)
@@ -104,16 +146,26 @@ public partial class ChatView : UserControl
         // 首条消息确定会话标题，并刷新 updated_at
         if (string.IsNullOrEmpty(_session.Title))
             _session.Title = text.Length > 24 ? text[..24] + "…" : text;
-        _session.Model = ChatConfig.Model;
+        // 记录会话使用的模型调用 id（内置模型为 ChatConfig.Model）
+        var selected = ModelSelector.SelectedModel;
+        _session.Model = selected?.ModelName ?? ChatConfig.Model;
         await ChatRepository.UpdateAsync(_session);
 
-        // 统一入口：网关负责 turn 管理、工具循环、消息落库与流式 UI 回调
+        // 统一入口：网关负责 turn 管理、工具循环、消息落库与流式 UI 回调。
+        // 按当前选中模型解析客户端（未配置/不可用时回退内置默认模型），确保所选模型被真正调用。
+        var client = await _gateway.ResolveClientAsync(selected?.ModelId);
+
         await _gateway.ChatAsync(
             _sessionId,
             _session.SystemPrompt,
             _messages,
             text,
-            new ChatRequestOptions { Thinking = _thinkingMode },
+            new ChatRequestOptions
+            {
+                Thinking = ModelSelector.ThinkingMode,
+                Tools = ResolveActiveTools(),
+            },
+            client,
             _toolExecutor,
             PersistMessage,
             BeginAssistantRound,
@@ -129,16 +181,164 @@ public partial class ChatView : UserControl
     {
         await ChatRepository.InsertAsync(m);
         _messages.Add(m);
-        if (m.Role is "user" or "tool")
+        if (m.Role == "user")
             AddMessage(m);
+        else if (m.Role == "tool")
+            AddToolCallCard(m);
+    }
+
+    /// <summary>
+    /// 按 turn 分组渲染历史：同一 turn 的多个 assistant / tool 消息（多轮工具调用共享同一 turn_id）
+    /// 归为一组，只渲染一次模型头。user 消息单独成组。
+    /// </summary>
+    private void RenderHistory()
+    {
+        MessagesPanel.Children.Clear();
+
+        var groups = new List<(string? TurnId, List<ChatMessage> Msgs)>();
+        foreach (var m in _messages)
+        {
+            if (m.Role == "user")
+            {
+                groups.Add((null, new List<ChatMessage> { m }));
+            }
+            else if (m.Role is "assistant" or "tool")
+            {
+                var key = m.TurnId;
+                var last = groups.Count > 0 ? groups[^1] : default;
+                if (last.TurnId is not null && last.TurnId == key)
+                    last.Msgs.Add(m);
+                else
+                    groups.Add((key, new List<ChatMessage> { m }));
+            }
+        }
+
+        foreach (var (_, msgs) in groups)
+            RenderTurnBlock(msgs);
+    }
+
+    /// <summary>渲染一组消息：user 单条气泡；assistant 起头则渲染模型头 + 思考卡 + 工具卡 + 正文。</summary>
+    private void RenderTurnBlock(List<ChatMessage> msgs)
+    {
+        var first = msgs[0];
+        if (first.Role == "user")
+        {
+            var (root, block) = CreateUserElement();
+            block.Text = first.Content ?? "";
+            MessagesPanel.Children.Add(root);
+            return;
+        }
+
+        var (displayName, providerName) = ModelInfo(first.ModelName ?? ChatConfig.Model);
+        var rootPanel = new StackPanel
+        {
+            Margin = new Thickness(20, 2, 20, 2),
+            Spacing = 10,
+        };
+        rootPanel.Children.Add(CreateModelHeader(displayName, providerName, first.CreatedAt));
+
+        foreach (var m in msgs)
+        {
+            if (m.Role == "assistant")
+            {
+                if (!string.IsNullOrWhiteSpace(m.Thinking))
+                {
+                    var card = new ThinkingCard();
+                    card.SetText(m.Thinking);
+                    card.Show();
+                    rootPanel.Children.Add(card.Root);
+                }
+                if (!string.IsNullOrWhiteSpace(m.Content))
+                {
+                    rootPanel.Children.Add(new TextBlock
+                    {
+                        Text = m.Content,
+                        FontSize = 14,
+                        Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
+                        TextWrapping = TextWrapping.Wrap,
+                        LineHeight = 22,
+                    });
+                }
+            }
+            else if (m.Role == "tool")
+            {
+                var input = FindToolCallInput(m.ToolCallId);
+                var card = new ToolCallCard();
+                card.SetData(m.ToolName ?? "工具", input, m.Content ?? "");
+                rootPanel.Children.Add(card.Root);
+            }
+        }
+
+        MessagesPanel.Children.Add(rootPanel);
+    }
+
+    /// <summary>实时：工具结果以可折叠工具卡追加到当前 turn 根（无根时兜底追加到消息面板）。</summary>
+    private void AddToolCallCard(ChatMessage toolMsg)
+    {
+        var input = FindToolCallInput(toolMsg.ToolCallId);
+        var card = new ToolCallCard();
+        card.SetData(toolMsg.ToolName ?? "工具", input, toolMsg.Content ?? "");
+
+        if (_activeTurnRoot is not null)
+            _activeTurnRoot.Children.Add(card.Root);
+        else
+            MessagesPanel.Children.Add(card.Root);
+        ScrollToEnd();
+    }
+
+    /// <summary>按 tool_call_id 反查输入参数（来自对应 assistant 消息的 metadata 里的 tool_calls）。</summary>
+    private string FindToolCallInput(string? toolCallId)
+    {
+        if (string.IsNullOrWhiteSpace(toolCallId)) return "{}";
+        foreach (var m in _messages)
+        {
+            if (m.Role != "assistant") continue;
+            var calls = ToolCallJson.Deserialize(m.Metadata);
+            var c = calls.FirstOrDefault(x => x.Id == toolCallId);
+            if (c is not null) return c.Arguments ?? "{}";
+        }
+        return "{}";
     }
 
     /// <summary>网关回调：新一轮 assistant 开始流式时创建 UI 元素并返回流式回调。</summary>
     private ChatRoundSink BeginAssistantRound(ChatMessage assistantMsg)
     {
-        var (root, body, card) = CreateAssistantElement(assistantMsg.ModelName ?? ChatConfig.Model, assistantMsg.CreatedAt);
-        MessagesPanel.Children.Add(root);
-        ScrollToEnd();
+        var (displayName, providerName) = ModelInfo(assistantMsg.ModelName ?? ChatConfig.Model);
+
+        // 同一 turn（含多轮工具调用）只渲染一次模型头；新 turn 或首次时新建根容器
+        StackPanel root;
+        if (assistantMsg.TurnId is not null && assistantMsg.TurnId == _activeTurnId && _activeTurnRoot is not null)
+        {
+            root = _activeTurnRoot;
+        }
+        else
+        {
+            root = new StackPanel
+            {
+                Margin = new Thickness(20, 2, 20, 2),
+                Spacing = 10,
+            };
+            root.Children.Add(CreateModelHeader(displayName, providerName, assistantMsg.CreatedAt));
+            MessagesPanel.Children.Add(root);
+            ScrollToEnd();
+            _activeTurnId = assistantMsg.TurnId;
+            _activeTurnRoot = root;
+        }
+
+        var card = new ThinkingCard();
+        card.Root.IsVisible = false;
+        root.Children.Add(card.Root);
+
+        var body = new TextBlock
+        {
+            Text = "",
+            FontSize = 14,
+            Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 22,
+            IsVisible = false, // 纯工具轮次无正文时不占位
+        };
+        root.Children.Add(body);
 
         var contentSb = new StringBuilder();
         return new ChatRoundSink
@@ -147,6 +347,7 @@ public partial class ChatView : UserControl
             {
                 contentSb.Append(delta);
                 body.Text = contentSb.ToString();
+                body.IsVisible = true;
                 ScrollToEnd();
             },
             OnThinking = delta =>
@@ -156,25 +357,12 @@ public partial class ChatView : UserControl
                 card.Append(delta);
                 ScrollToEnd();
             },
-            OnFailed = message => body.Text = "请求失败：" + message,
+            OnFailed = message =>
+            {
+                body.Text = "请求失败：" + message;
+                body.IsVisible = true;
+            },
         };
-    }
-
-    /// <summary>思考模式菜单：NoThink/none/low/high/max → ThinkingMode。</summary>
-    private void OnThinkingMenuClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem mi) return;
-        _thinkingMode = (mi.Header?.ToString()) switch
-        {
-            "NoThink" => ThinkingMode.NoThink,
-            "none" => ThinkingMode.Default,
-            "low" => ThinkingMode.Low,
-            "high" => ThinkingMode.High,
-            "max" => ThinkingMode.Max,
-            _ => ThinkingMode.Default,
-        };
-        if (ThinkingLabel is not null)
-            ThinkingLabel.Text = mi.Header?.ToString() ?? "";
     }
 
     private void OnSendClick(object? sender, RoutedEventArgs e)
@@ -196,7 +384,7 @@ public partial class ChatView : UserControl
             await SendMessageAsync(text);
     }
 
-    /// <summary>按消息渲染：用户用气泡，AI 用「模型头 + 思考卡片 + 正文」三段式，工具角色预留。</summary>
+    /// <summary>按消息渲染：实时 user 气泡；历史加载走 RenderHistory 按 turn 分组，工具结果走 ToolCallCard。</summary>
     private void AddMessage(ChatMessage m)
     {
         switch (m.Role)
@@ -205,24 +393,6 @@ public partial class ChatView : UserControl
                 var (userRoot, userBlock) = CreateUserElement();
                 userBlock.Text = m.Content ?? "";
                 MessagesPanel.Children.Add(userRoot);
-                break;
-
-            case "assistant":
-                var (assistantRoot, body, card) = CreateAssistantElement(m.ModelName ?? ChatConfig.Model, m.CreatedAt);
-                body.Text = m.Content ?? "";
-                if (!string.IsNullOrWhiteSpace(m.Thinking))
-                {
-                    card.SetText(m.Thinking);
-                    card.Show();
-                }
-                MessagesPanel.Children.Add(assistantRoot);
-                break;
-
-            case "tool":
-                // 工具结果：预留角色样式，暂与普通文本一致，后续按需定制
-                var (toolRoot, toolBlock) = CreatePlainBlock("#6B7280", 13);
-                toolBlock.Text = m.Content ?? "";
-                MessagesPanel.Children.Add(toolRoot);
                 break;
 
             default:
@@ -256,37 +426,8 @@ public partial class ChatView : UserControl
         return (bubble, block);
     }
 
-    /// <summary>
-    /// AI 消息三段式：模型信息头 + 思考卡片（默认隐藏，收到思考内容后显示）+ 正文。
-    /// </summary>
-    private (StackPanel Root, TextBlock Body, ThinkingCard Card) CreateAssistantElement(string modelName, long createdAt)
-    {
-        var root = new StackPanel
-        {
-            Margin = new Thickness(20, 2, 20, 2),
-            Spacing = 10,
-        };
-        root.Children.Add(CreateModelHeader(modelName, createdAt));
-
-        var card = new ThinkingCard();
-        card.Root.IsVisible = false;
-        root.Children.Add(card.Root);
-
-        var body = new TextBlock
-        {
-            Text = "",
-            FontSize = 14,
-            Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
-            TextWrapping = TextWrapping.Wrap,
-            LineHeight = 22,
-        };
-        root.Children.Add(body);
-
-        return (root, body, card);
-    }
-
     /// <summary>模型信息头：左侧灰色圆角头像占位，右侧竖排「模型名称 | 服务商」+ 小字灰色时间。</summary>
-    private Control CreateModelHeader(string modelName, long createdAt)
+    private Control CreateModelHeader(string modelName, string providerName, long createdAt)
     {
         var grid = new Grid
         {
@@ -317,7 +458,7 @@ public partial class ChatView : UserControl
 
         var name = new TextBlock
         {
-            Text = $"{modelName} | Htaci",
+            Text = $"{modelName} | {providerName}",
             FontSize = 14,
             FontWeight = FontWeight.Bold,
             Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
@@ -341,6 +482,16 @@ public partial class ChatView : UserControl
         grid.Children.Add(textStack);
 
         return grid;
+    }
+
+    /// <summary>根据模型调用 id 解析展示信息（显示名 + 服务商名）；无匹配时回退 call id + Htaci。</summary>
+    private (string DisplayName, string ProviderName) ModelInfo(string callId)
+    {
+        if (string.IsNullOrEmpty(callId)) callId = ChatConfig.Model;
+        var m = ModelSelector.Models.FirstOrDefault(x => x.ModelName == callId);
+        return m is not null
+            ? (m.DisplayName, m.ProviderName)
+            : (callId, "Htaci");
     }
 
     private static string FormatTime(long unixMs)
@@ -551,6 +702,210 @@ public partial class ChatView : UserControl
             AddFigure("M10 22h4");
             AddFigure("M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5.76.76 1.23 1.52 1.41 2.5");
             return icon;
+        }
+    }
+
+    /// <summary>
+    /// 可折叠的工具调用卡片：折叠态显示「{工具名} 工具」，展开显示「输入 / 输出」两段。
+    /// 交互与样式对齐 ThinkingCard。
+    /// </summary>
+    private sealed class ToolCallCard
+    {
+        private const double ExpandedMaxHeight = 300;
+        private static readonly TimeSpan AnimDuration = TimeSpan.FromMilliseconds(220);
+
+        private readonly ScrollViewer _contentHost;
+        private readonly RotateTransform _chevron;
+        private readonly Border _header;
+        private readonly TextBlock _titleBlock;
+        private readonly TextBlock _inputBlock;
+        private readonly TextBlock _outputBlock;
+        private bool _expanded;
+
+        /// <summary>卡片根容器（用于控制整体显隐）。</summary>
+        public Border Root { get; }
+
+        public ToolCallCard()
+        {
+            // —— 头部：工具图标 + 「{工具名} 工具」 + 右侧箭头 ——
+            var icon = new TextBlock
+            {
+                Text = "", // Segoe Fluent Icons：扳手（工具）
+                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                FontSize = 14,
+                Foreground = new SolidColorBrush(Color.Parse("#333333")),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            _titleBlock = new TextBlock
+            {
+                FontSize = 14,
+                FontWeight = FontWeight.Medium,
+                Foreground = new SolidColorBrush(Color.Parse("#1F1F1F")),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var chevron = new TextBlock
+            {
+                Text = "›",
+                FontSize = 16,
+                Foreground = new SolidColorBrush(Color.Parse("#C5C5C7")),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            _chevron = new RotateTransform();
+            chevron.RenderTransform = _chevron;
+            chevron.RenderTransformOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative);
+            _chevron.Transitions = new Transitions
+            {
+                new DoubleTransition
+                {
+                    Property = RotateTransform.AngleProperty,
+                    Duration = AnimDuration,
+                    Easing = new CubicEaseInOut(),
+                },
+            };
+
+            var headerGrid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+                Margin = new Thickness(18, 0, 18, 0),
+            };
+            var iconHost = new Border
+            {
+                Child = icon,
+                Width = 20,
+                Height = 20,
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Grid.SetColumn(iconHost, 0);
+            headerGrid.Children.Add(iconHost);
+            Grid.SetColumn(_titleBlock, 1);
+            headerGrid.Children.Add(_titleBlock);
+            Grid.SetColumn(chevron, 2);
+            headerGrid.Children.Add(chevron);
+
+            _header = new Border
+            {
+                Child = headerGrid,
+                Background = Brushes.Transparent,
+                CornerRadius = new CornerRadius(10),
+                Height = 46,
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            _header.PointerEntered += (_, _) => _header.Background = new SolidColorBrush(Color.Parse("#99F0F0F0"));
+            _header.PointerExited += (_, _) => _header.Background = Brushes.Transparent;
+            _header.PointerPressed += (_, e) =>
+            {
+                if (e.GetCurrentPoint(_header).Properties.IsLeftButtonPressed)
+                    Toggle();
+            };
+
+            // —— 展开内容：输入 / 输出 两段 ——
+            _inputBlock = new TextBlock
+            {
+                Text = "",
+                FontSize = 13,
+                Foreground = new SolidColorBrush(Color.Parse("#333333")),
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 20,
+                FontFamily = new FontFamily("Consolas"),
+            };
+            _outputBlock = new TextBlock
+            {
+                Text = "",
+                FontSize = 13,
+                Foreground = new SolidColorBrush(Color.Parse("#333333")),
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 20,
+            };
+
+            var contentStack = new StackPanel
+            {
+                Spacing = 4,
+                Margin = new Thickness(5, 14, 5, 14),
+            };
+            contentStack.Children.Add(MakeLabel("输入"));
+            contentStack.Children.Add(_inputBlock);
+            contentStack.Children.Add(MakeLabel("输出"));
+            contentStack.Children.Add(_outputBlock);
+
+            _contentHost = new ScrollViewer
+            {
+                Content = contentStack,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MaxHeight = 0,
+                Margin = new Thickness(18, 0, 18, 0),
+                Classes = { "thin-scrollbar" },
+                Opacity = 0,
+            };
+            _contentHost.Transitions = new Transitions
+            {
+                new DoubleTransition
+                {
+                    Property = Layoutable.MaxHeightProperty,
+                    Duration = AnimDuration,
+                    Easing = new CubicEaseInOut(),
+                },
+                new DoubleTransition
+                {
+                    Property = Visual.OpacityProperty,
+                    Duration = AnimDuration,
+                    Easing = new CubicEaseInOut(),
+                },
+            };
+
+            Root = new Border
+            {
+                CornerRadius = new CornerRadius(10),
+                Background = new SolidColorBrush(Color.Parse("#00F7F8FA")),
+                BorderBrush = new SolidColorBrush(Color.Parse("#ECEEF1")),
+                BorderThickness = new Thickness(1),
+                ClipToBounds = true,
+                Child = new StackPanel
+                {
+                    Children = { _header, _contentHost },
+                },
+            };
+        }
+
+        public void SetData(string toolName, string inputJson, string output)
+        {
+            _titleBlock.Text = $"{toolName} 工具";
+            _inputBlock.Text = FormatJson(inputJson);
+            _outputBlock.Text = string.IsNullOrWhiteSpace(output) ? "（无输出）" : output;
+        }
+
+        public void Toggle()
+        {
+            _expanded = !_expanded;
+            _contentHost.MaxHeight = _expanded ? ExpandedMaxHeight : 0;
+            _contentHost.Opacity = _expanded ? 1 : 0;
+            _chevron.Angle = _expanded ? 90 : 0;
+        }
+
+        private static TextBlock MakeLabel(string text) => new()
+        {
+            Text = text,
+            FontSize = 11,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+        };
+
+        private static string FormatJson(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return "{}";
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch
+            {
+                return json;
+            }
         }
     }
 }

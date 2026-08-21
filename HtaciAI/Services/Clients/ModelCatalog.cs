@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Models;
@@ -40,6 +41,11 @@ public static class ModelCatalog
                 list.Add(Assemble(model, provider));
             }
         }
+        // 内置默认模型（ChatConfig 配置，未落库）始终作为兜底追加到列表尾部（按调用 id 去重）。
+        // 否则模型选择器会把它误判为"不在列表"而切到第一个自定义模型，会话恢复也匹配不到它，
+        // 导致选了 DeepSeek V4 Flash 却实际调用自定义模型。
+        if (list.All(m => m.ModelName != ModelDetails.Default.ModelName))
+            list.Add(ModelDetails.Default);
         return list;
     }
 

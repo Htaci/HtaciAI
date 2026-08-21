@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -18,6 +19,7 @@ public partial class ModelServicePage : UserControl
     public ModelServicePage()
     {
         InitializeComponent();
+        BuiltinTable.Children.Add(CreateBuiltinModelTable());
         Loaded += async (_, _) =>
         {
             try
@@ -126,13 +128,15 @@ public partial class ModelServicePage : UserControl
         };
     }
 
+    // 注意：操作列必须是固定宽度而非 Auto —— 表头与内容行是两个独立 Grid，
+    // 若为 Auto，表头（"操作"）与内容行（按钮）量出的宽度不同，会导致前方 Star 列错位。
     private static Grid CreateModelGrid()
-        => new() { ColumnDefinitions = new ColumnDefinitions("2*,1.5*,1.2*,0.8*,0.6*,1.2*,Auto") };
+        => new() { ColumnDefinitions = new ColumnDefinitions("2*,1*,1*,1*,0.8*,1.4*,140") };
 
     private Control CreateModelRowHeader()
     {
         var grid = CreateModelGrid();
-        string[] headers = { "模型名称", "调用 id", "能力", "思考", "上下文", "价格", "操作" };
+        string[] headers = { "模型名称", "每百万输入", "缓存命中", "每百万输出", "上下文", "模型能力", "操作" };
         for (int i = 0; i < headers.Length; i++)
         {
             var cell = new TextBlock
@@ -157,16 +161,17 @@ public partial class ModelServicePage : UserControl
         var grid = CreateModelGrid();
         grid.Margin = new Thickness(0, 10, 0, 0);
 
-        grid.Children.Add(CreateModelCell(0, model.DisplayName, isBold: true));
-        grid.Children.Add(CreateModelCell(1, model.CallId, gray: true));
-        grid.Children.Add(CreateModelCell(2, FormatList(model.Capabilities), gray: true));
+        // 模型名称：调用 id 不单独列出，悬停时提示显示
+        var nameCell = CreateModelCell(0, model.DisplayName, isBold: true);
+        if (!string.IsNullOrEmpty(model.CallId))
+            ToolTip.SetTip(nameCell, $"调用 id：{model.CallId}");
+        grid.Children.Add(nameCell);
 
-        var thinkingText = model.SupportsThinking
-            ? (model.ThinkingStrengths.Count > 0 ? string.Join(", ", model.ThinkingStrengths) : "支持")
-            : "—";
-        grid.Children.Add(CreateModelCell(3, thinkingText, gray: true));
-        grid.Children.Add(CreateModelCell(4, model.ContextWindow >= 0 ? model.ContextWindow.ToString() : "未知", gray: true));
-        grid.Children.Add(CreateModelCell(5, FormatPrice(model), gray: true));
+        grid.Children.Add(CreateModelCell(1, FormatPriceCell(model.PriceInput, model.Currency), gray: true));
+        grid.Children.Add(CreateModelCell(2, FormatPriceCell(model.PriceCacheHit, model.Currency), gray: true));
+        grid.Children.Add(CreateModelCell(3, FormatPriceCell(model.PriceOutput, model.Currency), gray: true));
+        grid.Children.Add(CreateModelCell(4, FormatContextWindow(model.ContextWindow), gray: true));
+        grid.Children.Add(CreateModelCell(5, FormatCapabilities(model.Capabilities), gray: true));
 
         var ops = new StackPanel
         {
@@ -182,6 +187,110 @@ public partial class ModelServicePage : UserControl
         grid.Children.Add(ops);
 
         return grid;
+    }
+
+    // ---- 内置模型表格（与自定义模型同款渲染，仅少操作列） ----
+
+    /// <summary>内置模型展示数据：仅作参考，无数据库记录。V4 Flash 填调用 id，V4 Pro 暂留空。</summary>
+    private static readonly List<AiModel> BuiltinModels = new()
+    {
+        new AiModel
+        {
+            DisplayName = "DeepSeek V4 Flash(0731)",
+            CallId = "deepseek-v4-flash",
+            PriceInput = 1.00,
+            PriceCacheHit = 0.02,
+            PriceOutput = 2.00,
+            ContextWindow = 1_000_000,
+            Capabilities = new() { "reasoning", "tools", "completion" },
+        },
+        new AiModel
+        {
+            DisplayName = "DeepSeek V4 Pro(0817)",
+            CallId = "deepseek-v4-pro",
+            PriceInput = 3.00,
+            PriceCacheHit = 0.03,
+            PriceOutput = 6.00,
+            ContextWindow = 1_000_000,
+            Capabilities = new() { "reasoning", "tools", "completion" },
+        },
+    };
+
+    private Control CreateBuiltinModelTable()
+    {
+        var header = new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#ECF9FD")),
+            CornerRadius = new CornerRadius(8, 8, 0, 0),
+            Height = 35,
+            Child = CreateBuiltinRowHeader(),
+        };
+
+        var rows = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+        foreach (var model in BuiltinModels)
+            rows.Children.Add(CreateBuiltinModelRow(model));
+
+        return new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinHeight = 35,
+            CornerRadius = new CornerRadius(8),
+            BoxShadow = BoxShadows.Parse("0 0 1 0 #80808080"),
+            Child = new StackPanel { Children = { header, rows } },
+        };
+    }
+
+    // 第 7 列为操作列占位：内置表没有操作标签，但预留同样宽度，
+    // 保证与自定义模型表各列完全对齐，避免少一列导致其他列被拉宽。
+    private static Grid CreateBuiltinGrid()
+        => new() { ColumnDefinitions = new ColumnDefinitions("2*,1*,1*,1*,0.8*,1.4*,140") };
+
+    private Control CreateBuiltinRowHeader()
+    {
+        var grid = CreateBuiltinGrid();
+        string[] headers = { "模型名称", "每百万输入", "缓存命中", "每百万输出", "上下文", "模型能力" };
+        for (int i = 0; i < headers.Length; i++)
+        {
+            var cell = new TextBlock
+            {
+                Text = headers[i],
+                FontSize = 12,
+                FontWeight = FontWeight.DemiBold,
+                Foreground = new SolidColorBrush(Color.Parse("#374151")),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(20, 0, 0, 0),
+            };
+            Grid.SetColumn(cell, i);
+            grid.Children.Add(cell);
+        }
+        return grid;
+    }
+
+    private Control CreateBuiltinModelRow(AiModel model)
+    {
+        var grid = CreateBuiltinGrid();
+        grid.Margin = new Thickness(0, 10, 0, 0);
+
+        // 模型名称：调用 id 悬停提示显示
+        var nameCell = CreateModelCell(0, model.DisplayName, isBold: true);
+        if (!string.IsNullOrEmpty(model.CallId))
+            ToolTip.SetTip(nameCell, $"调用 id：{model.CallId}");
+        grid.Children.Add(nameCell);
+
+        grid.Children.Add(CreateModelCell(1, FormatPriceCell(model.PriceInput, model.Currency), gray: true));
+        grid.Children.Add(CreateModelCell(2, FormatPriceCell(model.PriceCacheHit, model.Currency), gray: true));
+        grid.Children.Add(CreateModelCell(3, FormatPriceCell(model.PriceOutput, model.Currency), gray: true));
+        grid.Children.Add(CreateModelCell(4, FormatContextWindow(model.ContextWindow), gray: true));
+        grid.Children.Add(CreateModelCell(5, FormatCapabilities(model.Capabilities), gray: true));
+
+        return grid;
+    }
+
+    /// <summary>上下文窗口展示：≥1M 简写为 M，否则原样显示，未知返回"未知"。</summary>
+    private static string FormatContextWindow(long window)
+    {
+        if (window <= 0) return "未知";
+        return window >= 1_000_000 ? $"{window / 1_000_000.0:0.#}M" : window.ToString();
     }
 
     private static TextBlock CreateModelCell(int column, string text, bool isBold = false, bool gray = false)
@@ -219,16 +328,17 @@ public partial class ModelServicePage : UserControl
         return btn;
     }
 
-    private static string FormatList(List<string> list)
-        => list.Count == 0 ? "—" : string.Join(", ", list);
-
-    private static string FormatPrice(AiModel m)
+    private static string FormatCapabilities(List<string> caps)
     {
-        if (m.PriceInput is null && m.PriceCacheHit is null && m.PriceOutput is null)
-            return "—";
-        string cur = m.Currency == "USD" ? "$" : "¥";
-        string F(double? v) => v is null ? "-" : v.Value.ToString("0.##");
-        return $"{cur}{F(m.PriceInput)} / {cur}{F(m.PriceCacheHit)} / {cur}{F(m.PriceOutput)}";
+        if (caps.Count == 0) return "—";
+        return string.Join("、", caps.Select(c => ModelCapabilities.Labels.TryGetValue(c, out var label) ? label : c));
+    }
+
+    private static string FormatPriceCell(double? value, string currency)
+    {
+        if (value is null) return "—";
+        string cur = currency == "USD" ? "$" : "¥";
+        return $"{cur}{value.Value.ToString("0.##")}";
     }
 
     // ---- 动作 ----

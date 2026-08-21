@@ -1,0 +1,165 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="680"
+        x:Class="HtaciAI.Views.Tools.CreateToolWindow"
+        Icon="/Assets/logo.ico"
+        Title="创建新工具"
+        Width="520" MinWidth="520" MaxWidth="520"
+        Height="680" MinHeight="680"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    <Grid RowDefinitions="Auto,*,Auto">
+        <TextBlock x:Name="TitleText"
+                   Grid.Row="0"
+                   Text="创建新工具"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"
+                   Margin="24,18,24,6"/>
+
+        <ScrollViewer Grid.Row="1"
+                      Margin="24,8,24,8"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="12">
+                <!-- 运行时 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="运行时"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="RuntimeCombo" Height="34" CornerRadius="6"/>
+                </StackPanel>
+
+                <!-- 脚本文件 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="脚本文件"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBox x:Name="ScriptPathBox"
+                                 Grid.Column="0"
+                                 Height="34"
+                                 Padding="10,0"
+                                 CornerRadius="6"
+                                 PlaceholderText="选择 .py / .js / .ts 脚本文件"/>
+                        <Button x:Name="PickBtn"
+                                Grid.Column="1"
+                                Height="34"
+                                Padding="14,0"
+                                CornerRadius="6"
+                                Background="#E5E7EB"
+                                Foreground="#374151"
+                                Margin="8,0,0,0"
+                                Cursor="Hand"
+                                Click="OnPickClick">
+                            <TextBlock Text="选择…" FontSize="13"/>
+                        </Button>
+                    </Grid>
+                    <Button x:Name="GenerateBtn"
+                            Height="34"
+                            CornerRadius="6"
+                            Background="#4A90D9"
+                            Foreground="White"
+                            Cursor="Hand"
+                            Click="OnGenerateClick">
+                        <TextBlock Text="自动生成（运行脚本 --describe）" FontSize="13"/>
+                    </Button>
+                </StackPanel>
+
+                <!-- 工具名称 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="工具名称"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="NameBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             PlaceholderText="如：add（小写下划线，AI 调用用）"/>
+                </StackPanel>
+
+                <!-- 描述 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="描述"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="DescBox"
+                             MinHeight="56"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             Padding="10,8"
+                             CornerRadius="6"
+                             PlaceholderText="说明 AI 何时调用该工具"/>
+                </StackPanel>
+
+                <!-- 入参 Schema -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="入参 JSON Schema"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="SchemaBox"
+                             MinHeight="90"
+                             AcceptsReturn="True"
+                             TextWrapping="NoWrap"
+                             Padding="10,8"
+                             CornerRadius="6"
+                             PlaceholderText="例：type=object, properties={...}, required=[...]"/>
+                    <TextBlock Text="点击「自动生成」从脚本 --describe 输出获取；也可手动填写。"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <!-- 归属工具集 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="归属工具集（可多选）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <StackPanel x:Name="ToolsetPanel" Spacing="4"/>
+                </StackPanel>
+
+                <!-- 提示/错误 -->
+                <TextBlock x:Name="ErrorText"
+                           FontSize="12"
+                           Foreground="#DC2626"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 底部按钮 -->
+        <Grid Grid.Row="2"
+              ColumnDefinitions="*,Auto,Auto"
+              Margin="24,8,24,18">
+            <Button Grid.Column="1"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#E5E7EB"
+                    Foreground="#374151"
+                    Margin="0,0,10,0"
+                    Cursor="Hand"
+                    Click="OnCancelClick">
+                <TextBlock Text="取消" FontSize="13"/>
+            </Button>
+            <Button Grid.Column="2"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#546E7A"
+                    Foreground="White"
+                    Cursor="Hand"
+                    Click="OnSaveClick">
+                <TextBlock Text="保存" FontSize="13"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Window>

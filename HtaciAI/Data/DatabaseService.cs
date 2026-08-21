@@ -72,6 +72,13 @@ public static class DatabaseService
             version = 2;
             SetVersion(conn, version);
         }
+
+        if (version < 3)
+        {
+            RunMigrationV3(conn);
+            version = 3;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -174,6 +181,52 @@ public static class DatabaseService
             );
 
             CREATE INDEX IF NOT EXISTS idx_model_provider ON ai_model(provider_id);
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>工具管理：工具集表 + 工具表 + 多对多关联表，内置默认集。</summary>
+    private static void RunMigrationV3(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS tool_toolsets (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                description TEXT,
+                is_builtin  INTEGER NOT NULL DEFAULT 0,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tool_tools (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                description  TEXT,
+                source       TEXT NOT NULL DEFAULT 'Script',
+                runtime      TEXT,
+                target       TEXT,
+                input_schema TEXT,
+                enabled      INTEGER NOT NULL DEFAULT 1,
+                created_at   INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tool_tool_links (
+                tool_id    TEXT NOT NULL,
+                toolset_id TEXT NOT NULL,
+                PRIMARY KEY (tool_id, toolset_id),
+                FOREIGN KEY (tool_id)    REFERENCES tool_tools(id)    ON DELETE CASCADE,
+                FOREIGN KEY (toolset_id) REFERENCES tool_toolsets(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tool_link_toolset ON tool_tool_links(toolset_id);
+
+            INSERT INTO tool_toolsets (id, name, description, is_builtin, created_at, updated_at)
+            VALUES ('default', '默认集', '未指定归属的工具默认所在的工具集', 1, 0, 0)
+            ON CONFLICT(id) DO NOTHING;
             """;
 
         using var cmd = conn.CreateCommand();
