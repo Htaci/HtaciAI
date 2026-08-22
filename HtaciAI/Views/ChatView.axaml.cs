@@ -19,6 +19,7 @@ using Avalonia.Media;
 using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services;
+using HtaciAI.Services.Skills;
 using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Views;
@@ -35,6 +36,8 @@ public partial class ChatView : UserControl
     private readonly ChatGateway _gateway = new();
     private readonly IToolExecutor _toolExecutor = new ToolExecutorDispatcher();
     private bool _busy;
+    private bool _skillEventsHooked;
+    private bool _toolEventsHooked;
 
     /// <summary>当前正在流式渲染的 turn：同一 turn 只渲染一次模型头，多轮工具调用的内容追加到同一根。</summary>
     private string? _activeTurnId;
@@ -60,6 +63,42 @@ public partial class ChatView : UserControl
         var registry = ToolRegistry.Instance;
         ToolSelector.Toolsets = registry.GetToolsets();
         ToolSelector.Tools = registry.GetEnabled();
+    }
+
+    /// <summary>把可选技能与当前会话已启用的技能注入技能选择器，并挂载变更回调（仅一次）。</summary>
+    private void LoadSkills()
+    {
+        SkillSelector.Skills = SkillRegistry.Instance.GetEnabled();
+        SkillSelector.SelectedSkills = _session.EnabledSkills;
+        if (_skillEventsHooked) return;
+        _skillEventsHooked = true;
+        SkillSelector.SelectionChanged += async (_, _) => await SyncSkillsToSessionAsync();
+    }
+
+    /// <summary>技能选择变化后回写到会话对象并落库，供下次请求构建 system 时动态生效。</summary>
+    private async Task SyncSkillsToSessionAsync()
+    {
+        _session.EnabledSkills = SkillSelector.SelectedSkills.ToList();
+        if (_sessionId is null) return;
+        try { await ChatRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
+    }
+
+    /// <summary>恢复会话激活的工具选择，并挂载变更回调（仅一次）。已有启用记录时才覆盖当前选择。</summary>
+    private void LoadToolsSelection()
+    {
+        if (_session.EnabledToolIds.Count > 0)
+            ToolSelector.SelectedToolIds = _session.EnabledToolIds;
+        if (_toolEventsHooked) return;
+        _toolEventsHooked = true;
+        ToolSelector.SelectionChanged += async (_, _) => await SyncToolsToSessionAsync();
+    }
+
+    /// <summary>工具选择变化后回写会话对象并落库，供重开会话时恢复。</summary>
+    private async Task SyncToolsToSessionAsync()
+    {
+        _session.EnabledToolIds = ToolSelector.SelectedToolIds.ToList();
+        if (_sessionId is null) return;
+        try { await ChatRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
     }
 
     /// <summary>解析当前激活的工具定义（去重后）；无激活工具时返回 null（不发送 tools）。</summary>
@@ -106,6 +145,8 @@ public partial class ChatView : UserControl
                 if (saved is not null)
                     ModelSelector.SelectedModel = saved;
             }
+            LoadSkills();
+            LoadToolsSelection();
             _messages.Clear();
             _messages.AddRange(await ChatRepository.GetBySessionAsync(_sessionId));
             RenderHistory();
@@ -149,6 +190,9 @@ public partial class ChatView : UserControl
         // 记录会话使用的模型调用 id（内置模型为 ChatConfig.Model）
         var selected = ModelSelector.SelectedModel;
         _session.Model = selected?.ModelName ?? ChatConfig.Model;
+        // 持久化会话激活工具，并标记本次实际对话请求时间（用于会话排序；配置文件变更不动它）
+        _session.EnabledToolIds = ToolSelector.SelectedToolIds.ToList();
+        _session.LastMessageAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await ChatRepository.UpdateAsync(_session);
 
         // 统一入口：网关负责 turn 管理、工具循环、消息落库与流式 UI 回调。
@@ -157,7 +201,7 @@ public partial class ChatView : UserControl
 
         await _gateway.ChatAsync(
             _sessionId,
-            _session.SystemPrompt,
+            BuildSystemPrompt(),
             _messages,
             text,
             new ChatRequestOptions
@@ -184,6 +228,58 @@ public partial class ChatView : UserControl
         _busy = false;
         SendBtn.IsEnabled = true;
         Updated?.Invoke();
+    }
+
+    /// <summary>
+    /// 构建发送给模型的 system 提示词：在会话自带的 system_prompt 之后，动态拼接会话启用技能。
+    /// 允许自动使用（allowed）的技能只列元数据（name: description），模型按需唤醒；
+    /// 已加载（loaded）的技能将其 SKILL.md 全文注入，始终可用。手动关闭技能后下次请求不再包含。
+    /// </summary>
+    private string BuildSystemPrompt()
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine("你是 HtaciAI（Agent），一款由 赫塔奇智能科技有限公司 研发的智能AI助手/智能体，可以完成办公协助、项目开发、答疑解惑、代理操作等很多工作。");
+
+        sb.AppendLine("遵循原则：\r\n\r\n" +
+            "严格遵守中国法律法规，拒绝回答涉及色情、暴力、政治敏感、违法犯罪等不安全内容，履行 AI 安全规范。\r\n\r\n" +
+            "默认语气风格：简洁、直接、切题。除非用户要求，否则不要使用 emoji。" +
+            "如无用户要求，尽量用 4 行以内的文字回答，不要加无关的前言后语，如果用户提示词中有明确其他语气设定，或用户喜欢其他语气风格，则按照用户要求。\r\n\r\n" +
+            "主动程度：只在被要求时主动，不要擅自行动吓到用户，如果不确定用户是否有让开始行动时，则询问用户是否要开始，直到用户明确指示开始。\r\n\r\n" +
+            "遇到敏感问题时，统一回复：“我无法回答该问题，请换个问题试试吧。”");
+
+        sb.AppendLine($"当前系统环境：{Environment.OSVersion}，模型id为： {_session.Model}");
+
+        sb.AppendLine("\r\n\r\n#========用户提示词开始========#\r\n\r\n");
+
+
+        if (!string.IsNullOrWhiteSpace(_session.SystemPrompt))
+            sb.AppendLine(_session.SystemPrompt);
+
+        sb.AppendLine("\r\n\r\n#========用户提示词结束========#\r\n\r\n");
+
+        var loadedIds = _session.EnabledSkills.Where(s => s.Status == "loaded").Select(s => s.Id).ToHashSet();      // 已加载的技能
+        var allowedIds = _session.EnabledSkills.Where(s => s.Status == "allowed").Select(s => s.Id).ToHashSet();    // 允许使用的技能
+        
+        // 1) 允许自动使用的技能：仅元数据
+        if (allowedIds.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("以下是可用技能（仅元数据，完整内容按需加载）：");
+            foreach (var skill in SkillRegistry.Instance.GetByIds(allowedIds))
+                sb.AppendLine($"{skill.Name}: {skill.Description}");
+        }
+
+        // 2) 已加载的技能：SKILL.md 全文注入
+        foreach (var skill in SkillRegistry.Instance.GetByIds(loadedIds))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"<skill name=\"{skill.Name}\">");
+            sb.AppendLine(skill.Body);
+            sb.AppendLine("</skill>");
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>网关回调：把一条新消息落库并加入内存列表（assistant 的 UI 已在 BeginAssistantRound 中渲染）。</summary>

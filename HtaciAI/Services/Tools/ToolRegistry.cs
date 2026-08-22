@@ -59,8 +59,8 @@ public sealed class ToolRegistry
         try
         {
             var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "HtaciAI", "tools", "examples");
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".htaci", "tool_tools");
             Directory.CreateDirectory(dir);
 
             var addPy = Path.Combine(dir, "add.py");

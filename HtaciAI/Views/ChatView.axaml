@@ -165,6 +165,9 @@
                             <!-- 工具库（可复用控件 ToolSelectorControl） -->
                             <controls:ToolSelectorControl x:Name="ToolSelector"
                                                           Margin="5"/>
+                            <!-- 技能库（可复用控件 SkillSelectorControl） -->
+                            <controls:SkillSelectorControl x:Name="SkillSelector"
+                                                           Margin="5"/>
                         </StackPanel>
 
                     </Grid>

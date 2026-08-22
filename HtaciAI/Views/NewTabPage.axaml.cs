@@ -13,6 +13,7 @@ public partial class NewTabPage : UserControl
     public event EventHandler? SmartChatSelected;
     public event EventHandler? WorkspaceSelected;
     public event EventHandler? ToolsSelected;
+    public event EventHandler? SkillsSelected;
 
     public NewTabPage()
     {
@@ -84,7 +85,7 @@ public partial class NewTabPage : UserControl
             GlowAlpha = 0x26,
             TagBg = Color.FromArgb(0xFF, 0xE8, 0xF7, 0xF1),
             TagFg = Color.FromArgb(0xFF, 0x25, 0x9A, 0x6A),
-            OnClick = null
+            OnClick = () => SkillsSelected?.Invoke(this, EventArgs.Empty)
         }));
 
         //CardsPanel.Children.Add(CreateCard(new CardData

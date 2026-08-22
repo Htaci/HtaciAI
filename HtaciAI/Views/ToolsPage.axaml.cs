@@ -41,21 +41,25 @@ public partial class ToolsPage : UserControl
 
     private void SetupButtons()
     {
-        SetupHoverAction(AddToolsetBtn, OnAddToolsetClick);
-        SetupHoverAction(CreateToolBtn, OnCreateToolClick);
+        SetupHoverAction(AddToolsetBtn, OnAddToolsetClick);            // 透明图标按钮：浅灰 hover
+        SetupHoverAction(CreateToolBtn, OnCreateToolClick, "#2F2F3C"); // 深色填充按钮：深一档 hover
     }
 
-    /// <summary>统一的悬停反馈（浅灰底 + 手型光标）。</summary>
-    private void SetupHoverAction(Border btn, Action onClick)
+    /// <summary>
+    /// 统一的悬停反馈（hover 底色 + 手型光标）。移出时恢复到按钮的初始背景，
+    /// 而非固定 Transparent——否则会覆盖掉像「创建新工具」这类深色填充按钮的原背景。
+    /// </summary>
+    private void SetupHoverAction(Border btn, Action onClick, string hoverBg = "#F1F3F5")
     {
+        var normalBg = btn.Background;
         btn.PointerEntered += (s, e) =>
         {
-            btn.Background = new SolidColorBrush(Color.Parse("#F1F3F5"));
+            btn.Background = new SolidColorBrush(Color.Parse(hoverBg));
             btn.Cursor = new Cursor(StandardCursorType.Hand);
         };
         btn.PointerExited += (s, e) =>
         {
-            btn.Background = Brushes.Transparent;
+            btn.Background = normalBg;
             btn.Cursor = new Cursor(StandardCursorType.Arrow);
         };
         btn.PointerPressed += (s, e) =>

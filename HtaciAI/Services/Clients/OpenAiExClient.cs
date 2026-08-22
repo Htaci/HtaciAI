@@ -87,7 +87,8 @@ public sealed class OpenAiExClient : IChatClient
         };
         request.Headers.Add("Authorization", $"Bearer {_apiKey}");
 
-        using var response = await Http.SendAsync(request, ct);
+        //using var response = await Http.SendAsync(request, ct);
+        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
         using var stream = await response.Content.ReadAsStreamAsync(ct);

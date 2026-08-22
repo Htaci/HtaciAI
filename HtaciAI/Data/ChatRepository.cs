@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading.Tasks;
 using HtaciAI.Models;
 using Microsoft.Data.Sqlite;
@@ -22,8 +23,8 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at
-            FROM chat_sessions WHERE is_deleted = 0 ORDER BY updated_at DESC;
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at
+            FROM chat_sessions WHERE is_deleted = 0 ORDER BY COALESCE(last_message_at, updated_at) DESC;
             """;
         await using var r = await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
@@ -37,7 +38,7 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at
             FROM chat_sessions WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -55,8 +56,8 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO chat_sessions (id, title, model, system_prompt, thinking, created_at, updated_at)
-            VALUES ($id, $title, $model, $system_prompt, $thinking, $created_at, $updated_at);
+            INSERT INTO chat_sessions (id, title, model, system_prompt, thinking, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at)
+            VALUES ($id, $title, $model, $system_prompt, $thinking, $created_at, $updated_at, $enabled_skills, $enabled_tool_ids, $last_message_at);
             """;
         cmd.Parameters.AddWithValue("$id", s.Id);
         cmd.Parameters.AddWithValue("$title", s.Title);
@@ -65,6 +66,9 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$thinking", s.Thinking);
         cmd.Parameters.AddWithValue("$created_at", s.CreatedAt);
         cmd.Parameters.AddWithValue("$updated_at", s.UpdatedAt);
+        cmd.Parameters.AddWithValue("$enabled_skills", (object?)SerializeSkills(s.EnabledSkills) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeToolIds(s.EnabledToolIds) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -77,7 +81,9 @@ public static class ChatRepository
         cmd.CommandText = """
             UPDATE chat_sessions
             SET title = $title, model = $model, system_prompt = $system_prompt,
-                thinking = $thinking, updated_at = $updated_at
+                thinking = $thinking, enabled_skills = $enabled_skills,
+                enabled_tool_ids = $enabled_tool_ids, last_message_at = $last_message_at,
+                updated_at = $updated_at
             WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", s.Id);
@@ -85,6 +91,9 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$model", (object?)s.Model ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$system_prompt", (object?)s.SystemPrompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$thinking", s.Thinking);
+        cmd.Parameters.AddWithValue("$enabled_skills", (object?)SerializeSkills(s.EnabledSkills) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeToolIds(s.EnabledToolIds) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$updated_at", s.UpdatedAt);
         await cmd.ExecuteNonQueryAsync();
     }
@@ -258,7 +267,40 @@ public static class ChatRepository
         DeletedAt = r.IsDBNull(6) ? null : r.GetInt64(6),
         CreatedAt = r.GetInt64(7),
         UpdatedAt = r.GetInt64(8),
+        EnabledSkills = r.IsDBNull(9) ? new() : ParseSkills(r.GetString(9)),
+        EnabledToolIds = r.IsDBNull(10) ? new() : ParseToolIds(r.GetString(10)),
+        LastMessageAt = r.IsDBNull(11) ? null : r.GetInt64(11),
     };
+
+    /// <summary>把会话启用技能序列化为 JSON 数组文本（供 enabled_skills 列存储）。</summary>
+    private static string SerializeSkills(List<SessionSkill> skills)
+    {
+        try { return JsonSerializer.Serialize(skills ?? new()); }
+        catch { return "[]"; }
+    }
+
+    /// <summary>从 JSON 数组文本解析会话启用技能；空/损坏时返回空列表。</summary>
+    private static List<SessionSkill> ParseSkills(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<List<SessionSkill>>(json) ?? new(); }
+        catch { return new(); }
+    }
+
+    /// <summary>把会话激活的工具 id 集合序列化为 JSON 数组文本。</summary>
+    private static string SerializeToolIds(List<string> ids)
+    {
+        try { return JsonSerializer.Serialize(ids ?? new()); }
+        catch { return "[]"; }
+    }
+
+    /// <summary>从 JSON 数组文本解析会话激活的工具 id 集合；空/损坏时返回空列表。</summary>
+    private static List<string> ParseToolIds(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? new(); }
+        catch { return new(); }
+    }
 
     private static ChatMessage MapMessage(SqliteDataReader r) => new()
     {

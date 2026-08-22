@@ -86,6 +86,20 @@ public static class DatabaseService
             version = 4;
             SetVersion(conn, version);
         }
+
+        if (version < 5)
+        {
+            RunMigrationV5(conn);
+            version = 5;
+            SetVersion(conn, version);
+        }
+
+        if (version < 6)
+        {
+            RunMigrationV6(conn);
+            version = 6;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -248,6 +262,25 @@ public static class DatabaseService
         cmd.CommandText = """
             ALTER TABLE chat_sessions ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE chat_sessions ADD COLUMN deleted_at INTEGER;
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>会话级技能启用列表：chat_sessions 增加 enabled_skills（JSON 数组，元素含 id / status）。</summary>
+    private static void RunMigrationV5(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "ALTER TABLE chat_sessions ADD COLUMN enabled_skills TEXT;";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>会话级配置：增加 enabled_tool_ids（激活工具 id 的 JSON 数组）与 last_message_at（实际对话请求时间，用于排序）。</summary>
+    private static void RunMigrationV6(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            ALTER TABLE chat_sessions ADD COLUMN enabled_tool_ids TEXT;
+            ALTER TABLE chat_sessions ADD COLUMN last_message_at INTEGER;
             """;
         cmd.ExecuteNonQuery();
     }

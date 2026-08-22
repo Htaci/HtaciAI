@@ -1,0 +1,52 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="28" d:DesignHeight="28"
+             x:Class="HtaciAI.Controls.SkillSelectorControl">
+    <!--
+        技能选择器（可复用控件）：
+        按钮显示灯泡图标 + 已选数量角标，点击弹出菜单，技能以两组独立勾选：
+          - 「已加载」：SKILL.md 全文注入 system，始终可用（status=loaded）
+          - 「允许自动使用」：仅元数据注入，模型按需唤醒（status=allowed）
+        技能列表由外部注入，选中结果通过 SelectedSkills（TwoWay）暴露。
+    -->
+    <Button x:Name="RootBtn"
+            Width="28"
+            Height="28"
+            Padding="0"
+            CornerRadius="8"
+            Background="Transparent">
+        <Button.Flyout>
+            <MenuFlyout/>
+        </Button.Flyout>
+        <ToolTip.Tip>
+            <TextBlock Text="技能库"/>
+        </ToolTip.Tip>
+        <Grid>
+            <TextBlock x:Name="IconText"
+                       Text="&#xea80;"
+                       FontFamily="Segoe Fluent Icons"
+                       FontSize="14"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"/>
+            <Border x:Name="Badge"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    MinWidth="14"
+                    Height="14"
+                    CornerRadius="7"
+                    Background="#4A90D9"
+                    IsVisible="False"
+                    Margin="0,2,2,0"
+                    Padding="3,0">
+                <TextBlock x:Name="BadgeText"
+                           Text="0"
+                           FontSize="9"
+                           Foreground="White"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"/>
+            </Border>
+        </Grid>
+    </Button>
+</UserControl>

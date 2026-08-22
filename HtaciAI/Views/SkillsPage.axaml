@@ -1,0 +1,67 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="600"
+             x:Class="HtaciAI.Views.SkillsPage">
+    <Grid ColumnDefinitions="280,*">
+        <!-- ====== 左侧：技能列表 ====== -->
+        <Border Grid.Column="0"
+                Background="#99F9FAFB"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,0,1,0">
+            <Grid RowDefinitions="Auto,*"
+                  Margin="12,16">
+                <TextBlock Grid.Row="0"
+                           Text="技能"
+                           FontSize="15"
+                           FontWeight="SemiBold"
+                           Foreground="#1A1A2E"
+                           Margin="12,0,0,12"/>
+                <ScrollViewer Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="SkillList"
+                                Spacing="2"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- ====== 右侧：技能描述 + SKILL.md ====== -->
+        <Grid Grid.Column="1"
+              RowDefinitions="Auto,*"
+              Margin="24,20">
+            <StackPanel Grid.Row="0"
+                        Margin="0,0,0,16">
+                <TextBlock x:Name="DetailTitle"
+                           Text="技能详情"
+                           FontSize="20"
+                           FontWeight="Bold"
+                           Foreground="#1A1A2E"/>
+                <TextBlock x:Name="DetailDesc"
+                           Text="选择左侧技能查看描述与 SKILL.md"
+                           FontSize="12"
+                           Foreground="#9CA3AF"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,0"/>
+            </StackPanel>
+            <ScrollViewer Grid.Row="1"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+                <Border CornerRadius="12"
+                        Background="#FFFFFF"
+                        BorderBrush="#E5E7EB"
+                        BorderThickness="1"
+                        Padding="20,16">
+                    <TextBlock x:Name="DetailBody"
+                               Text=""
+                               FontSize="13"
+                               Foreground="#374151"
+                               TextWrapping="Wrap"
+                               LineHeight="22"
+                               FontFamily="Consolas"/>
+                </Border>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>
