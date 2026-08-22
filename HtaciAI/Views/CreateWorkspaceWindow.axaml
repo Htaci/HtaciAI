@@ -11,6 +11,22 @@
         Background="#F7F8FA"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
+
+    
+        <Window.Styles>
+            <Style Selector="Window">
+                <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+                <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+                <Setter Property="WindowDecorations" Value="BorderOnly"/>
+                <Setter Property="CanResize" Value="True"/>
+                <Setter Property="Background">
+                    <Setter.Value>
+                        <SolidColorBrush Color="Transparent" Opacity="1"/>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </Window.Styles>
+
     <Grid RowDefinitions="Auto,*,Auto">
         <!-- 标题 -->
         <TextBlock Grid.Row="0"

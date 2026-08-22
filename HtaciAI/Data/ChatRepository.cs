@@ -22,8 +22,8 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, created_at, updated_at
-            FROM chat_sessions ORDER BY updated_at DESC;
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at
+            FROM chat_sessions WHERE is_deleted = 0 ORDER BY updated_at DESC;
             """;
         await using var r = await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
@@ -37,7 +37,7 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, created_at, updated_at
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at
             FROM chat_sessions WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -89,7 +89,45 @@ public static class ChatRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>软删除会话：标记 is_deleted=1 并记录删除时间（消息保留，便于删除会话管理页恢复）。</summary>
+    public static async Task SoftDeleteSessionAsync(string id)
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE chat_sessions SET is_deleted = 1, deleted_at = $now WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$now", Now());
+        cmd.Parameters.AddWithValue("$id", id);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     // ---- 消息 ----
+
+    /// <summary>软删除一轮（AI 回复）：标记该 turn_id 下所有消息为已删除。</summary>
+    public static async Task SoftDeleteTurnAsync(string sessionId, string turnId)
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE chat_message SET is_deleted = 1, deleted_at = $now WHERE session_id = $session_id AND turn_id = $turn_id;";
+        cmd.Parameters.AddWithValue("$now", Now());
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        cmd.Parameters.AddWithValue("$turn_id", turnId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>软删除单条消息（用户消息）。</summary>
+    public static async Task SoftDeleteMessageAsync(string sessionId, string messageId)
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE chat_message SET is_deleted = 1, deleted_at = $now WHERE session_id = $session_id AND id = $message_id;";
+        cmd.Parameters.AddWithValue("$now", Now());
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        cmd.Parameters.AddWithValue("$message_id", messageId);
+        await cmd.ExecuteNonQueryAsync();
+    }
 
     public static async Task<List<ChatMessage>> GetBySessionAsync(string sessionId)
     {
@@ -216,8 +254,10 @@ public static class ChatRepository
         Model = r.IsDBNull(2) ? "" : r.GetString(2),
         SystemPrompt = r.IsDBNull(3) ? null : r.GetString(3),
         Thinking = r.GetInt32(4),
-        CreatedAt = r.GetInt64(5),
-        UpdatedAt = r.GetInt64(6),
+        IsDeleted = r.GetInt32(5) != 0,
+        DeletedAt = r.IsDBNull(6) ? null : r.GetInt64(6),
+        CreatedAt = r.GetInt64(7),
+        UpdatedAt = r.GetInt64(8),
     };
 
     private static ChatMessage MapMessage(SqliteDataReader r) => new()

@@ -171,6 +171,16 @@ public partial class ChatView : UserControl
             BeginAssistantRound,
             CancellationToken.None);
 
+        // 回复结束：在当前 turn 根追加操作栏（复制/编辑/删除 + Tokens 汇总）
+        if (_activeTurnId is not null && _activeTurnRoot is not null)
+        {
+            var turnAssistants = _messages
+                .Where(m => m.Role == "assistant" && m.TurnId == _activeTurnId)
+                .ToList();
+            _activeTurnRoot.Children.Add(CreateAiReplyOps(_activeTurnId, turnAssistants));
+            ScrollToEnd();
+        }
+
         _busy = false;
         SendBtn.IsEnabled = true;
         Updated?.Invoke();
@@ -213,19 +223,17 @@ public partial class ChatView : UserControl
             }
         }
 
-        foreach (var (_, msgs) in groups)
-            RenderTurnBlock(msgs);
+        foreach (var (turnId, msgs) in groups)
+            RenderTurnBlock(turnId, msgs);
     }
 
-    /// <summary>渲染一组消息：user 单条气泡；assistant 起头则渲染模型头 + 思考卡 + 工具卡 + 正文。</summary>
-    private void RenderTurnBlock(List<ChatMessage> msgs)
+    /// <summary>渲染一组消息：user 气泡 + 操作栏；assistant 起头则渲染模型头 + 思考卡 + 工具卡 + 正文 + 回复操作栏。</summary>
+    private void RenderTurnBlock(string? turnId, List<ChatMessage> msgs)
     {
         var first = msgs[0];
         if (first.Role == "user")
         {
-            var (root, block) = CreateUserElement();
-            block.Text = first.Content ?? "";
-            MessagesPanel.Children.Add(root);
+            MessagesPanel.Children.Add(CreateUserMessageBlock(first));
             return;
         }
 
@@ -269,6 +277,9 @@ public partial class ChatView : UserControl
             }
         }
 
+        if (turnId is not null)
+            rootPanel.Children.Add(CreateAiReplyOps(turnId, msgs.Where(m => m.Role == "assistant").ToList()));
+
         MessagesPanel.Children.Add(rootPanel);
     }
 
@@ -298,6 +309,182 @@ public partial class ChatView : UserControl
             if (c is not null) return c.Arguments ?? "{}";
         }
         return "{}";
+    }
+
+    // ---- 消息操作（复制 / 编辑 / 删除）与 Tokens 汇总 ----
+
+    /// <summary>解析 assistant 消息的 usage_json，返回 (输入, 缓存命中, 输出) token。</summary>
+    private static (long Input, long Cache, long Output) ParseUsage(ChatMessage m)
+    {
+        if (string.IsNullOrWhiteSpace(m.UsageJson)) return (0, 0, 0);
+        try
+        {
+            using var doc = JsonDocument.Parse(m.UsageJson);
+            var root = doc.RootElement;
+            var input = root.TryGetProperty("input_tokens", out var a) ? a.GetInt64() : 0;
+            var cache = root.TryGetProperty("cache_hit_tokens", out var b) ? b.GetInt64() : 0;
+            var output = root.TryGetProperty("output_tokens", out var c) ? c.GetInt64() : 0;
+            return (input, cache, output);
+        }
+        catch
+        {
+            return (0, 0, 0);
+        }
+    }
+
+    /// <summary>构造一个仅图标的操作按钮（Segoe Fluent Icons），悬停变色。</summary>
+    private Button CreateGlyphButton(string glyph, string tooltip, Action onClick, string hoverColor = "#374151")
+    {
+        var icon = new TextBlock
+        {
+            Text = glyph,
+            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontSize = 13,
+            Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var btn = new Button
+        {
+            Content = icon,
+            Width = 26,
+            Height = 26,
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        ToolTip.SetTip(btn, tooltip);
+        btn.PointerEntered += (_, _) => icon.Foreground = new SolidColorBrush(Color.Parse(hoverColor));
+        btn.PointerExited += (_, _) => icon.Foreground = new SolidColorBrush(Color.Parse("#9CA3AF"));
+        btn.Click += (_, _) => onClick();
+        return btn;
+    }
+
+    /// <summary>AI 回复操作栏：左侧复制/编辑/删除，右侧 Tokens 汇总（同 turn 累加）。</summary>
+    private Control CreateAiReplyOps(string turnId, IReadOnlyList<ChatMessage> assistantMsgs)
+    {
+        long input = 0, cache = 0, output = 0;
+        var copyText = new StringBuilder();
+        foreach (var m in assistantMsgs)
+        {
+            var t = ParseUsage(m);
+            input += t.Input;
+            cache += t.Cache;
+            output += t.Output;
+            if (!string.IsNullOrWhiteSpace(m.Content))
+                copyText.AppendLine(m.Content.TrimEnd());
+        }
+        var total = input + output;
+
+        var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(copyText.ToString()));
+        var editBtn = CreateGlyphButton("", "编辑", () => { /* TODO: 编辑 */ });
+        var delBtn = CreateGlyphButton("", "删除", async () => await DeleteTurnAsync(turnId), hoverColor: "#DC2626");
+
+        var left = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            Children = { copyBtn, editBtn, delBtn },
+        };
+        var tokens = new TextBlock
+        {
+            Text = $"Tokens: {total}  ↑{input}  ↑*{cache}  ↓{output}",
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+        grid.Children.Add(left);
+        grid.Children.Add(tokens);
+        Grid.SetColumn(tokens, 1);
+        return grid;
+    }
+
+    /// <summary>用户消息操作栏：气泡下方、右对齐的复制/编辑/删除。</summary>
+    private Control CreateUserOps(string messageId, string text)
+    {
+        var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(text));
+        var editBtn = CreateGlyphButton("", "编辑", () => { /* TODO: 编辑 */ });
+        var delBtn = CreateGlyphButton("", "删除", async () => await DeleteMessageAsync(messageId), hoverColor: "#DC2626");
+
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 2, 20, 8),
+            Children = { copyBtn, editBtn, delBtn },
+        };
+    }
+
+    /// <summary>用户消息块：气泡 + 其下方右对齐操作栏。</summary>
+    private Control CreateUserMessageBlock(ChatMessage msg)
+    {
+        var stack = new StackPanel
+        {
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 0,
+        };
+        var (bubble, block) = CreateUserElement();
+        block.Text = msg.Content ?? "";
+        stack.Children.Add(bubble);
+        stack.Children.Add(CreateUserOps(msg.Id, msg.Content ?? ""));
+        return stack;
+    }
+
+    private async Task CopyText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        try
+        {
+            var top = TopLevel.GetTopLevel(this);
+            if (top?.Clipboard is null) return;
+            var transfer = new DataTransfer();
+            transfer.Add(DataTransferItem.CreateText(text));
+            await top.Clipboard.SetDataAsync(transfer);
+        }
+        catch
+        {
+            // 剪贴板不可用时忽略
+        }
+    }
+
+    /// <summary>软删除一轮 AI 回复（按 turn_id），确认后刷新。</summary>
+    private async Task DeleteTurnAsync(string turnId)
+    {
+        if (_sessionId is null) return;
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        if (!await ConfirmDialog.ShowAsync(owner, "确定删除这段回复吗？")) return;
+        try { await ChatRepository.SoftDeleteTurnAsync(_sessionId, turnId); } catch { /* 忽略 */ }
+        await ReloadMessagesAsync();
+    }
+
+    /// <summary>软删除一条用户消息，确认后刷新。</summary>
+    private async Task DeleteMessageAsync(string messageId)
+    {
+        if (_sessionId is null) return;
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        if (!await ConfirmDialog.ShowAsync(owner, "确定删除这条消息吗？")) return;
+        try { await ChatRepository.SoftDeleteMessageAsync(_sessionId, messageId); } catch { /* 忽略 */ }
+        await ReloadMessagesAsync();
+    }
+
+    /// <summary>从库重新加载未删除消息并按 turn 重渲染（删除后调用）。</summary>
+    private async Task ReloadMessagesAsync()
+    {
+        _messages.Clear();
+        _messages.AddRange(await ChatRepository.GetBySessionAsync(_sessionId!));
+        _activeTurnId = null;
+        _activeTurnRoot = null;
+        RenderHistory();
+        ScrollToEnd();
     }
 
     /// <summary>网关回调：新一轮 assistant 开始流式时创建 UI 元素并返回流式回调。</summary>
@@ -390,9 +577,7 @@ public partial class ChatView : UserControl
         switch (m.Role)
         {
             case "user":
-                var (userRoot, userBlock) = CreateUserElement();
-                userBlock.Text = m.Content ?? "";
-                MessagesPanel.Children.Add(userRoot);
+                MessagesPanel.Children.Add(CreateUserMessageBlock(m));
                 break;
 
             default:
@@ -685,23 +870,15 @@ public partial class ChatView : UserControl
         /// <summary>描边风格的灯泡图标（Feather "lightbulb"），用于卡片头部。</summary>
         private static Control CreateLightbulbIcon(Brush brush)
         {
-            var icon = new Grid { Width = 16, Height = 16 };
-            void AddFigure(string data)
+            return new TextBlock
             {
-                icon.Children.Add(new Path
-                {
-                    Data = Geometry.Parse(data),
-                    Stroke = brush,
-                    StrokeThickness = 1.5,
-                    StrokeLineCap = PenLineCap.Round,
-                    StrokeJoin = PenLineJoin.Round,
-                    Stretch = Stretch.Uniform,
-                });
-            }
-            AddFigure("M9 18h6");
-            AddFigure("M10 22h4");
-            AddFigure("M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5.76.76 1.23 1.52 1.41 2.5");
-            return icon;
+                Text = "", // Segoe Fluent Icons：灯泡（ea80）
+                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                FontSize = 14,
+                Foreground = brush,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
         }
     }
 

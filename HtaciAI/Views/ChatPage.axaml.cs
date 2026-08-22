@@ -124,7 +124,8 @@ public partial class ChatPage : UserControl
             Foreground = new SolidColorBrush(Color.Parse(isActive ? "#1A1A2E" : "#4B5563")),
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(12, 0)
+            Margin = new Thickness(12, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
         var timeBlock = new TextBlock
         {
@@ -135,6 +136,40 @@ public partial class ChatPage : UserControl
             Margin = new Thickness(0, 0, 10, 0)
         };
 
+        // 删除按钮（hover 会话项时显示，替换时间）
+        var delIcon = new TextBlock
+        {
+            Text = "", // Segoe Fluent Icons：删除（e74d）
+            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontSize = 13,
+            Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var delBtn = new Button
+        {
+            Content = delIcon,
+            Width = 24,
+            Height = 24,
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(5),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Margin = new Thickness(0, 0, 8, 0),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            IsVisible = false,
+        };
+        delBtn.PointerEntered += (_, _) => delIcon.Foreground = new SolidColorBrush(Color.Parse("#DC2626"));
+        delBtn.PointerExited += (_, _) => delIcon.Foreground = new SolidColorBrush(Color.Parse("#1A1A2E"));
+        // 单击时先阻止事件冒泡到父级（避免误触“打开会话”），释放后再执行删除
+        delBtn.PointerPressed += (_, e) => e.Handled = true;
+        delBtn.Click += async (_, _) => await DeleteSessionAsync(s);
+
+        var rightHost = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto") };
+        rightHost.Children.Add(timeBlock);
+        rightHost.Children.Add(delBtn);
+        Grid.SetColumn(rightHost, 1);
+
         var item = new Border
         {
             Height = 38,
@@ -144,18 +179,21 @@ public partial class ChatPage : UserControl
             Child = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-                Children = { titleBlock, timeBlock }
+                Children = { titleBlock, rightHost }
             }
         };
-        Grid.SetColumn(timeBlock, 1);
 
         item.PointerEntered += (s2, e2) =>
         {
             if (!isActive) item.Background = new SolidColorBrush(Color.Parse("#F1F3F5"));
+            timeBlock.IsVisible = false;
+            delBtn.IsVisible = true;
         };
         item.PointerExited += (s2, e2) =>
         {
             if (!isActive) item.Background = Brushes.Transparent;
+            timeBlock.IsVisible = true;
+            delBtn.IsVisible = false;
         };
         item.PointerPressed += async (s2, e2) =>
         {
@@ -164,6 +202,18 @@ public partial class ChatPage : UserControl
         };
 
         return item;
+    }
+
+    /// <summary>软删除会话并刷新列表；若删除的是当前会话则回到新建会话视图。</summary>
+    private async Task DeleteSessionAsync(ChatSession s)
+    {
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        if (!await ConfirmDialog.ShowAsync(owner, $"确定删除会话「{s.Title}」吗？", "删除会话")) return;
+
+        try { await ChatRepository.SoftDeleteSessionAsync(s.Id); } catch { /* 忽略 */ }
+        if (_currentSessionId == s.Id)
+            ShowNewChatView();
+        await LoadSessionsAsync();
     }
 
     private static string FormatTime(long ms)

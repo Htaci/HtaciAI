@@ -14,4 +14,8 @@ public class ChatSession
     public int Thinking { get; set; }
     public long CreatedAt { get; set; }
     public long UpdatedAt { get; set; }
+
+    /// <summary>是否软删除（隐藏于会话列表，供删除会话管理页恢复）。</summary>
+    public bool IsDeleted { get; set; }
+    public long? DeletedAt { get; set; }
 }

@@ -79,6 +79,13 @@ public static class DatabaseService
             version = 3;
             SetVersion(conn, version);
         }
+
+        if (version < 4)
+        {
+            RunMigrationV4(conn);
+            version = 4;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -231,6 +238,17 @@ public static class DatabaseService
 
         using var cmd = conn.CreateCommand();
         cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>会话软删除：chat_sessions 增加 is_deleted / deleted_at（消息表已有，无需重复）。</summary>
+    private static void RunMigrationV4(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            ALTER TABLE chat_sessions ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE chat_sessions ADD COLUMN deleted_at INTEGER;
+            """;
         cmd.ExecuteNonQuery();
     }
 }
