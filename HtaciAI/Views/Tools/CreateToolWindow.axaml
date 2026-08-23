@@ -114,6 +114,19 @@
                              PlaceholderText="说明 AI 何时调用该工具"/>
                 </StackPanel>
 
+                <!-- 权限等级 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="权限等级"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="DangerCombo" Height="34" CornerRadius="6"/>
+                    <TextBlock Text="安全：只读；风险：会改动内容；危险：可执行命令（未选择时默认「危险」）。"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
                 <!-- 入参 Schema -->
                 <StackPanel Spacing="6">
                     <TextBlock Text="入参 JSON Schema"

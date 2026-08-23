@@ -31,6 +31,9 @@ public partial class CreateToolWindow : Window
         RuntimeCombo.ItemsSource = new List<string> { "Python", "Node.js" };
         RuntimeCombo.SelectedIndex = 0;
 
+        DangerCombo.ItemsSource = new List<string> { "安全", "风险", "危险" };
+        DangerCombo.SelectedIndex = 2; // 未选择时默认「危险」
+
         // 归属工具集勾选（默认勾选内置默认集）
         foreach (var ts in ToolRegistry.Instance.GetToolsets())
         {
@@ -143,6 +146,12 @@ public partial class CreateToolWindow : Window
             InputSchemaJson = string.IsNullOrWhiteSpace(schema) ? "{}" : schema,
             ToolsetIds = selectedSets,
             Enabled = true,
+            DangerLevel = DangerCombo.SelectedIndex switch
+            {
+                0 => ToolDangerLevel.Safe,
+                1 => ToolDangerLevel.Risk,
+                _ => ToolDangerLevel.Danger,
+            },
         };
 
         try

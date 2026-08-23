@@ -34,7 +34,7 @@ public partial class ChatView : UserControl
     private ChatSession _session = new();
     private readonly List<ChatMessage> _messages = new();
     private readonly ChatGateway _gateway = new();
-    private readonly IToolExecutor _toolExecutor = new ToolExecutorDispatcher();
+    private readonly ToolExecutorDispatcher _toolExecutor = new();
     private bool _busy;
     private bool _skillEventsHooked;
     private bool _toolEventsHooked;
@@ -119,10 +119,108 @@ public partial class ChatView : UserControl
     {
         InitializeComponent();
         _sessionId = sessionId;
+        // 回车发送、Shift+Enter 换行：Box 内部处理 Enter（AcceptsReturn）时 C# 事件已被标记 handled，
+        // 需注册 handledEventsToo:true 才能可靠拦截回车（否则 Enter 只在输入框内换行而不发送）。
+        InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDown, handledEventsToo: true);
+        ConfigureToolExecutor();
+        InitPermissionMode();
         LoadTools();
         if (_sessionId is null)
             ShowLoadFailed();
     }
+
+    /// <summary>配置工具执行器：审批弹窗、内置工具宿主上下文、权限档位（写自会话级配置）。</summary>
+    private void ConfigureToolExecutor()
+    {
+        _toolExecutor.Context = new BuiltinToolContext
+        {
+            BaseDirectory = Environment.CurrentDirectory,
+            GetSessionSkills = () => Task.FromResult<List<SessionSkill>?>(_session.EnabledSkills),
+            SaveSessionSkills = async skills =>
+            {
+                _session.EnabledSkills = skills;
+                if (_sessionId is not null)
+                {
+                    try { await ChatRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
+                }
+                SkillSelector.SelectedSkills = skills;
+            },
+        };
+        _toolExecutor.ApprovalGate = async (call, tool) =>
+        {
+            var owner = TopLevel.GetTopLevel(this) as Window;
+            return await ConfirmDialog.ShowToolApprovalAsync(owner, tool, call);
+        };
+        _toolExecutor.Mode = _session.ToolPermissionMode;
+    }
+
+    // ---- 权限模式（输入框盾牌图标） ----
+
+    /// <summary>取得权限菜单（通过按钮 Flyout 访问，规避 x:Name 在 Flyout 上的编译歧义）。</summary>
+    private MenuFlyout? PermMenu => PermModeBtn.Flyout as MenuFlyout;
+
+    private void InitPermissionMode()
+    {
+        if (PermMenu is not { } menu) return;
+        foreach (var item in menu.Items)
+        {
+            if (item is not MenuItem mi || mi.Tag is not string tag) continue;
+            mi.ToggleType = MenuItemToggleType.CheckBox;
+            mi.Click += (_, _) => _ = SetPermissionModeAsync(ParseMode(tag));
+        }
+        ApplyPermissionMode();
+    }
+
+    /// <summary>切换权限档位：写回会话对象并按需落库（权限是会话级，非全局）。</summary>
+    private async Task SetPermissionModeAsync(PermissionMode mode)
+    {
+        _session.ToolPermissionMode = mode;
+        ApplyPermissionMode();
+        if (_sessionId is not null)
+        {
+            try { await ChatRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
+        }
+    }
+
+    private void ApplyPermissionMode()
+    {
+        var mode = _session.ToolPermissionMode;
+        _toolExecutor.Mode = mode;
+
+        if (PermMenu is { } menu)
+            foreach (var item in menu.Items)
+                if (item is MenuItem mi && mi.Tag is string tag)
+                    mi.IsChecked = ParseMode(tag) == mode;
+
+        var color = mode switch
+        {
+            PermissionMode.Strict => "#DC2626", // 红
+            PermissionMode.Normal => "#4A90D9", // 蓝
+            PermissionMode.Loose => "#D97706",  // 橙
+            PermissionMode.Free => "#16A34A",   // 绿
+            _ => "#9CA3AF",
+        };
+        PermModeIcon.Foreground = new SolidColorBrush(Color.Parse(color));
+        ToolTip.SetTip(PermModeBtn, ModeTip(mode));
+    }
+
+    private static string ModeTip(PermissionMode mode) => mode switch
+    {
+        PermissionMode.Strict => "权限模式：严格（所有工具需确认）",
+        PermissionMode.Normal => "权限模式：普通（安全工具自动通过）",
+        PermissionMode.Loose => "权限模式：宽松（安全/风险工具自动通过）",
+        PermissionMode.Free => "权限模式：自由（所有工具免确认）",
+        _ => "",
+    };
+
+    private static PermissionMode ParseMode(string tag) => tag switch
+    {
+        "Strict" => PermissionMode.Strict,
+        "Normal" => PermissionMode.Normal,
+        "Loose" => PermissionMode.Loose,
+        "Free" => PermissionMode.Free,
+        _ => PermissionMode.Normal,
+    };
 
     /// <summary>从库加载会话与历史消息并渲染。</summary>
     public async Task InitializeAsync()
@@ -147,6 +245,7 @@ public partial class ChatView : UserControl
             }
             LoadSkills();
             LoadToolsSelection();
+            ApplyPermissionMode(); // 恢复会话各自保存的权限档位
             _messages.Clear();
             _messages.AddRange(await ChatRepository.GetBySessionAsync(_sessionId));
             RenderHistory();
@@ -475,7 +574,7 @@ public partial class ChatView : UserControl
         var total = input + output;
 
         var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(copyText.ToString()));
-        var editBtn = CreateGlyphButton("", "编辑", () => { /* TODO: 编辑 */ });
+        var editBtn = CreateGlyphButton("", "编辑", () => { /* TODO: 编辑 */ });
         var delBtn = CreateGlyphButton("", "删除", async () => await DeleteTurnAsync(turnId), hoverColor: "#DC2626");
 
         var left = new StackPanel
@@ -507,7 +606,7 @@ public partial class ChatView : UserControl
     private Control CreateUserOps(string messageId, string text)
     {
         var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(text));
-        var editBtn = CreateGlyphButton("", "编辑", () => { /* TODO: 编辑 */ });
+        var editBtn = CreateGlyphButton("", "编辑", () => { /* TODO: 编辑 */ });
         var delBtn = CreateGlyphButton("", "删除", async () => await DeleteMessageAsync(messageId), hoverColor: "#DC2626");
 
         return new StackPanel

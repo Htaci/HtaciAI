@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using HtaciAI.Services.Tools;
 using Microsoft.Data.Sqlite;
 
 namespace HtaciAI.Data;
@@ -23,7 +24,7 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode
             FROM chat_sessions WHERE is_deleted = 0 ORDER BY COALESCE(last_message_at, updated_at) DESC;
             """;
         await using var r = await cmd.ExecuteReaderAsync();
@@ -38,7 +39,7 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode
             FROM chat_sessions WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -56,8 +57,8 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO chat_sessions (id, title, model, system_prompt, thinking, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at)
-            VALUES ($id, $title, $model, $system_prompt, $thinking, $created_at, $updated_at, $enabled_skills, $enabled_tool_ids, $last_message_at);
+            INSERT INTO chat_sessions (id, title, model, system_prompt, thinking, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode)
+            VALUES ($id, $title, $model, $system_prompt, $thinking, $created_at, $updated_at, $enabled_skills, $enabled_tool_ids, $last_message_at, $permission_mode);
             """;
         cmd.Parameters.AddWithValue("$id", s.Id);
         cmd.Parameters.AddWithValue("$title", s.Title);
@@ -69,6 +70,7 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)SerializeSkills(s.EnabledSkills) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeToolIds(s.EnabledToolIds) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$permission_mode", (int)s.ToolPermissionMode);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -83,7 +85,7 @@ public static class ChatRepository
             SET title = $title, model = $model, system_prompt = $system_prompt,
                 thinking = $thinking, enabled_skills = $enabled_skills,
                 enabled_tool_ids = $enabled_tool_ids, last_message_at = $last_message_at,
-                updated_at = $updated_at
+                permission_mode = $permission_mode, updated_at = $updated_at
             WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", s.Id);
@@ -94,6 +96,7 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)SerializeSkills(s.EnabledSkills) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeToolIds(s.EnabledToolIds) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$permission_mode", (int)s.ToolPermissionMode);
         cmd.Parameters.AddWithValue("$updated_at", s.UpdatedAt);
         await cmd.ExecuteNonQueryAsync();
     }
@@ -270,6 +273,7 @@ public static class ChatRepository
         EnabledSkills = r.IsDBNull(9) ? new() : ParseSkills(r.GetString(9)),
         EnabledToolIds = r.IsDBNull(10) ? new() : ParseToolIds(r.GetString(10)),
         LastMessageAt = r.IsDBNull(11) ? null : r.GetInt64(11),
+        ToolPermissionMode = (PermissionMode)r.GetInt32(12),
     };
 
     /// <summary>把会话启用技能序列化为 JSON 数组文本（供 enabled_skills 列存储）。</summary>

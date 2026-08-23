@@ -71,7 +71,7 @@ public static class ToolRepository
 
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = "SELECT id, name, description, source, runtime, target, input_schema, enabled FROM tool_tools ORDER BY created_at ASC;";
+            cmd.CommandText = "SELECT id, name, description, source, runtime, target, input_schema, enabled, danger_level FROM tool_tools ORDER BY created_at ASC;";
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
             {
@@ -85,6 +85,7 @@ public static class ToolRepository
                     Target = r.IsDBNull(5) ? null : r.GetString(5),
                     InputSchemaJson = r.IsDBNull(6) ? "{}" : r.GetString(6),
                     Enabled = r.GetInt32(7) != 0,
+                    DangerLevel = ParseDangerLevel(r.IsDBNull(8) ? "" : r.GetString(8)),
                 });
             }
         }
@@ -121,8 +122,8 @@ public static class ToolRepository
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = """
-                INSERT INTO tool_tools (id, name, description, source, runtime, target, input_schema, enabled, created_at, updated_at)
-                VALUES ($id, $name, $description, $source, $runtime, $target, $input_schema, $enabled, $created_at, $updated_at);
+                INSERT INTO tool_tools (id, name, description, source, runtime, target, input_schema, enabled, danger_level, created_at, updated_at)
+                VALUES ($id, $name, $description, $source, $runtime, $target, $input_schema, $enabled, $danger_level, $created_at, $updated_at);
                 """;
             cmd.Parameters.AddWithValue("$id", tool.Id);
             cmd.Parameters.AddWithValue("$name", tool.Name);
@@ -132,6 +133,7 @@ public static class ToolRepository
             cmd.Parameters.AddWithValue("$target", (object?)tool.Target ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$input_schema", (object?)tool.InputSchemaJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$enabled", tool.Enabled ? 1 : 0);
+            cmd.Parameters.AddWithValue("$danger_level", tool.DangerLevel.ToString());
             cmd.Parameters.AddWithValue("$created_at", now);
             cmd.Parameters.AddWithValue("$updated_at", now);
             await cmd.ExecuteNonQueryAsync();
@@ -151,7 +153,8 @@ public static class ToolRepository
             cmd.CommandText = """
                 UPDATE tool_tools
                 SET name = $name, description = $description, source = $source, runtime = $runtime,
-                    target = $target, input_schema = $input_schema, enabled = $enabled, updated_at = $updated_at
+                    target = $target, input_schema = $input_schema, enabled = $enabled,
+                    danger_level = $danger_level, updated_at = $updated_at
                 WHERE id = $id;
                 """;
             cmd.Parameters.AddWithValue("$id", tool.Id);
@@ -162,6 +165,7 @@ public static class ToolRepository
             cmd.Parameters.AddWithValue("$target", (object?)tool.Target ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$input_schema", (object?)tool.InputSchemaJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$enabled", tool.Enabled ? 1 : 0);
+            cmd.Parameters.AddWithValue("$danger_level", tool.DangerLevel.ToString());
             cmd.Parameters.AddWithValue("$updated_at", now);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -199,4 +203,8 @@ public static class ToolRepository
 
     private static ScriptRuntimeKind ParseRuntime(string s)
         => Enum.TryParse<ScriptRuntimeKind>(s, out var v) ? v : default;
+
+    /// <summary>解析库中的权限等级字符串；缺失/旧行/非法值一律回退为 <see cref="ToolDangerLevel.Danger"/>。</summary>
+    private static ToolDangerLevel ParseDangerLevel(string s)
+        => Enum.TryParse<ToolDangerLevel>(s, out var v) ? v : ToolDangerLevel.Danger;
 }

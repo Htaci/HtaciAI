@@ -13,10 +13,10 @@ public sealed class ScriptToolExecutor
     private readonly PythonScriptRunner _python = new();
     private readonly NodeScriptRunner _node = new();
 
-    public async Task<string> ExecuteAsync(ToolDefinition tool, ChatToolCall call, CancellationToken ct)
+    public async Task<ToolExecution> ExecuteAsync(ToolDefinition tool, ChatToolCall call, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(tool.Target))
-            return "工具配置错误：缺少脚本路径";
+            return ToolExecution.Fail("工具配置错误：缺少脚本路径");
 
         var runner = tool.Runtime switch
         {
@@ -25,13 +25,13 @@ public sealed class ScriptToolExecutor
             _ => null,
         };
         if (runner is null)
-            return $"暂不支持的运行时：{tool.Runtime}";
+            return ToolExecution.Fail($"暂不支持的运行时：{tool.Runtime}");
 
         var result = await runner.RunAsync(tool.Target, call.Arguments ?? "{}", ct);
         if (result.Success)
-            return string.IsNullOrWhiteSpace(result.Output) ? "（脚本无输出）" : result.Output;
+            return ToolExecution.Ok(string.IsNullOrWhiteSpace(result.Output) ? "（脚本无输出）" : result.Output);
 
         var reason = string.IsNullOrWhiteSpace(result.Error) ? $"退出码非 0：{result.CommandLine}" : result.Error;
-        return $"脚本执行失败：{reason}";
+        return ToolExecution.Fail($"脚本执行失败：{reason}");
     }
 }

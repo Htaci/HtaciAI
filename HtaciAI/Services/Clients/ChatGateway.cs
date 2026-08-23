@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Models;
+using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Services;
 
@@ -83,6 +85,9 @@ public sealed class ChatGateway
         var aiTurnId = await ChatRepository.GetNextTurnIdAsync(sessionId);
         ChatMessage? final = null;
 
+        // 每轮用户消息重置工具状态（本轮已读取文件等）
+        tools?.BeginTurn();
+
         for (var round = 0; round < MaxToolRounds; round++)
         {
             var assistantMsg = new ChatMessage
@@ -132,16 +137,31 @@ public sealed class ChatGateway
 
             // —— 执行工具并追加 tool 结果 ——
             if (tools is null) break;
-            foreach (var call in result.ToolCalls)
+            var toolCalls = result.ToolCalls.ToList();
+            foreach (var call in toolCalls)
             {
+                var exec = await tools.ExecuteAsync(call, ct);
+                var toolName = call.Name ?? "";
                 string toolContent;
-                try
+
+                if (!exec.Success && toolName != "invalid")
                 {
-                    toolContent = await tools.ExecuteAsync(call, ct);
+                    // 失败：把该 assistant 的 tool_call 原地替换为 invalid（复用原 id，避免破坏工具调用协议）。
+                    var invalidCall = new ChatToolCall
+                    {
+                        Id = call.Id,
+                        Name = "invalid",
+                        Arguments = JsonSerializer.Serialize(new { tool = toolName, error = exec.Error }),
+                    };
+                    ReplaceCall(toolCalls, call.Id, invalidCall);
+                    assistantMsg.Metadata = ToolCallJson.Serialize(toolCalls);
+                    await ChatRepository.UpdateMessageAsync(assistantMsg);
+                    toolName = "invalid";
+                    toolContent = BuiltinToolExecutor.FormatInvalidError(invalidCall);
                 }
-                catch (Exception ex)
+                else
                 {
-                    toolContent = "工具执行失败：" + ex.Message;
+                    toolContent = exec.Display;
                 }
 
                 var toolMsg = new ChatMessage
@@ -153,7 +173,7 @@ public sealed class ChatGateway
                     Role = "tool",
                     Content = toolContent,
                     ToolCallId = call.Id,
-                    ToolName = call.Name,
+                    ToolName = toolName,
                     Status = "completed",
                     CreatedAt = now,
                     UpdatedAt = now,
@@ -164,6 +184,13 @@ public sealed class ChatGateway
         }
 
         return new ChatTurnResult(userMsg, final, true, null);
+    }
+
+    /// <summary>在 tool_calls 列表中把指定 id 的调用替换为新调用（失败时替换为 invalid）。</summary>
+    private static void ReplaceCall(List<ChatToolCall> calls, string? id, ChatToolCall replacement)
+    {
+        var idx = calls.FindIndex(c => c.Id == id);
+        if (idx >= 0) calls[idx] = replacement;
     }
 
     /// <summary>

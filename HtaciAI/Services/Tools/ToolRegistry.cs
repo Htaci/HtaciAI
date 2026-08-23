@@ -26,9 +26,10 @@ public sealed class ToolRegistry
     private ToolRegistry()
     {
         RegisterToolset(Toolset.Default);
+        RegisterBuiltins();
     }
 
-    /// <summary>从数据库加载工具集与工具到内存（替换当前内容；默认集兜底）。</summary>
+    /// <summary>从数据库加载工具集与工具到内存（替换当前内容；默认集兜底），再补注册内置工具。</summary>
     public async Task LoadFromDbAsync()
     {
         _toolsets.Clear();
@@ -42,6 +43,15 @@ public sealed class ToolRegistry
             RegisterToolset(Toolset.Default);
 
         foreach (var tool in await ToolRepository.GetAllAsync())
+            Register(tool);
+
+        RegisterBuiltins();
+    }
+
+    /// <summary>注册内置工具（幂等：同名 id 覆盖为内存定义，不入库）。</summary>
+    public void RegisterBuiltins()
+    {
+        foreach (var tool in BuiltinTools.GetAll())
             Register(tool);
     }
 
@@ -167,7 +177,7 @@ public sealed class ToolRegistry
 
     public IReadOnlyList<ToolDefinition> GetAll() => _byId.Values.ToList();
 
-    public IReadOnlyList<ToolDefinition> GetEnabled() => _byId.Values.Where(t => t.Enabled).ToList();
+    public IReadOnlyList<ToolDefinition> GetEnabled() => _byId.Values.Where(t => t.Enabled && !t.IsInternal).ToList();
 
     public ToolDefinition? ResolveById(string id)
         => _byId.TryGetValue(id, out var t) ? t : null;
@@ -186,7 +196,7 @@ public sealed class ToolRegistry
         foreach (var id in ids)
         {
             if (!seen.Add(id)) continue;
-            if (_byId.TryGetValue(id, out var t) && t.Enabled)
+            if (_byId.TryGetValue(id, out var t) && t.Enabled && !t.IsInternal)
                 result.Add(t);
         }
         return result;
@@ -197,7 +207,7 @@ public sealed class ToolRegistry
     {
         if (!_toolsetMembers.TryGetValue(toolsetId, out var ids))
             return Array.Empty<ToolDefinition>();
-        return ids.Where(id => _byId.TryGetValue(id, out var t) && t.Enabled)
+        return ids.Where(id => _byId.TryGetValue(id, out var t) && t.Enabled && !t.IsInternal)
                   .Select(id => _byId[id])
                   .ToList();
     }

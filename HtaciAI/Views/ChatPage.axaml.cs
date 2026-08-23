@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Animation;
@@ -75,6 +76,8 @@ public partial class ChatPage : UserControl
             Title = text.Length > 24 ? text[..24] + "…" : text,
             Model = nv.SelectedModel?.ModelName ?? ChatConfig.Model,
             Thinking = (int)nv.ThinkingMode,
+            EnabledSkills = nv.SelectedSkills.ToList(),
+            ToolPermissionMode = nv.SelectedPermissionMode,
         };
         await ChatRepository.CreateAsync(session);
         _currentSessionId = session.Id;

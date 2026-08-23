@@ -30,8 +30,7 @@
                          PlaceholderText="在这里输入你的问题，Enter 发送，Shift+Enter 换行"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
-                         BorderThickness="0"
-                         KeyDown="OnInputKeyDown"/>
+                         BorderThickness="0"/>
 
                     <!-- 功能栏 -->
                     <Grid VerticalAlignment="Bottom"
@@ -113,6 +112,32 @@
                             <!-- 工具库（可复用控件 ToolSelectorControl） -->
                             <controls:ToolSelectorControl x:Name="ToolSelector"
                                                           Margin="5"/>
+                            <!-- 技能库（可复用控件 SkillSelectorControl） -->
+                            <controls:SkillSelectorControl x:Name="SkillSelector"
+                                                           Margin="5"/>
+                            <!-- 权限模式（严格/普通/宽松/自由） -->
+                            <Button x:Name="PermModeBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                Margin="5">
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <MenuItem Header="严格（所有工具需确认）" Tag="Strict"/>
+                                        <MenuItem Header="普通（安全工具自动）" Tag="Normal"/>
+                                        <MenuItem Header="宽松（安全/风险自动）" Tag="Loose"/>
+                                        <MenuItem Header="自由（所有工具免确认）" Tag="Free"/>
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                                <TextBlock x:Name="PermModeIcon"
+                                           Text="&#xea18;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
                         </StackPanel>
                         
                     </Grid>

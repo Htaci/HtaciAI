@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Models;
 
@@ -28,4 +29,7 @@ public class ChatSession
 
     /// <summary>实际对话请求时间（用户最后发消息）的 unix 毫秒；配置变更不更新它，用于会话排序。</summary>
     public long? LastMessageAt { get; set; }
+
+    /// <summary>会话独立的工具权限审批档位（严格/普通/宽松/自由），重开会话时恢复。</summary>
+    public PermissionMode ToolPermissionMode { get; set; } = PermissionMode.Normal;
 }

@@ -100,6 +100,20 @@ public static class DatabaseService
             version = 6;
             SetVersion(conn, version);
         }
+
+        if (version < 7)
+        {
+            RunMigrationV7(conn);
+            version = 7;
+            SetVersion(conn, version);
+        }
+
+        if (version < 8)
+        {
+            RunMigrationV8(conn);
+            version = 8;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -282,6 +296,22 @@ public static class DatabaseService
             ALTER TABLE chat_sessions ADD COLUMN enabled_tool_ids TEXT;
             ALTER TABLE chat_sessions ADD COLUMN last_message_at INTEGER;
             """;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>工具权限等级：tool_tools 增加 danger_level（缺省 Danger，兼容旧行）。</summary>
+    private static void RunMigrationV7(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "ALTER TABLE tool_tools ADD COLUMN danger_level TEXT NOT NULL DEFAULT 'Danger';";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>会话级工具权限档位：chat_sessions 增加 permission_mode（0=严格 1=普通 2=宽松 3=自由，缺省普通）。</summary>
+    private static void RunMigrationV8(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "ALTER TABLE chat_sessions ADD COLUMN permission_mode INTEGER NOT NULL DEFAULT 1;";
         cmd.ExecuteNonQuery();
     }
 }

@@ -204,7 +204,11 @@ public partial class ToolsPage : UserControl
 
     private Border CreateToolCard(ToolDefinition tool)
     {
-        var runtimeText = tool.Runtime == ScriptRuntimeKind.Node ? "Node.js" : "Python";
+        var runtimeText = tool.Source == ToolSource.Builtin ? "内置"
+            : tool.Runtime == ScriptRuntimeKind.Node ? "Node.js" : "Python";
+
+        var levelBadge = BuildLevelBadge(tool.DangerLevel);
+
         var nameRow = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -231,7 +235,8 @@ public partial class ToolsPage : UserControl
                         FontSize = 10.5,
                         Foreground = new SolidColorBrush(Color.Parse("#3A7BC8"))
                     }
-                }
+                },
+                levelBadge,
             }
         };
         var descBlock = new TextBlock
@@ -295,6 +300,30 @@ public partial class ToolsPage : UserControl
             Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
+        };
+    }
+
+    /// <summary>权限等级小标签：安全=绿 / 风险=橙 / 危险=红。</summary>
+    private static Border BuildLevelBadge(ToolDangerLevel level)
+    {
+        var (color, text) = level switch
+        {
+            ToolDangerLevel.Safe => ("#16A34A", "安全"),
+            ToolDangerLevel.Risk => ("#D97706", "风险"),
+            _ => ("#DC2626", "危险"),
+        };
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.Parse(color)),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(6, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = text,
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(Color.Parse("#FFFFFF")),
+            },
         };
     }
 }
