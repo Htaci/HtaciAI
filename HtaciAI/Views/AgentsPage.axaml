@@ -1,0 +1,256 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="600"
+             x:Class="HtaciAI.Views.AgentsPage">
+    <Grid ColumnDefinitions="280,*">
+        <!-- ====== 左侧：Agent 列表 ====== -->
+        <Border Grid.Column="0"
+                Background="#99F9FAFB"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,0,1,0">
+            <Grid RowDefinitions="Auto,*"
+                  Margin="12,16">
+                <Grid Grid.Row="0"
+                      ColumnDefinitions="*,Auto">
+                    <TextBlock Text="Agent"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="#1A1A2E"
+                               VerticalAlignment="Center"
+                               Margin="12,0,0,12"/>
+                    <Border x:Name="AddAgentBtn"
+                            Grid.Column="1"
+                            Width="32"
+                            Height="32"
+                            CornerRadius="8"
+                            Background="Transparent"
+                            Margin="0,0,4,8"
+                            Cursor="Arrow">
+                        <TextBlock Text="&#xe710;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="14"
+                                   Foreground="#1A1A2E"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
+                <ScrollViewer Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="AgentList"
+                                Spacing="2"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- ====== 右侧：Agent 配置表单 ====== -->
+        <Grid x:Name="ConfigRoot"
+              Grid.Column="1"
+              RowDefinitions="Auto,*"
+              Margin="24,20"
+              IsVisible="False">
+            <!-- 顶部：标题 + 操作按钮 -->
+            <Grid Grid.Row="0"
+                  ColumnDefinitions="*,Auto"
+                  Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock x:Name="DetailTitle"
+                               Text="Agent 配置"
+                               FontSize="20"
+                               FontWeight="Bold"
+                               Foreground="#1A1A2E"/>
+                    <TextBlock x:Name="DetailDesc"
+                               Text="配置一个可复用的智能体：提示词 + 默认工具 / 技能 / MCP"
+                               FontSize="12"
+                               Foreground="#9CA3AF"
+                               Margin="0,4,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            VerticalAlignment="Center">
+                    <Border x:Name="EditBtn"
+                            Height="36"
+                            CornerRadius="18"
+                            Background="#1A1A2E"
+                            Padding="16,0"
+                            VerticalAlignment="Center"
+                            Cursor="Arrow">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="8"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="&#xe70f;"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="13"
+                                       Foreground="#FFFFFF"/>
+                            <TextBlock Text="编辑"
+                                       FontSize="13"
+                                       Foreground="#FFFFFF"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="DeleteBtn"
+                            Height="36"
+                            CornerRadius="18"
+                            Background="#FEE2E2"
+                            Padding="16,0"
+                            VerticalAlignment="Center"
+                            Cursor="Arrow"
+                            IsVisible="False">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="8"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="&#xe74d;"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="13"
+                                       Foreground="#DC2626"/>
+                            <TextBlock Text="删除"
+                                       FontSize="13"
+                                       Foreground="#DC2626"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="SaveBtn"
+                            Height="36"
+                            CornerRadius="18"
+                            Background="#1A1A2E"
+                            Padding="16,0"
+                            VerticalAlignment="Center"
+                            Cursor="Arrow"
+                            IsVisible="False">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="8"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="&#xe74e;"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="13"
+                                       Foreground="#FFFFFF"/>
+                            <TextBlock Text="保存"
+                                       FontSize="13"
+                                       Foreground="#FFFFFF"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="CancelBtn"
+                            Height="36"
+                            CornerRadius="18"
+                            Background="#F3F4F6"
+                            Padding="16,0"
+                            VerticalAlignment="Center"
+                            Cursor="Arrow"
+                            IsVisible="False">
+                        <TextBlock Text="取消"
+                                   FontSize="13"
+                                   Foreground="#374151"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+            <ScrollViewer Grid.Row="1"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="16"
+                            Margin="0,0,24,24">
+                    <!-- 名称 -->
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="名称"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#374151"/>
+                        <TextBox x:Name="NameBox"
+                                 CornerRadius="8"
+                                 FontSize="14"
+                                 Padding="12,10"
+                                 BorderBrush="#E5E7EB"/>
+                    </StackPanel>
+                    <!-- 描述 -->
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="描述"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#374151"/>
+                        <TextBox x:Name="DescBox"
+                                 CornerRadius="8"
+                                 FontSize="14"
+                                 Padding="12,10"
+                                 BorderBrush="#E5E7EB"/>
+                    </StackPanel>
+                    <!-- 系统提示词 -->
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="系统提示词（描述 AI 该怎么干活，不可被工作区 / 会话复写）"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#374151"/>
+                        <TextBox x:Name="PromptBox"
+                                 CornerRadius="8"
+                                 FontSize="13"
+                                 Padding="12,10"
+                                 BorderBrush="#E5E7EB"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 MinHeight="200"
+                                 FontFamily="Consolas"/>
+                    </StackPanel>
+                    <!-- 默认启用的工具 -->
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="默认启用的工具"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#374151"/>
+                        <Border CornerRadius="10"
+                                Background="#FFFFFF"
+                                BorderBrush="#E5E7EB"
+                                BorderThickness="1"
+                                Padding="12,10">
+                            <ScrollViewer MaxHeight="160"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel x:Name="ToolsHost"
+                                            Spacing="6"/>
+                            </ScrollViewer>
+                        </Border>
+                    </StackPanel>
+                    <!-- 默认启用的技能 -->
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="默认启用的技能"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#374151"/>
+                        <Border CornerRadius="10"
+                                Background="#FFFFFF"
+                                BorderBrush="#E5E7EB"
+                                BorderThickness="1"
+                                Padding="12,10">
+                            <ScrollViewer MaxHeight="160"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel x:Name="SkillsHost"
+                                            Spacing="6"/>
+                            </ScrollViewer>
+                        </Border>
+                    </StackPanel>
+                    <!-- MCP -->
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="MCP 服务器 id（每行一个，预留）"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#374151"/>
+                        <TextBox x:Name="McpBox"
+                                 CornerRadius="8"
+                                 FontSize="13"
+                                 Padding="12,10"
+                                 BorderBrush="#E5E7EB"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 MinHeight="72"
+                                 FontFamily="Consolas"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

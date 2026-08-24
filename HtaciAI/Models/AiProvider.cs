@@ -2,10 +2,14 @@ using System;
 
 namespace HtaciAI.Models;
 
-/// <summary>服务商使用的 API 协议类型。当前仅支持 OpenAI(Ex) API。</summary>
+/// <summary>
+/// 服务商使用的 API 协议类型。
+/// OpenAIEx：OpenAI /chat/completions 兼容协议；LMStudio：LM Studio（本地推理，OpenAI 兼容但思考/强度字段不同）。
+/// </summary>
 public enum ModelProtocol
 {
     OpenAIEx,
+    LMStudio,
 }
 
 /// <summary>服务商（ai_provider 表）。一个服务商包含若干模型。</summary>

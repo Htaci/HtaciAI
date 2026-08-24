@@ -55,7 +55,8 @@
                       Grid.Row="0"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="MessagesPanel" Spacing="12" Margin="34,20"/>
+            <!-- 透明背景：让消息之间的空白也能命中，供 SelectionManager 处理空白按下起选 -->
+            <StackPanel x:Name="MessagesPanel" Spacing="12" Margin="34,20" Background="Transparent"/>
         </ScrollViewer>
 
 

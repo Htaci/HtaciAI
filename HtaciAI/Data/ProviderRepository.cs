@@ -134,11 +134,13 @@ public static class ProviderRepository
     private static string MapProtocol(ModelProtocol p) => p switch
     {
         ModelProtocol.OpenAIEx => "OpenAIEx",
+        ModelProtocol.LMStudio => "LMStudio",
         _ => "OpenAIEx",
     };
 
     private static ModelProtocol ParseProtocol(string s) => s switch
     {
+        "LMStudio" => ModelProtocol.LMStudio,
         "OpenAIEx" => ModelProtocol.OpenAIEx,
         _ => ModelProtocol.OpenAIEx,
     };
@@ -147,6 +149,7 @@ public static class ProviderRepository
     {
         ThinkingFieldKind.Think => "think",
         ThinkingFieldKind.EnableThinking => "enable_thinking",
+        ThinkingFieldKind.ReasoningEffort => "reasoning_effort",
         _ => "none",
     };
 
@@ -154,6 +157,7 @@ public static class ProviderRepository
     {
         "think" => ThinkingFieldKind.Think,
         "enable_thinking" => ThinkingFieldKind.EnableThinking,
+        "reasoning_effort" => ThinkingFieldKind.ReasoningEffort,
         _ => ThinkingFieldKind.None,
     };
 }

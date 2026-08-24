@@ -144,20 +144,32 @@ public sealed class ChatGateway
                 var toolName = call.Name ?? "";
                 string toolContent;
 
-                if (!exec.Success && toolName != "invalid")
+                if (!exec.Success)
                 {
-                    // 失败：把该 assistant 的 tool_call 原地替换为 invalid（复用原 id，避免破坏工具调用协议）。
-                    var invalidCall = new ChatToolCall
+                    if (exec.IsUnknownTool)
                     {
-                        Id = call.Id,
-                        Name = "invalid",
-                        Arguments = JsonSerializer.Serialize(new { tool = toolName, error = exec.Error }),
-                    };
-                    ReplaceCall(toolCalls, call.Id, invalidCall);
-                    assistantMsg.Metadata = ToolCallJson.Serialize(toolCalls);
-                    await ChatRepository.UpdateMessageAsync(assistantMsg);
-                    toolName = "invalid";
-                    toolContent = BuiltinToolExecutor.FormatInvalidError(invalidCall);
+                        // 未解析工具（模型幻觉出不存在的工具名，或调用了被禁用工具）：收敛到哨兵 invalid。
+                        // invalid 始终注册、始终可执行，且从不进模型的 tools 数组（内部工具），
+                        // 因此只作为服务端兜底被解析执行。保留原 id 以便与 tool 结果配对，
+                        // 把原始工具名与错误塞进参数，返回一条可执行的错误 tool-result，循环不断裂。
+                        var invalidCall = new ChatToolCall
+                        {
+                            Id = call.Id,
+                            Name = "invalid",
+                            Arguments = JsonSerializer.Serialize(new { tool = call.Name ?? "", error = exec.Error }),
+                        };
+                        ReplaceCall(toolCalls, call.Id, invalidCall);
+                        assistantMsg.Metadata = ToolCallJson.Serialize(toolCalls);
+                        await ChatRepository.UpdateMessageAsync(assistantMsg);
+                        toolName = "invalid";
+                        toolContent = BuiltinToolExecutor.FormatInvalidError(invalidCall);
+                    }
+                    else
+                    {
+                        // 真实工具运行失败：工具存在且已执行，保持原始 tool_call 不变，
+                        // 把错误作为该工具结果反馈，模型据此重试并可继续工具循环。
+                        toolContent = $"工具「{toolName}」调用失败：{exec.Error}";
+                    }
                 }
                 else
                 {
@@ -186,7 +198,7 @@ public sealed class ChatGateway
         return new ChatTurnResult(userMsg, final, true, null);
     }
 
-    /// <summary>在 tool_calls 列表中把指定 id 的调用替换为新调用（失败时替换为 invalid）。</summary>
+    /// <summary>在 tool_calls 列表中把指定 id 的调用替换为新调用（未解析工具时替换为 invalid）。</summary>
     private static void ReplaceCall(List<ChatToolCall> calls, string? id, ChatToolCall replacement)
     {
         var idx = calls.FindIndex(c => c.Id == id);

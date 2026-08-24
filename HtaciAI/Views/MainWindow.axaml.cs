@@ -26,6 +26,7 @@ public partial class MainWindow : Window
         var newTabPage = new NewTabPage();
         newTabPage.SmartChatSelected += OnSmartChatSelected;
         newTabPage.WorkspaceSelected += OnWorkspaceSelected;
+        newTabPage.AgentSelected += OnAgentSelected;
         newTabPage.ToolsSelected += OnToolsSelected;
         newTabPage.SkillsSelected += OnSkillsSelected;
         AddTab("新标签页", newTabPage);
@@ -59,6 +60,23 @@ public partial class MainWindow : Window
 
             _tabContents[index] = new WorkspacePage();
             _tabTitleBlocks[index].Text = "工作空间";
+
+            if (index == GetSelectedIndex())
+                TabContent.Content = _tabContents[index];
+        }
+    }
+
+    private void OnAgentSelected(object? sender, System.EventArgs e)
+    {
+        if (sender is NewTabPage newTabPage)
+        {
+            newTabPage.AgentSelected -= OnAgentSelected;
+
+            var index = _tabContents.IndexOf(newTabPage);
+            if (index < 0) return;
+
+            _tabContents[index] = new AgentsPage();
+            _tabTitleBlocks[index].Text = "Agent";
 
             if (index == GetSelectedIndex())
                 TabContent.Content = _tabContents[index];

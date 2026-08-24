@@ -89,7 +89,7 @@
                                FontWeight="SemiBold"
                                Foreground="#374151"/>
                     <ComboBox x:Name="ThinkingCombo" Height="34" CornerRadius="6"/>
-                    <TextBlock Text="think：thinking: enabled/disabled；enable_thinking：true/false；none：不支持该字段"
+                    <TextBlock Text="think：thinking: enabled/disabled；enable_thinking：true/false；reasoning_effort：LM Studio 控制强度；none：不支持该字段"
                                FontSize="11"
                                Foreground="#9CA3AF"
                                TextWrapping="Wrap"/>

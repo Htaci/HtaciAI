@@ -29,7 +29,7 @@ public sealed class OpenAiExClient : IChatClient
     private readonly string _endpoint;
     private readonly string _apiKey;
     private readonly string _model;
-    private readonly ThinkingFieldKind _thinkingField;   // think / enable_thinking / none
+    private readonly ThinkingFieldKind _thinkingField;   // think / enable_thinking / reasoning_effort / none
     private readonly string _effortField;                // "reasoning_effort"（OpenAI 官方字段）
 
     public string ModelName => _model;
@@ -125,14 +125,18 @@ public sealed class OpenAiExClient : IChatClient
             if (delta.TryGetProperty("tool_call_id", out var tci) && tci.ValueKind == JsonValueKind.String)
                 toolCallId = tci.GetString();
 
-            // reasoning_content：思考内容
-            if (delta.TryGetProperty("reasoning_content", out var rc) && rc.ValueKind == JsonValueKind.String)
+            // 思考内容：LM Studio（gpt-oss）从 delta.reasoning 输出，DeepSeek R1 从 reasoning_content 输出。
+            // 两字段都检查，哪个有内容用哪个（多数实现只下发其一，安全性不受影响；对象形态会被忽略）。
+            foreach (var key in new[] { "reasoning_content", "reasoning" })
             {
-                var text = rc.GetString();
-                if (!string.IsNullOrEmpty(text))
+                if (delta.TryGetProperty(key, out var rc) && rc.ValueKind == JsonValueKind.String)
                 {
-                    thinkingSb.Append(text);
-                    onThinking?.Invoke(text);
+                    var text = rc.GetString();
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        thinkingSb.Append(text);
+                        onThinking?.Invoke(text);
+                    }
                 }
             }
 
@@ -211,15 +215,15 @@ public sealed class OpenAiExClient : IChatClient
                 break;
             case ThinkingMode.Low:
                 WriteThinkingToggle(body, enabled: true);
-                body[_effortField] = "low";
+                body[_effortField] = MapEffort("low");
                 break;
             case ThinkingMode.High:
                 WriteThinkingToggle(body, enabled: true);
-                body[_effortField] = "high";
+                body[_effortField] = MapEffort("high");
                 break;
             case ThinkingMode.Max:
                 WriteThinkingToggle(body, enabled: true);
-                body[_effortField] = "max";
+                body[_effortField] = MapEffort("max");
                 break;
             default:
                 // ThinkingMode.Default（none）：不填，走模型默认
@@ -260,7 +264,7 @@ public sealed class OpenAiExClient : IChatClient
             return new { type = "object", properties = new Dictionary<string, object>() };
         }
 
-        // 思考开关按服务商声明的字段写法下发；None 时无法下发开关，仅靠强度字段
+        // 思考开关按服务商声明的字段写法下发；None/ReasoningEffort 不写开关对象。
         void WriteThinkingToggle(Dictionary<string, object?> body, bool enabled)
         {
             switch (_thinkingField)
@@ -273,10 +277,20 @@ public sealed class OpenAiExClient : IChatClient
                 case ThinkingFieldKind.EnableThinking:
                     body["enable_thinking"] = enabled;
                     break;
+                case ThinkingFieldKind.ReasoningEffort:
+                    // LM Studio：OpenAI 兼容 /v1/chat/completions 无 thinking 开关对象，仅靠顶层 reasoning_effort 控制强度。
+                    break;
                 default:
                     break;
             }
         }
+
+        // 强度值收敛：LM Studio 的 reasoning_effort 只认 low/medium/high，没有 max；
+        // 应用侧最高档 max 收敛到 high 避免服务端 400，其余协议原样透传。
+        string MapEffort(string requested)
+            => _thinkingField == ThinkingFieldKind.ReasoningEffort && requested == "max"
+                ? "high"
+                : requested;
     }
 
     /// <summary>从历史消息重建 OpenAI 格式消息数组（system 独立前置，不进 history）。</summary>

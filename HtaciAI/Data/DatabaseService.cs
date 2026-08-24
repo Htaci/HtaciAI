@@ -114,6 +114,27 @@ public static class DatabaseService
             version = 8;
             SetVersion(conn, version);
         }
+
+        if (version < 9)
+        {
+            RunMigrationV9(conn);
+            version = 9;
+            SetVersion(conn, version);
+        }
+
+        if (version < 10)
+        {
+            RunMigrationV10(conn);
+            version = 10;
+            SetVersion(conn, version);
+        }
+
+        if (version < 11)
+        {
+            RunMigrationV11(conn);
+            version = 11;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -312,6 +333,84 @@ public static class DatabaseService
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "ALTER TABLE chat_sessions ADD COLUMN permission_mode INTEGER NOT NULL DEFAULT 1;";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>自定义智能体蓝图：agents 表（系统提示词 + 默认工具/技能/MCP，均为 JSON 数组列）。</summary>
+    private static void RunMigrationV9(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS agents (
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                description      TEXT,
+                system_prompt    TEXT,
+                enabled_tool_ids TEXT,
+                enabled_skills   TEXT,
+                mcp_servers      TEXT,
+                is_enabled       INTEGER NOT NULL DEFAULT 1,
+                created_at       INTEGER NOT NULL,
+                updated_at       INTEGER NOT NULL
+            );
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>工作空间（持久化）：agent_id 活引用 + 系统提示词 + 默认工具/技能/MCP + 权限档位。</summary>
+    private static void RunMigrationV10(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                description      TEXT,
+                path             TEXT,
+                agent_id         TEXT,
+                system_prompt    TEXT,
+                enabled_tool_ids TEXT,
+                enabled_skills   TEXT,
+                mcp_servers      TEXT,
+                permission_mode  INTEGER NOT NULL DEFAULT 1,
+                created_at       INTEGER NOT NULL,
+                updated_at       INTEGER NOT NULL
+            );
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>工作区会话（持久化）：归属于工作区，继承 Agent/工作区配置；含会话级提示词与草稿。</summary>
+    private static void RunMigrationV11(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS workspace_sessions (
+                id               TEXT PRIMARY KEY,
+                workspace_id     TEXT NOT NULL,
+                agent_id         TEXT,
+                title            TEXT NOT NULL,
+                model            TEXT,
+                thinking         INTEGER NOT NULL DEFAULT 0,
+                session_prompt   TEXT,
+                enabled_tool_ids TEXT,
+                enabled_skills   TEXT,
+                mcp_servers      TEXT,
+                permission_mode  INTEGER NOT NULL DEFAULT 1,
+                draft            TEXT,
+                last_message_at  INTEGER,
+                is_deleted       INTEGER NOT NULL DEFAULT 0,
+                deleted_at       INTEGER,
+                created_at       INTEGER NOT NULL,
+                updated_at       INTEGER NOT NULL
+            );
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
         cmd.ExecuteNonQuery();
     }
 }

@@ -26,50 +26,67 @@ using HtaciAI.Services.Tools;
 namespace HtaciAI.Views;
 
 /// <summary>
-/// 会话对话视图：消息列表（ScrollViewer>StackPanel）+ 底部输入框 + DeepSeek 流式回复。
-/// AI 消息为三段式：模型信息头（头像/名称|服务商/时间）+ 可折叠思考卡片 + 正文。
+/// 工作区会话专属聊天视图：渲染层与 <see cref="ChatView"/> 完全一致
+/// （可折叠思考卡、输入/输出工具卡、模型头、复制/编辑/删除 + Tokens 汇总），
+/// 但作为单独维护的变体——读写 workspace_sessions、用 <see cref="WorkspaceAgentPipeline"/>
+/// 组装三层提示词、会话直接创建、输入草稿防抖落库。消息仍复用 chat_message 表。
 /// </summary>
-public partial class ChatView : UserControl
+public partial class WorkspaceChatView : UserControl
 {
-    private readonly string? _sessionId;
-    private ChatSession _session = new();
+    private readonly WorkspaceConfig _workspace;
+    private readonly Agent? _agent;
+    private WorkspaceChatSession _session;
     private readonly List<ChatMessage> _messages = new();
     private readonly ChatGateway _gateway = new();
     private readonly ToolExecutorDispatcher _toolExecutor = new();
     private bool _busy;
     private bool _skillEventsHooked;
     private bool _toolEventsHooked;
+    private CancellationTokenSource? _draftCts;
 
-    /// <summary>当前正在流式渲染的 turn：同一 turn 只渲染一次模型头，多轮工具调用的内容追加到同一根。</summary>
     private string? _activeTurnId;
     private StackPanel? _activeTurnRoot;
-
-    /// <summary>当前 turn 内的步骤控件（思考卡 / 正文块 / 工具卡），用于回复结束后聚合进单个可折叠卡片。</summary>
     private readonly List<Control> _turnSteps = new();
     private int _turnToolCount;
     private int _turnThinkingCount;
-
-    /// <summary>当前 turn 最后一次有内容的正文控件（最终回答），聚合时保留在卡片外。</summary>
     private Control? _turnLastBody;
-
-    /// <summary>消息列表跨块文本选择协调器。</summary>
     private readonly SelectionManager _selectionManager = new();
 
-    /// <summary>当前思考模式：透传模型选择器，供外部（新建会话流程）初始化。</summary>
+    public WorkspaceChatView(WorkspaceConfig workspace, Agent? agent, WorkspaceChatSession session)
+    {
+        InitializeComponent();
+        _workspace = workspace;
+        _agent = agent;
+        _session = session;
+
+        // 消息列表跨块文本选择：统一挂一颗 SelectionManager 到 MessagesPanel
+        _selectionManager.AttachHost(MessagesPanel);
+
+        ConfigureToolExecutor();
+        InitPermissionMode();
+        LoadTools();
+        LoadSkills();
+        LoadToolsSelection();
+        RestoreDraft();
+        // 回车发送 / Shift+Enter 换行（TextBox 内部处理 Enter 时事件已 handled）
+        InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDown, handledEventsToo: true);
+        InputBox.TextChanged += (_, _) => _ = DebouncedSaveDraftAsync();
+        _ = LoadModelsAsync();
+        _ = LoadMessagesAsync();
+    }
+
+    /// <summary>会话对象（供外部读取）。</summary>
+    public WorkspaceChatSession Session => _session;
+
+    /// <summary>当前思考模式：透传模型选择器。</summary>
     public ThinkingMode ThinkingMode
     {
         get => ModelSelector.ThinkingMode;
         set => ModelSelector.ThinkingMode = value;
     }
 
-    /// <summary>当前激活的工具 id 集合：透传工具选择器，供外部（新建会话流程）初始化。</summary>
-    public IReadOnlyList<string> SelectedToolIds
-    {
-        get => ToolSelector.SelectedToolIds;
-        set => ToolSelector.SelectedToolIds = value;
-    }
+    // ---- 工具 / 技能选择器 ----
 
-    /// <summary>把注册表中的工具集与已启用工具注入工具选择器。</summary>
     private void LoadTools()
     {
         var registry = ToolRegistry.Instance;
@@ -77,7 +94,6 @@ public partial class ChatView : UserControl
         ToolSelector.Tools = registry.GetEnabled();
     }
 
-    /// <summary>把可选技能与当前会话已启用的技能注入技能选择器，并挂载变更回调（仅一次）。</summary>
     private void LoadSkills()
     {
         SkillSelector.Skills = SkillRegistry.Instance.GetEnabled();
@@ -87,15 +103,12 @@ public partial class ChatView : UserControl
         SkillSelector.SelectionChanged += async (_, _) => await SyncSkillsToSessionAsync();
     }
 
-    /// <summary>技能选择变化后回写到会话对象并落库，供下次请求构建 system 时动态生效。</summary>
     private async Task SyncSkillsToSessionAsync()
     {
         _session.EnabledSkills = SkillSelector.SelectedSkills.ToList();
-        if (_sessionId is null) return;
-        try { await ChatRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
+        await PersistSessionAsync();
     }
 
-    /// <summary>恢复会话激活的工具选择，并挂载变更回调（仅一次）。已有启用记录时才覆盖当前选择。</summary>
     private void LoadToolsSelection()
     {
         if (_session.EnabledToolIds.Count > 0)
@@ -105,58 +118,30 @@ public partial class ChatView : UserControl
         ToolSelector.SelectionChanged += async (_, _) => await SyncToolsToSessionAsync();
     }
 
-    /// <summary>工具选择变化后回写会话对象并落库，供重开会话时恢复。</summary>
     private async Task SyncToolsToSessionAsync()
     {
         _session.EnabledToolIds = ToolSelector.SelectedToolIds.ToList();
-        if (_sessionId is null) return;
-        try { await ChatRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
+        await PersistSessionAsync();
     }
 
-    /// <summary>解析当前激活的工具定义（去重后）；无激活工具时返回 null（不发送 tools）。</summary>
     private IReadOnlyList<ToolDefinition>? ResolveActiveTools()
     {
         if (ToolSelector.SelectedToolIds.Count == 0) return null;
         return ToolRegistry.Instance.ResolveByIds(ToolSelector.SelectedToolIds);
     }
 
-    /// <summary>会话标题/时间变化时触发，供 ChatPage 刷新列表。</summary>
-    public event Action? Updated;
+    // ---- 工具执行器 ----
 
-    /// <summary>无参构造函数，供 XAML 预览器/设计器使用（无会话 ID，显示加载失败提示）。</summary>
-    public ChatView() : this(null) { }
-
-    /// <param name="sessionId">为 null 时作为占位视图（工作空间页/预览器用法），显示加载失败提示，不读写数据库。</param>
-    public ChatView(string? sessionId)
-    {
-        InitializeComponent();
-        _sessionId = sessionId;
-        // 消息列表跨块文本选择：统一挂一颗 SelectionManager 到 MessagesPanel
-        _selectionManager.AttachHost(MessagesPanel);
-        // 回车发送、Shift+Enter 换行：Box 内部处理 Enter（AcceptsReturn）时 C# 事件已被标记 handled，
-        // 需注册 handledEventsToo:true 才能可靠拦截回车（否则 Enter 只在输入框内换行而不发送）。
-        InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDown, handledEventsToo: true);
-        ConfigureToolExecutor();
-        InitPermissionMode();
-        LoadTools();
-        if (_sessionId is null)
-            ShowLoadFailed();
-    }
-
-    /// <summary>配置工具执行器：审批弹窗、内置工具宿主上下文、权限档位（写自会话级配置）。</summary>
     private void ConfigureToolExecutor()
     {
         _toolExecutor.Context = new BuiltinToolContext
         {
-            BaseDirectory = Environment.CurrentDirectory,
+            BaseDirectory = string.IsNullOrWhiteSpace(_workspace.Path) ? Environment.CurrentDirectory : _workspace.Path,
             GetSessionSkills = () => Task.FromResult<List<SessionSkill>?>(_session.EnabledSkills),
             SaveSessionSkills = async skills =>
             {
                 _session.EnabledSkills = skills;
-                if (_sessionId is not null)
-                {
-                    try { await ChatRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
-                }
+                await PersistSessionAsync();
                 SkillSelector.SelectedSkills = skills;
             },
         };
@@ -168,9 +153,13 @@ public partial class ChatView : UserControl
         _toolExecutor.Mode = _session.ToolPermissionMode;
     }
 
-    // ---- 权限模式（输入框盾牌图标） ----
+    private async Task PersistSessionAsync()
+    {
+        try { await WorkspaceSessionRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
+    }
 
-    /// <summary>取得权限菜单（通过按钮 Flyout 访问，规避 x:Name 在 Flyout 上的编译歧义）。</summary>
+    // ---- 权限模式（会话级盾牌图标） ----
+
     private MenuFlyout? PermMenu => PermModeBtn.Flyout as MenuFlyout;
 
     private void InitPermissionMode()
@@ -185,15 +174,12 @@ public partial class ChatView : UserControl
         ApplyPermissionMode();
     }
 
-    /// <summary>切换权限档位：写回会话对象并按需落库（权限是会话级，非全局）。</summary>
     private async Task SetPermissionModeAsync(PermissionMode mode)
     {
         _session.ToolPermissionMode = mode;
+        _toolExecutor.Mode = mode;
         ApplyPermissionMode();
-        if (_sessionId is not null)
-        {
-            try { await ChatRepository.UpdateAsync(_session); } catch { /* 忽略 */ }
-        }
+        await PersistSessionAsync();
     }
 
     private void ApplyPermissionMode()
@@ -236,85 +222,63 @@ public partial class ChatView : UserControl
         _ => PermissionMode.Normal,
     };
 
-    /// <summary>从库加载会话与历史消息并渲染。</summary>
-    public async Task InitializeAsync()
+    // ---- 加载模型与消息 ----
+
+    private async Task LoadModelsAsync()
     {
-        if (_sessionId is null)
-        {
-            ShowLoadFailed();
-            return;
-        }
         try
         {
-            _session = await ChatRepository.GetAsync(_sessionId)
-                       ?? new ChatSession { Id = _sessionId, Title = "会话" };
-            // 模型列表：加载已启用的模型（含服务商），为空时控件内部回退内置默认模型
             ModelSelector.Models = await ModelCatalog.ListEnabledAsync();
-            // 恢复会话记录的模型选中态（按调用 id 匹配）
             if (!string.IsNullOrEmpty(_session.Model))
             {
                 var saved = ModelSelector.Models.FirstOrDefault(m => m.ModelName == _session.Model);
                 if (saved is not null)
                     ModelSelector.SelectedModel = saved;
             }
-            LoadSkills();
-            LoadToolsSelection();
-            ApplyPermissionMode(); // 恢复会话各自保存的权限档位
-            _messages.Clear();
-            _messages.AddRange(await ChatRepository.GetBySessionAsync(_sessionId));
-            RenderHistory();
-            ScrollToEnd();
         }
-        catch (Exception ex)
+        catch
         {
-            ShowLoadFailed("加载失败：" + ex.Message);
+            // 数据库未就绪时保持内置默认模型
         }
+        // 恢复会话保存的思考模式
+        ModelSelector.ThinkingMode = (ThinkingMode)_session.Thinking;
     }
 
-    /// <summary>
-    /// 无会话 ID 或加载异常时展示错误提示，并禁用输入，避免渲染空白/崩溃。
-    /// </summary>
-    private void ShowLoadFailed(string message = "加载失败，无会话ID")
+    private async Task LoadMessagesAsync()
     {
-        MessagesPanel.Children.Clear();
-        MessagesPanel.Children.Add(new TextBlock
-        {
-            Text = message,
-            FontSize = 14,
-            Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 48, 0, 0),
-        });
-        InputBox.IsEnabled = false;
-        SendBtn.IsEnabled = false;
+        _messages.Clear();
+        _messages.AddRange(await ChatRepository.GetBySessionAsync(_session.Id));
+        RenderHistory();
+        ScrollToEnd();
     }
+
+    /// <summary>外部触发：会话标题/时间变化后由 WorkspacePage 刷新列表。返回是否已变更（仅供通知）。</summary>
+    public event Action? Updated;
+
+    // ---- 发送 ----
 
     public async Task SendMessageAsync(string text)
     {
-        if (_sessionId is null || _busy || string.IsNullOrWhiteSpace(text)) return;
+        if (_busy || string.IsNullOrWhiteSpace(text)) return;
         _busy = true;
         SendBtn.IsEnabled = false;
         InputBox.Text = "";
 
-        // 首条消息确定会话标题，并刷新 updated_at
         if (string.IsNullOrEmpty(_session.Title))
             _session.Title = text.Length > 24 ? text[..24] + "…" : text;
-        // 记录会话使用的模型调用 id（内置模型为 ChatConfig.Model）
         var selected = ModelSelector.SelectedModel;
         _session.Model = selected?.ModelName ?? ChatConfig.Model;
-        // 持久化会话激活工具，并标记本次实际对话请求时间（用于会话排序；配置文件变更不动它）
+        _session.Thinking = (int)ModelSelector.ThinkingMode;
         _session.EnabledToolIds = ToolSelector.SelectedToolIds.ToList();
         _session.LastMessageAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await ChatRepository.UpdateAsync(_session);
+        await PersistSessionAsync();
 
-        // 统一入口：网关负责 turn 管理、工具循环、消息落库与流式 UI 回调。
-        // 按当前选中模型解析客户端（未配置/不可用时回退内置默认模型），确保所选模型被真正调用。
         var client = await _gateway.ResolveClientAsync(selected?.ModelId);
+        var system = WorkspaceAgentPipeline.BuildSystemPrompt(_agent, _workspace, _session, _session.Model, _workspace.Path);
 
         await _gateway.ChatAsync(
-            _sessionId,
-            BuildSystemPrompt(),
+            _session.Id,
+            system,
             _messages,
             text,
             new ChatRequestOptions
@@ -328,12 +292,11 @@ public partial class ChatView : UserControl
             BeginAssistantRound,
             CancellationToken.None);
 
-        // 回复结束：一轮内有多次思考 / 工具调用时，把步骤收进单个可折叠卡片（最后正文保留在外）
         if (_activeTurnId is not null && _activeTurnRoot is not null)
         {
+            // 回复结束：一轮内有多次思考 / 工具调用时，把步骤收进单个可折叠卡片（最后正文保留在外）
             TurnActivityCard.TryWrap(_activeTurnRoot, _turnSteps, _turnToolCount, _turnThinkingCount, _turnLastBody);
 
-            // 在当前 turn 根追加操作栏（复制/编辑/删除 + Tokens 汇总）
             var turnAssistants = _messages
                 .Where(m => m.Role == "assistant" && m.TurnId == _activeTurnId)
                 .ToList();
@@ -341,62 +304,9 @@ public partial class ChatView : UserControl
             ScrollToEnd();
         }
 
-
         _busy = false;
         SendBtn.IsEnabled = true;
         Updated?.Invoke();
-    }
-
-    /// <summary>
-    /// 构建发送给模型的 system 提示词：在会话自带的 system_prompt 之后，动态拼接会话启用技能。
-    /// 允许自动使用（allowed）的技能只列元数据（name: description），模型按需唤醒；
-    /// 已加载（loaded）的技能将其 SKILL.md 全文注入，始终可用。手动关闭技能后下次请求不再包含。
-    /// </summary>
-    private string BuildSystemPrompt()
-    {
-        var sb = new StringBuilder();
-
-        sb.AppendLine("你是 HtaciAI（Agent），一款由 赫塔奇智能科技有限公司 研发的智能AI助手/智能体，可以完成办公协助、项目开发、答疑解惑、代理操作等很多工作。");
-
-        sb.AppendLine("遵循原则：\r\n\r\n" +
-            "严格遵守中国法律法规，拒绝回答涉及色情、暴力、政治敏感、违法犯罪等不安全内容，履行 AI 安全规范。\r\n\r\n" +
-            "默认语气风格：简洁、直接、切题。除非用户要求，否则不要使用 emoji。" +
-            "如无用户要求，尽量用 4 行以内的文字回答，不要加无关的前言后语，如果用户提示词中有明确其他语气设定，或用户喜欢其他语气风格，则按照用户要求。\r\n\r\n" +
-            "主动程度：只在被要求时主动，不要擅自行动吓到用户，如果不确定用户是否有让开始行动时，则询问用户是否要开始，直到用户明确指示开始。\r\n\r\n" +
-            "遇到敏感问题时，统一回复：“我无法回答该问题，请换个问题试试吧。”");
-
-        sb.AppendLine($"当前系统环境：{Environment.OSVersion}，模型id为： {_session.Model}");
-
-        sb.AppendLine("\r\n\r\n#========用户提示词开始========#\r\n\r\n");
-
-
-        if (!string.IsNullOrWhiteSpace(_session.SystemPrompt))
-            sb.AppendLine(_session.SystemPrompt);
-
-        sb.AppendLine("\r\n\r\n#========用户提示词结束========#\r\n\r\n");
-
-        var loadedIds = _session.EnabledSkills.Where(s => s.Status == "loaded").Select(s => s.Id).ToHashSet();      // 已加载的技能
-        var allowedIds = _session.EnabledSkills.Where(s => s.Status == "allowed").Select(s => s.Id).ToHashSet();    // 允许使用的技能
-        
-        // 1) 允许自动使用的技能：仅元数据
-        if (allowedIds.Count > 0)
-        {
-            sb.AppendLine();
-            sb.AppendLine("以下是可用技能（仅元数据，完整内容按需加载）：");
-            foreach (var skill in SkillRegistry.Instance.GetByIds(allowedIds))
-                sb.AppendLine($"{skill.Name}: {skill.Description}");
-        }
-
-        // 2) 已加载的技能：SKILL.md 全文注入
-        foreach (var skill in SkillRegistry.Instance.GetByIds(loadedIds))
-        {
-            sb.AppendLine();
-            sb.AppendLine($"<skill name=\"{skill.Name}\">");
-            sb.AppendLine(skill.Body);
-            sb.AppendLine("</skill>");
-        }
-
-        return sb.ToString();
     }
 
     /// <summary>网关回调：把一条新消息落库并加入内存列表（assistant 的 UI 已在 BeginAssistantRound 中渲染）。</summary>
@@ -410,10 +320,27 @@ public partial class ChatView : UserControl
             AddToolCallCard(m);
     }
 
-    /// <summary>
-    /// 按 turn 分组渲染历史：同一 turn 的多个 assistant / tool 消息（多轮工具调用共享同一 turn_id）
-    /// 归为一组，只渲染一次模型头。user 消息单独成组。
-    /// </summary>
+    private void OnSendClick(object? sender, RoutedEventArgs e)
+        => _ = SendFromInputAsync();
+
+    private void OnInputKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            e.Handled = true;
+            _ = SendFromInputAsync();
+        }
+    }
+
+    private async Task SendFromInputAsync()
+    {
+        var text = InputBox.Text?.Trim();
+        if (!string.IsNullOrEmpty(text))
+            await SendMessageAsync(text);
+    }
+
+    // ---- 历史渲染（与 ChatView 一致） ----
+
     private void RenderHistory()
     {
         MessagesPanel.Children.Clear();
@@ -438,9 +365,11 @@ public partial class ChatView : UserControl
 
         foreach (var (turnId, msgs) in groups)
             RenderTurnBlock(turnId, msgs);
+
+        _activeTurnId = null;
+        _activeTurnRoot = null;
     }
 
-    /// <summary>渲染一组消息：user 气泡 + 操作栏；assistant 起头则渲染模型头 + 思考卡 + 工具卡 + 正文 + 回复操作栏。</summary>
     private void RenderTurnBlock(string? turnId, List<ChatMessage> msgs)
     {
         var first = msgs[0];
@@ -538,7 +467,6 @@ public partial class ChatView : UserControl
 
     // ---- 消息操作（复制 / 编辑 / 删除）与 Tokens 汇总 ----
 
-    /// <summary>解析 assistant 消息的 usage_json，返回 (输入, 缓存命中, 输出) token。</summary>
     private static (long Input, long Cache, long Output) ParseUsage(ChatMessage m)
     {
         if (string.IsNullOrWhiteSpace(m.UsageJson)) return (0, 0, 0);
@@ -557,7 +485,6 @@ public partial class ChatView : UserControl
         }
     }
 
-    /// <summary>构造一个仅图标的操作按钮（Segoe Fluent Icons），悬停变色。</summary>
     private Button CreateGlyphButton(string glyph, string tooltip, Action onClick, string hoverColor = "#374151")
     {
         var icon = new TextBlock
@@ -587,7 +514,6 @@ public partial class ChatView : UserControl
         return btn;
     }
 
-    /// <summary>AI 回复操作栏：左侧复制/编辑/删除，右侧 Tokens 汇总（同 turn 累加）。</summary>
     private Control CreateAiReplyOps(string turnId, IReadOnlyList<ChatMessage> assistantMsgs)
     {
         long input = 0, cache = 0, output = 0;
@@ -632,7 +558,6 @@ public partial class ChatView : UserControl
         return grid;
     }
 
-    /// <summary>用户消息操作栏：气泡下方、右对齐的复制/编辑/删除。</summary>
     private Control CreateUserOps(string messageId, string text)
     {
         var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(text));
@@ -649,7 +574,6 @@ public partial class ChatView : UserControl
         };
     }
 
-    /// <summary>用户消息块：气泡 + 其下方右对齐操作栏。</summary>
     private Control CreateUserMessageBlock(ChatMessage msg)
     {
         var stack = new StackPanel
@@ -681,48 +605,40 @@ public partial class ChatView : UserControl
         }
     }
 
-    /// <summary>软删除一轮 AI 回复（按 turn_id），确认后刷新。</summary>
     private async Task DeleteTurnAsync(string turnId)
     {
-        if (_sessionId is null) return;
         var owner = TopLevel.GetTopLevel(this) as Window;
         if (!await ConfirmDialog.ShowAsync(owner, "确定删除这段回复吗？")) return;
-        try { await ChatRepository.SoftDeleteTurnAsync(_sessionId, turnId); } catch { /* 忽略 */ }
+        try { await ChatRepository.SoftDeleteTurnAsync(_session.Id, turnId); } catch { /* 忽略 */ }
         await ReloadMessagesAsync();
     }
 
-    /// <summary>软删除一条用户消息，确认后刷新。</summary>
     private async Task DeleteMessageAsync(string messageId)
     {
-        if (_sessionId is null) return;
         var owner = TopLevel.GetTopLevel(this) as Window;
         if (!await ConfirmDialog.ShowAsync(owner, "确定删除这条消息吗？")) return;
-        try { await ChatRepository.SoftDeleteMessageAsync(_sessionId, messageId); } catch { /* 忽略 */ }
+        try { await ChatRepository.SoftDeleteMessageAsync(_session.Id, messageId); } catch { /* 忽略 */ }
         await ReloadMessagesAsync();
     }
 
-    /// <summary>从库重新加载未删除消息并按 turn 重渲染（删除后调用）。</summary>
     private async Task ReloadMessagesAsync()
     {
         _messages.Clear();
-        _messages.AddRange(await ChatRepository.GetBySessionAsync(_sessionId!));
+        _messages.AddRange(await ChatRepository.GetBySessionAsync(_session.Id));
         _activeTurnId = null;
         _activeTurnRoot = null;
         RenderHistory();
         ScrollToEnd();
     }
 
-    /// <summary>网关回调：新一轮 assistant 开始流式时创建 UI 元素并返回流式回调。</summary>
+    /// <summary>实时：新一轮 assistant 开始流式时创建 UI 元素并返回流式回调。</summary>
     private ChatRoundSink BeginAssistantRound(ChatMessage assistantMsg)
     {
         var (displayName, providerName) = ModelInfo(assistantMsg.ModelName ?? ChatConfig.Model);
 
-        // 同一 turn（含多轮工具调用）只渲染一次模型头；新 turn 或首次时新建根容器
         StackPanel root;
         if (assistantMsg.TurnId is not null && assistantMsg.TurnId == _activeTurnId && _activeTurnRoot is not null)
-        {
             root = _activeTurnRoot;
-        }
         else
         {
             root = new StackPanel
@@ -762,7 +678,6 @@ public partial class ChatView : UserControl
             },
             OnThinking = delta =>
             {
-                // 首个思考分片到达时让卡片显示，之后持续累积文本
                 if (!card.Root.IsVisible) _turnThinkingCount++;
                 card.Show();
                 card.Append(delta);
@@ -774,25 +689,6 @@ public partial class ChatView : UserControl
                 bodyParser.AppendText("请求失败：" + message);
             },
         };
-    }
-
-    private void OnSendClick(object? sender, RoutedEventArgs e)
-        => _ = SendFromInputAsync();
-
-    private void OnInputKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-        {
-            e.Handled = true;
-            _ = SendFromInputAsync();
-        }
-    }
-
-    private async Task SendFromInputAsync()
-    {
-        var text = InputBox.Text?.Trim();
-        if (!string.IsNullOrEmpty(text))
-            await SendMessageAsync(text);
     }
 
     /// <summary>按消息渲染：实时 user 气泡；历史加载走 RenderHistory 按 turn 分组，工具结果走 ToolCallCard。</summary>
@@ -835,7 +731,6 @@ public partial class ChatView : UserControl
         return (bubble, block);
     }
 
-    /// <summary>模型信息头：左侧灰色圆角头像占位，右侧竖排「模型名称 | 服务商」+ 小字灰色时间。</summary>
     private Control CreateModelHeader(string modelName, string providerName, long createdAt)
     {
         var grid = new Grid
@@ -929,10 +824,34 @@ public partial class ChatView : UserControl
         MessagesScroll.ScrollToEnd();
     }
 
-    /// <summary>
-    /// 可折叠的「已深度思考」推理卡片。点击头部展开/收起，高度与箭头均有过渡动画，
-    /// 头部悬停时背景轻微加深。思考内容较多时内容区自动出现极细灰色滚动条。
-    /// </summary>
+    // ---- 草稿（防抖落库） ----
+
+    private void RestoreDraft()
+    {
+        InputBox.Text = _session.Draft ?? "";
+    }
+
+    private async Task DebouncedSaveDraftAsync()
+    {
+        using var cts = new CancellationTokenSource(500);
+        _draftCts?.Cancel();
+        _draftCts = cts;
+        try
+        {
+            await Task.Delay(500, cts.Token);
+            _session.Draft = InputBox.Text;
+            await WorkspaceSessionRepository.SaveDraftAsync(_session.Id, _session.Draft ?? "");
+        }
+        catch (TaskCanceledException)
+        {
+            // 输入未停顿，忽略
+        }
+    }
+
+    // ============================================================
+    // 可折叠「已深度思考」卡片（与 ChatView 一致的实现）
+    // ============================================================
+
     private sealed class ThinkingCard
     {
         private const double ExpandedMaxHeight = 300;
@@ -943,15 +862,11 @@ public partial class ChatView : UserControl
         private readonly Border _header;
         private bool _expanded;
 
-        /// <summary>卡片根容器（用于控制整体显隐）。</summary>
         public Border Root { get; }
-
-        /// <summary>思考内容文本块。</summary>
         public TextBlock ContentBlock { get; }
 
         public ThinkingCard()
         {
-            // —— 头部：灯泡图标 + 「已深度思考」 + 右侧箭头 ——
             var icon = CreateLightbulbIcon(new SolidColorBrush(Color.Parse("#333333")));
 
             var title = new TextBlock
@@ -1020,7 +935,6 @@ public partial class ChatView : UserControl
                     Toggle();
             };
 
-            // —— 内容区：可展开的滚动容器 ——
             ContentBlock = new CustomSelectableTextBlock
             {
                 Text = "",
@@ -1057,7 +971,6 @@ public partial class ChatView : UserControl
                 },
             };
 
-            // —— 卡片容器 ——
             Root = new Border
             {
                 CornerRadius = new CornerRadius(10),
@@ -1073,10 +986,8 @@ public partial class ChatView : UserControl
         }
 
         public void SetText(string text) => ContentBlock.Text = text;
-
         public void Append(string text) => ContentBlock.Text += text;
 
-        /// <summary>首次收到思考内容时调用：让卡片显示出来（保持折叠态）。</summary>
         public void Show()
         {
             if (Root.IsVisible) return;
@@ -1091,10 +1002,8 @@ public partial class ChatView : UserControl
             _chevron.Angle = _expanded ? 90 : 0;
         }
 
-        /// <summary>描边风格的灯泡图标（Feather "lightbulb"），用于卡片头部。</summary>
         private static Control CreateLightbulbIcon(Brush brush)
-        {
-            return new TextBlock
+            => new TextBlock
             {
                 Text = "", // Segoe Fluent Icons：灯泡（ea80）
                 FontFamily = new FontFamily("Segoe Fluent Icons"),
@@ -1103,13 +1012,12 @@ public partial class ChatView : UserControl
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
             };
-        }
     }
 
-    /// <summary>
-    /// 可折叠的工具调用卡片：折叠态显示「{工具名} 工具」，展开显示「输入 / 输出」两段。
-    /// 交互与样式对齐 ThinkingCard。
-    /// </summary>
+    // ============================================================
+    // 可折叠「{工具名} 工具」卡片（与 ChatView 一致的实现）
+    // ============================================================
+
     private sealed class ToolCallCard
     {
         private const double ExpandedMaxHeight = 300;
@@ -1123,12 +1031,10 @@ public partial class ChatView : UserControl
         private readonly TextBlock _outputBlock;
         private bool _expanded;
 
-        /// <summary>卡片根容器（用于控制整体显隐）。</summary>
         public Border Root { get; }
 
         public ToolCallCard()
         {
-            // —— 头部：工具图标 + 「{工具名} 工具」 + 右侧箭头 ——
             var icon = new TextBlock
             {
                 Text = "", // Segoe Fluent Icons：扳手（工具）
@@ -1203,7 +1109,6 @@ public partial class ChatView : UserControl
                     Toggle();
             };
 
-            // —— 展开内容：输入 / 输出 两段 ——
             _inputBlock = new CustomSelectableTextBlock
             {
                 Text = "",

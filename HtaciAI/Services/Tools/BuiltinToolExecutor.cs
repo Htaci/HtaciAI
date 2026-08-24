@@ -469,7 +469,7 @@ public sealed class BuiltinToolExecutor
     private static ToolExecution Invalid(ChatToolCall call)
         => ToolExecution.Ok(FormatInvalidError(call));
 
-    /// <summary>按 invalid 的契约（tool / error）拼装错误反馈文本，供网关在失败时复用。</summary>
+    /// <summary>按 invalid 的契约（tool / error）拼装错误反馈文本，供内置 invalid 工具使用。</summary>
     public static string FormatInvalidError(ChatToolCall call) =>
         $"工具「{BuiltinToolContext.GetArg(call, "tool") ?? "未知"}」调用失败：{BuiltinToolContext.GetArg(call, "error") ?? "未知错误"}";
 

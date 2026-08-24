@@ -2,30 +2,29 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="540" d:DesignHeight="700"
+        mc:Ignorable="d" d:DesignWidth="560" d:DesignHeight="760"
         x:Class="HtaciAI.Views.CreateWorkspaceWindow"
         Icon="/Assets/logo.ico"
         Title="创建新工作空间"
-        Width="540" MinWidth="540" MaxWidth="540"
-        Height="700" MinHeight="700"
+        Width="560" MinWidth="560" MaxWidth="560"
+        Height="760" MinHeight="760"
         Background="#F7F8FA"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
 
-    
-        <Window.Styles>
-            <Style Selector="Window">
-                <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
-                <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
-                <Setter Property="WindowDecorations" Value="BorderOnly"/>
-                <Setter Property="CanResize" Value="True"/>
-                <Setter Property="Background">
-                    <Setter.Value>
-                        <SolidColorBrush Color="Transparent" Opacity="1"/>
-                    </Setter.Value>
-                </Setter>
-            </Style>
-        </Window.Styles>
+    <Window.Styles>
+        <Style Selector="Window">
+            <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+            <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+            <Setter Property="WindowDecorations" Value="BorderOnly"/>
+            <Setter Property="CanResize" Value="True"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <SolidColorBrush Color="Transparent" Opacity="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Styles>
 
     <Grid RowDefinitions="Auto,*,Auto">
         <!-- 标题 -->
@@ -42,7 +41,7 @@
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="14">
-                <!-- 工作空间名称 -->
+                <!-- 名称 -->
                 <StackPanel Spacing="6">
                     <TextBlock Text="工作空间名称"
                                FontSize="13"
@@ -52,7 +51,19 @@
                              Height="34"
                              Padding="10,0"
                              CornerRadius="6"
-                             PlaceholderText="未设置时默认为第一个文件夹的名称"/>
+                             PlaceholderText="未设置时默认为工作目录名称"/>
+                </StackPanel>
+
+                <!-- 描述 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="描述"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="DescBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"/>
                 </StackPanel>
 
                 <!-- 工作目录 -->
@@ -78,34 +89,99 @@
                                 <TextBlock Text="&#xe710;"
                                            FontFamily="Segoe Fluent Icons"
                                            FontSize="11"/>
-                                <TextBlock Text="添加"
-                                           FontSize="12"/>
+                                <TextBlock Text="选择" FontSize="12"/>
                             </StackPanel>
                         </Button>
                     </Grid>
-                    <StackPanel x:Name="FolderList" Spacing="2"/>
-                    <TextBlock Text="至少需要一个工作目录；未添加任何目录时默认分配临时目录"
+                    <TextBox x:Name="PathBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             IsReadOnly="True"
+                             PlaceholderText="选择 Agent 干活的项目根目录"/>
+                </StackPanel>
+
+                <!-- Agent -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Agent"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="AgentCombo"
+                              Height="34"
+                              CornerRadius="6"
+                              SelectionChanged="OnAgentChanged"/>
+                    <TextBlock Text="选择后自动带入该 Agent 的默认工具 / 技能（可在下方二次调整）"
                                FontSize="11"
                                Foreground="#9CA3AF"
                                TextWrapping="Wrap"/>
                 </StackPanel>
 
-                <!-- 默认模型 -->
+                <!-- 默认工具 -->
                 <StackPanel Spacing="6">
-                    <TextBlock Text="默认模型"
+                    <TextBlock Text="默认工具"
                                FontSize="13"
                                FontWeight="SemiBold"
                                Foreground="#374151"/>
-                    <ComboBox x:Name="ModelCombo" Height="34" CornerRadius="6"/>
+                    <Border CornerRadius="8"
+                            Background="#FFFFFF"
+                            BorderBrush="#E5E7EB"
+                            BorderThickness="1"
+                            Padding="10,8">
+                        <ScrollViewer MaxHeight="110"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="ToolsHost" Spacing="4"/>
+                        </ScrollViewer>
+                    </Border>
                 </StackPanel>
 
-                <!-- Agent 框架 -->
+                <!-- 默认技能 -->
                 <StackPanel Spacing="6">
-                    <TextBlock Text="Agent 框架"
+                    <TextBlock Text="默认技能"
                                FontSize="13"
                                FontWeight="SemiBold"
                                Foreground="#374151"/>
-                    <ComboBox x:Name="FrameworkCombo" Height="34" CornerRadius="6"/>
+                    <Border CornerRadius="8"
+                            Background="#FFFFFF"
+                            BorderBrush="#E5E7EB"
+                            BorderThickness="1"
+                            Padding="10,8">
+                        <ScrollViewer MaxHeight="110"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="SkillsHost" Spacing="4"/>
+                        </ScrollViewer>
+                    </Border>
+                </StackPanel>
+
+                <!-- MCP -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="MCP 服务器 id（每行一个，预留）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="McpBox"
+                             MinHeight="54"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             Padding="10,8"
+                             CornerRadius="6"
+                             FontFamily="Consolas"/>
+                </StackPanel>
+
+                <!-- 系统提示词 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="系统提示词（描述工作区是干什么的）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="SystemPromptBox"
+                             MinHeight="70"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             Padding="10,8"
+                             CornerRadius="6"/>
                 </StackPanel>
 
                 <!-- 默认权限模式 -->
@@ -116,42 +192,11 @@
                                Foreground="#374151"/>
                     <ComboBox x:Name="PermissionCombo"
                               Height="34"
-                              CornerRadius="6"
-                              SelectionChanged="OnPermissionChanged"/>
+                              CornerRadius="6"/>
                     <TextBlock x:Name="PermissionHint"
                                FontSize="11"
                                Foreground="#6B7280"
                                TextWrapping="Wrap"/>
-                </StackPanel>
-
-                <!-- 提示词 -->
-                <StackPanel Spacing="6">
-                    <TextBlock Text="提示词（可选）"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="#374151"/>
-                    <TextBox x:Name="PromptBox"
-                             MinHeight="80"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             Padding="10,8"
-                             CornerRadius="6"
-                             PlaceholderText="为该工作空间配置的系统提示词"/>
-                </StackPanel>
-
-                <!-- 环境变量 -->
-                <StackPanel Spacing="6">
-                    <TextBlock Text="环境变量（可选）"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="#374151"/>
-                    <TextBox x:Name="EnvVarsBox"
-                             MinHeight="60"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             Padding="10,8"
-                             CornerRadius="6"
-                             PlaceholderText="KEY=VALUE，每行一个"/>
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

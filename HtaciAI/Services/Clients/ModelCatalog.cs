@@ -56,6 +56,9 @@ public static class ModelCatalog
         {
             ModelProtocol.OpenAIEx => new OpenAiExClient(
                 details.Endpoint, details.ApiKey, details.ModelName, details.ThinkingField),
+            // LM Studio：OpenAI 兼容，但思考/强度走 reasoning_effort 而非 thinking 开关对象，固定用 ReasoningEffort。
+            ModelProtocol.LMStudio => new OpenAiExClient(
+                details.Endpoint, details.ApiKey, details.ModelName, ThinkingFieldKind.ReasoningEffort),
             _ => throw new NotSupportedException($"暂不支持协议：{details.Protocol}"),
         };
     }

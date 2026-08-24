@@ -1,0 +1,98 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="60"
+             x:Class="HtaciAI.Controls.TurnActivityCard">
+    <UserControl.Styles>
+        <!-- 卡片内容区专用：极细灰色滚动条（4px，圆角滑块） -->
+        <Style Selector="ScrollViewer.thin-scrollbar ScrollBar">
+            <Setter Property="Width" Value="4"/>
+            <Setter Property="MinWidth" Value="4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Width="4">
+                            <Rectangle Fill="Transparent"/>
+                            <Track Name="PART_Track"
+                                   Orientation="Vertical"
+                                   IsDirectionReversed="True"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value}"
+                                   ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.DecreaseButton>
+                                <Track.IncreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.IncreaseButton>
+                                <Track.Thumb>
+                                    <Thumb MinHeight="24" IsTabStop="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="#D0D0D3" CornerRadius="2" Margin="0,2"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Styles>
+
+    <Border x:Name="Card"
+            CornerRadius="10"
+            Background="#00F7F8FA"
+            BorderBrush="#ECEEF1"
+            BorderThickness="1"
+            ClipToBounds="True">
+        <StackPanel>
+            <!-- 头：汇总 + 展开箭头 -->
+            <Border x:Name="Header"
+                    Height="46"
+                    Background="Transparent"
+                    CornerRadius="10"
+                    Cursor="Hand">
+                <Grid ColumnDefinitions="Auto,*,Auto" Margin="18,0,18,0">
+                    <Border Width="20" Height="20"
+                            Margin="0,0,8,0"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="&#xe950;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="14"
+                                   Foreground="#333333"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock x:Name="HeaderText"
+                               Grid.Column="1"
+                               FontSize="13.5"
+                               FontWeight="SemiBold"
+                               Foreground="#1F1F1F"
+                               VerticalAlignment="Center"/>
+                    <TextBlock x:Name="Chevron"
+                               Grid.Column="2"
+                               Text="›"
+                               FontSize="16"
+                               Foreground="#C5C5C7"
+                               VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <!-- 内容区：可展开的步骤序列 -->
+            <ScrollViewer x:Name="ContentScroll"
+                          Classes="thin-scrollbar"
+                          MaxHeight="0"
+                          Opacity="0"
+                          Margin="18,0,18,0">
+                <StackPanel x:Name="ContentPanel" Spacing="6" Margin="0,4,0,4"/>
+            </ScrollViewer>
+        </StackPanel>
+    </Border>
+</UserControl>

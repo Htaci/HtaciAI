@@ -4,14 +4,18 @@ using System.Collections.Generic;
 namespace HtaciAI.Models;
 
 /// <summary>
-/// 思考开关字段的写法：think（{"thinking":{"type":"enabled"/"disabled"}}，DeepSeek OpenAI 兼容格式）、
-/// enable_thinking（enable_thinking:true/false）、none（不支持该开关字段）。
+/// 思考开关字段的写法：
+/// think（{"thinking":{"type":"enabled"/"disabled"}}，DeepSeek OpenAI 兼容格式）、
+/// enable_thinking（enable_thinking:true/false）、
+/// reasoning_effort（LM Studio 等：仅用顶层 reasoning_effort 控制强度，无开关对象）、
+/// none（不支持该开关字段，仅能走模型默认）。
 /// </summary>
 public enum ThinkingFieldKind
 {
     None,
     Think,
     EnableThinking,
+    ReasoningEffort,
 }
 
 /// <summary>模型（ai_model 表），隶属于某个服务商。</summary>

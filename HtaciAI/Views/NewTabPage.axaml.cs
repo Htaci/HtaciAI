@@ -12,6 +12,7 @@ public partial class NewTabPage : UserControl
 {
     public event EventHandler? SmartChatSelected;
     public event EventHandler? WorkspaceSelected;
+    public event EventHandler? AgentSelected;
     public event EventHandler? ToolsSelected;
     public event EventHandler? SkillsSelected;
 
@@ -47,6 +48,19 @@ public partial class NewTabPage : UserControl
             TagBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
             TagFg = Color.FromArgb(0xFF, 0x45, 0x5A, 0x64),
             OnClick = () => WorkspaceSelected?.Invoke(this, EventArgs.Empty)
+        }));
+
+        CardsPanel.Children.Add(CreateCard(new CardData
+        {
+            Title = "Agent 智能体",
+            Description = "自定义可复用的智能体：提示词 + 默认工具 / 技能 / MCP",
+            Tags = new[] { "Agent", "自定义" },
+            MainColor = Color.FromArgb(0xFF, 0x8B, 0x5C, 0xF6),
+            LightBg = Color.FromArgb(0xFF, 0xF3, 0xEE, 0xFD),
+            GlowAlpha = 0x22,
+            TagBg = Color.FromArgb(0xFF, 0xEF, 0xE9, 0xFC),
+            TagFg = Color.FromArgb(0xFF, 0x6B, 0x3E, 0xE0),
+            OnClick = () => AgentSelected?.Invoke(this, EventArgs.Empty)
         }));
 
         CardsPanel.Children.Add(CreateCard(new CardData

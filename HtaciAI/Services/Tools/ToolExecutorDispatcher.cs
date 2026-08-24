@@ -12,7 +12,8 @@ namespace HtaciAI.Services.Tools;
 /// 解析注册表中的工具定义，按 <see cref="ToolSource"/> 分派执行，并内嵌安全网关：
 ///  - 权限审批：按档位（<see cref="Mode"/>）与工具等级决定是否需要用户确认；
 ///  - read 前置：edit / 覆盖 write 必须在本轮已 read 过目标文件；
-///  - 失败时返回 <see cref="ToolExecution.Fail"/>，由 ChatGateway 替换为 invalid 调用。
+///  - 失败时返回 <see cref="ToolExecution.Fail"/>：未知/被禁用工具标记 <see cref="ToolExecution.IsUnknownTool"/>，
+///    由 ChatGateway 收敛为 invalid；真实工具运行失败则由网关作为该 tool_call 的失败结果反馈给模型。
 /// </summary>
 public sealed class ToolExecutorDispatcher : IToolExecutor
 {
@@ -44,17 +45,17 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
 
         var tool = _registry.ResolveByName(call.Name);
         if (tool is null)
-            return ToolExecution.Fail($"未知工具：{call.Name}");
+            return ToolExecution.FailUnknownTool($"未知工具：{call.Name}");
         if (!tool.Enabled)
-            return ToolExecution.Fail($"工具未启用：{call.Name}");
+            return ToolExecution.FailUnknownTool($"工具未启用：{call.Name}");
 
         // read 前置：edit / 覆盖 write 必须已 read
         var prereq = CheckReadPrerequisite(tool, call);
         if (prereq is not null)
             return ToolExecution.Fail(prereq);
 
-        // 权限审批
-        if (ToolPermission.RequiresApproval(tool.DangerLevel, Mode))
+        // 权限审批：内部辅助工具（invalid 等哨兵）从不进模型视野，也不应触发用户确认，直接放行。
+        if (!tool.IsInternal && ToolPermission.RequiresApproval(tool.DangerLevel, Mode))
         {
             var allowed = ApprovalGate is null ? true : await ApprovalGate(call, tool);
             if (!allowed)
