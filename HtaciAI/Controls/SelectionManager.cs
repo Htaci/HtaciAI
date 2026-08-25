@@ -16,14 +16,34 @@ namespace HtaciAI.Controls;
 /// 跨块文本选择协调器（非 UI 类）。挂到消息列表宿主上，监听未处理的指针事件：
 /// 命中测试当前悬停的 <see cref="CustomSelectableTextBlock"/>，按视觉顺序计算跨块选中范围，
 /// 通过 <see cref="CustomSelectableTextBlock.ApplySelection"/> 让各块渲染高亮。
-/// 提供 GetSelectedText / CopyAsync 用于统一复制。宿主内的 Button 会先行消费指针事件，不进入选择。
+///
+/// 性能优化（长历史不卡）：
+///  - 层级：以"每条消息/turn 的 StackPanel"为 level-1 容器，缓存其内容 Y（稳定，不随滚动变）与内部可见文本块；
+///  - 空白命中：指针内容 Y 先二分/粗筛到附近几个候选容器，再只用窗口坐标对候选容器内的少量块精确找最近块；
+///  - 只重绘区间：ApplySelectionToRange 只清除上一帧区间 + 应用新区间，不再对全部块 reset；
+///  - 块索引用字典缓存（O(1) IndexOf）。
 /// </summary>
 public sealed class SelectionManager
 {
+    private sealed class Container
+    {
+        public List<CustomSelectableTextBlock> Blocks = new();
+        public double Top;
+        public double Bottom;
+    }
+
     private Control? _host;
     private CustomSelectableTextBlock? _anchorBlock;
     private int _anchorIndex;
     private bool _selecting;
+
+    private List<Container>? _containers;
+    private List<CustomSelectableTextBlock>? _ordered;
+    private Dictionary<CustomSelectableTextBlock, int>? _orderIndex;
+    private int _prevStart = -1;
+    private int _prevEnd = -1;
+    private Point _pressPoint;
+    private const double DragThreshold = 4; // 按下后移动超过该距离才视为拖选，否则是点击（不框选）
 
     public void AttachHost(Control host)
     {
@@ -46,20 +66,28 @@ public sealed class SelectionManager
         _host.PointerWheelChanged -= OnPointerWheelChanged;
         _host.KeyDown -= OnHostKeyDown;
         _host = null;
+        _containers = null;
+        _ordered = null;
+        _orderIndex = null;
     }
 
     public void ClearSelection()
     {
-        foreach (var b in OrderedBlocks())
-            b.ApplySelection(0, 0);
+        EnsureCache();
+        if (_ordered != null)
+            foreach (var b in _ordered)
+                b.ApplySelection(0, 0);
+        _prevStart = _prevEnd = -1;
     }
 
     /// <summary>拼接所有被选中块的文本（按视觉顺序）。</summary>
     public string GetSelectedText()
     {
         if (_host == null) return "";
+        EnsureCache();
+        if (_ordered == null) return "";
         var sb = new StringBuilder();
-        foreach (var b in OrderedBlocks())
+        foreach (var b in _ordered)
         {
             var s = Math.Min(b.SelectionStart, b.SelectionEnd);
             var e = Math.Max(b.SelectionStart, b.SelectionEnd);
@@ -88,23 +116,23 @@ public sealed class SelectionManager
         if (_host == null) return;
         if (!e.GetCurrentPoint(_host).Properties.IsLeftButtonPressed) return;
 
-        var (block, index) = ResolveEndpoint(e, out var isButton);
-        var hp = e.GetPosition(_host);
-        var rp = e.GetPosition(null);
-        Log($"[Sel] 按下 host=({hp.X:F0},{hp.Y:F0}) root=({rp.X:F0},{rp.Y:F0}) isButton={isButton} 命中={HitDesc(block)} idx={index}");
-        if (isButton) return; // 按钮，放行事件（不进入选择，让按钮可点击）
+        // 每次开始选择重建层级缓存（确保含最新流式块）；拖选期间复用
+        _containers = null;
+        _ordered = null;
+        _orderIndex = null;
+        _prevStart = _prevEnd = -1;
+        _pressPoint = e.GetPosition(_host);
 
-        if (block == null)
-        {
-            Log("[Sel] 按下命中块为空 → 未起选");
-            ClearSelection();
-            return;
-        }
+        var (block, index) = ResolveEndpoint(e, out var isButton);
+        if (isButton) return; // 按钮/滚动条，放行（不进入选择，让它们可点击）
+
+        ClearSelection(); // 开始新选择：先清空旧的（点击空白/文字都取消之前选区）
+        if (block == null) return; // 点到远处空白：清空即可，不起新选
 
         _anchorBlock = block;
         _anchorIndex = index;
         _selecting = true;
-        ApplySelectionToRange(block, index, e.GetPosition(_host).Y);
+        ApplySelectionToRange(block, index, _pressPoint.Y);
         e.Pointer.Capture(_host);
         _host.Focus();
         e.Handled = true;
@@ -114,6 +142,11 @@ public sealed class SelectionManager
     {
         if (_host == null) return;
         if (!_selecting || e.Pointer.Captured != _host) return;
+
+        // 移动未超过阈值（纯点击）不扩展选区，避免"没拖动却选出一段"
+        var pp = e.GetPosition(_host);
+        var dist = Math.Sqrt(Math.Pow(pp.X - _pressPoint.X, 2) + Math.Pow(pp.Y - _pressPoint.Y, 2));
+        if (dist < DragThreshold) return;
 
         var (block, index) = ResolveEndpoint(e, out _);
         if (block == null) return;
@@ -170,16 +203,12 @@ public sealed class SelectionManager
 
     // ---- 命中测试 ----
 
-    /// <summary>
-    /// 解算指针落在哪个块/哪个索引。优先精确命中（点在文字上）；落在空白处（消息间隙/文字下方/右侧）
-    /// 则回退到最近块并钳制到块首/块尾——模拟浏览器"拖到结尾空白也选满"的体验。
-    /// </summary>
     private (CustomSelectableTextBlock? Block, int Index) ResolveEndpoint(PointerEventArgs e, out bool isButton)
     {
         isButton = false;
         if (_host == null) return (null, 0);
 
-        // 1) 精确命中：指针在文本块上 → 直接用该块（InputHitTest 是屏幕坐标命中，滚动无关，任意消息/跨行都可靠）
+        // 1) 精确命中：指针在文本块上 → 直接用该块（InputHitTest 屏幕坐标命中，滚动无关）
         var hit = _host.InputHitTest(e.GetPosition(_host)) as Visual;
         while (hit != null)
         {
@@ -190,116 +219,137 @@ public sealed class SelectionManager
             }
             if (hit is ScrollBar or Thumb or RepeatButton)
             {
-                // 滚动条 Thumb/RepeatButton：放行，让滚动条拖拽正常工作，不进入选择
-                isButton = true;
+                isButton = true; // 滚动条放行
                 return (null, 0);
             }
             if (hit is CustomSelectableTextBlock b && IsEffectivelyShown(b))
             {
                 var idx = b.GetIndexAtPoint(ClampToBlock(e.GetPosition(b), b));
-                Log($"[Sel] 精确命中文本块 {HitDesc(b)} idx={idx}");
                 return (b, idx);
             }
             hit = hit.GetVisualParent() as Visual;
         }
 
-        // 2) 空白：用顶层(场景根, null)坐标系找"纵向最近"块——root 坐标含全部变换(含滚动偏移)，
-        //    指针 e.GetPosition(null) 与块 TransformToVisual(null) 永远一致，任何滚动/任何消息都有效。
+        // 2) 空白：level-1 容器粗筛 → 候选容器内少量块用窗口坐标精确找最近块（避免和全部块对比）
+        EnsureCache();
+        if (_containers == null || _containers.Count == 0) return (null, 0);
+
         var frame = TopLevel.GetTopLevel(_host);
         if (frame == null) return (null, 0);
         var p = e.GetPosition(frame);
-        var blocks = OrderedBlocks();
-        Log($"[Sel] 空白路线: 块数={blocks.Count} 指针root=({p.X:F0},{p.Y:F0})");
+        var candidates = NearbyContainers(e.GetPosition(_host).Y);
+
         CustomSelectableTextBlock? best = null;
         double bestDist = double.MaxValue;
         int bestIdx = 0;
-        foreach (var b in blocks)
-        {
-            if (!IsEffectivelyShown(b)) continue; // 隐藏/折叠(思考卡)块不参与，避免命中折叠内容
-            if (b.Bounds.Width <= 0 || b.Bounds.Height <= 0) continue; // 未测量/空块跳过
-            var tr = b.TransformToVisual(frame);
-            if (tr == null) continue;
-            var or = tr.Value.Transform(default);
-            var rect = new Rect(or, b.Bounds.Size);
-            Log($"[Sel]   块 {HitDesc(b)} rect=({or.X:F0},{or.Y:F0},{b.Bounds.Width:F0}x{b.Bounds.Height:F0})");
-            if (rect.Contains(p))
+        foreach (var ct in candidates)
+            foreach (var b in ct.Blocks)
             {
-                var idx = b.GetIndexAtPoint(ClampToBlock(e.GetPosition(b), b));
-                Log($"[Sel]   命中 in-rect {HitDesc(b)} idx={idx}");
-                return (b, idx);
+                if (!IsEffectivelyShown(b)) continue;
+                if (b.Bounds.Width <= 0 || b.Bounds.Height <= 0) continue;
+                var tr = b.TransformToVisual(frame);
+                if (tr == null) continue;
+                var or = tr.Value.Transform(default);
+                var rect = new Rect(or, b.Bounds.Size);
+                if (rect.Contains(p))
+                {
+                    var idx = b.GetIndexAtPoint(ClampToBlock(e.GetPosition(b), b));
+                    return (b, idx);
+                }
+                var dist = VerticalDistToRect(p, rect);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = b;
+                    bestIdx = p.Y < rect.Center.Y ? 0 : (b.Text?.Length ?? 0);
+                }
             }
 
-            var dist = VerticalDistToRect(p, rect);
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                best = b;
-                bestIdx = p.Y < rect.Center.Y ? 0 : (b.Text?.Length ?? 0);
-            }
-        }
-
-        Log($"[Sel] 空白最近={HitDesc(best)} idx={bestIdx} dist={bestDist:F1}");
         return best is not null ? (best, bestIdx) : (null, 0);
     }
 
-    private static void Log(string s)
+    // ---- 层级缓存 ----
+
+    /// <summary>重建/获取容器与块缓存。宿主直接子级的 StackPanel(每条消息/turn) 为 level-1 容器。</summary>
+    private void EnsureCache()
     {
-        Console.WriteLine(s);
-        Debug.WriteLine(s);
+        if (_containers != null) return;
+        var host = _host;
+        var containers = new List<Container>();
+        var ordered = new List<CustomSelectableTextBlock>();
+        if (host != null)
+        {
+            foreach (var child in host.GetVisualChildren())
+            {
+                if (child is not StackPanel sp) continue;
+                var blocks = new List<CustomSelectableTextBlock>();
+                CollectBlocks(sp, blocks);
+                blocks = blocks.Where(IsEffectivelyShown).ToList();
+                if (blocks.Count == 0) continue;
+                var tr = sp.TransformToVisual(host);
+                var top = tr?.Transform(default).Y ?? 0;
+                containers.Add(new Container { Blocks = blocks, Top = top, Bottom = top + sp.Bounds.Height });
+            }
+            containers.Sort((a, b) => a.Top.CompareTo(b.Top));
+            foreach (var c in containers) ordered.AddRange(c.Blocks);
+        }
+        _containers = containers;
+        _ordered = ordered;
+        _orderIndex = new Dictionary<CustomSelectableTextBlock, int>();
+        for (var i = 0; i < ordered.Count; i++) _orderIndex[ordered[i]] = i;
     }
 
-    private static string HitDesc(CustomSelectableTextBlock? b)
+    /// <summary>按内容 Y 找指针所在/最近的容器，返回该容器 + 上下各一个（最多3个候选）。</summary>
+    private List<Container> NearbyContainers(double y)
     {
-        if (b == null) return "null";
-        var t = b.Text ?? "";
-        var snippet = t.Length > 12 ? t[..12] + "…" : t;
-        return $"[{b.GetType().Name}:{snippet}](len={t.Length})";
+        var list = new List<Container>();
+        if (_containers == null || _containers.Count == 0) return list;
+        int lo = 0, hi = _containers.Count - 1, idx = -1;
+        while (lo <= hi)
+        {
+            var mid = (lo + hi) / 2;
+            if (_containers[mid].Top <= y) { idx = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        for (var i = -1; i <= 1; i++)
+        {
+            var j = idx + i;
+            if (j >= 0 && j < _containers.Count) list.Add(_containers[j]);
+        }
+        return list;
     }
 
-    /// <summary>把空白点到块的本地坐标钳到块内，避免 TextLayout 对越界点返回怪异索引（下方→块尾、上方→块首）。</summary>
-    private static Point ClampToBlock(Point p, CustomSelectableTextBlock b)
-        => new(
-            Math.Max(0, Math.Min(p.X, b.Bounds.Width)),
-            Math.Max(0, Math.Min(p.Y, b.Bounds.Height)));
-
-    /// <summary>滚动视图坐标系中，点到块矩形之外的纵向优先距离。</summary>
-    private static double VerticalDistToRect(Point p, Rect r)
-    {
-        var dx = p.X < r.Left ? r.Left - p.X : (p.X > r.Right ? p.X - r.Right : 0);
-        var dy = p.Y < r.Top ? r.Top - p.Y : (p.Y > r.Bottom ? p.Y - r.Bottom : 0);
-        return dy * 10 + dx;
-    }
-
-    // ---- 选中范围计算 ----
+    // ---- 选中范围计算（只重绘区间） ----
 
     private void ApplySelectionToRange(CustomSelectableTextBlock current, int currentIndex, double pointerY)
     {
-        var blocks = OrderedBlocks();
+        EnsureCache();
+        var ordered = _ordered;
+        var index = _orderIndex;
         var anchor = _anchorBlock;
-        if (anchor == null) { current.ApplySelection(currentIndex, currentIndex); return; }
-
-        foreach (var b in blocks)
-            b.ApplySelection(0, 0);
-
-        var anchorPos = blocks.IndexOf(anchor);
-        var curPos = blocks.IndexOf(current);
-        if (anchorPos < 0 || curPos < 0)
+        if (anchor == null || ordered == null || index == null)
         {
-            anchor.ApplySelection(_anchorIndex, _anchorIndex);
             current.ApplySelection(currentIndex, currentIndex);
             return;
         }
 
-        // 用指针 Y vs 锚点块中心 Y 强制方向；端点落在反侧时钳回锚点，避免"向下拖反而往上是选"
+        // 清除上一帧选中区间
+        if (_prevStart >= 0 && _prevEnd >= 0 && _prevEnd < ordered.Count)
+            for (var i = _prevStart; i <= _prevEnd; i++)
+                ordered[i].ApplySelection(0, 0);
+
+        if (!index.TryGetValue(anchor, out var anchorPos) || !index.TryGetValue(current, out var curPos))
+        {
+            anchor.ApplySelection(_anchorIndex, _anchorIndex);
+            current.ApplySelection(currentIndex, currentIndex);
+            _prevStart = _prevEnd = -1;
+            return;
+        }
+
+        // 指针 Y vs 锚点块中心 Y 强制方向；端点落在反侧时钳回锚点，避免"向下拖反而往上是选"
         var down = pointerY >= HostCenterY(anchor);
         if (down && curPos < anchorPos) { curPos = anchorPos; current = anchor; currentIndex = _anchorIndex; }
         else if (!down && curPos > anchorPos) { curPos = anchorPos; current = anchor; currentIndex = _anchorIndex; }
-
-        if (anchorPos == curPos)
-        {
-            anchor.ApplySelection(Math.Min(_anchorIndex, currentIndex), Math.Max(_anchorIndex, currentIndex));
-            return;
-        }
 
         var startPos = Math.Min(anchorPos, curPos);
         var endPos = Math.Max(anchorPos, curPos);
@@ -308,12 +358,14 @@ public sealed class SelectionManager
 
         for (var i = startPos; i <= endPos; i++)
         {
-            var b = blocks[i];
+            var b = ordered[i];
             var len = b.Text?.Length ?? 0;
             if (i == startPos) b.ApplySelection(startIdx, len);
             else if (i == endPos) b.ApplySelection(0, endIdx);
             else b.ApplySelection(0, len);
         }
+        _prevStart = startPos;
+        _prevEnd = endPos;
     }
 
     /// <summary>块顶中心在宿主坐标系下的 Y，用于方向判定。</summary>
@@ -323,23 +375,6 @@ public sealed class SelectionManager
         var tr = b.TransformToVisual(_host);
         if (tr == null) return 0;
         return tr.Value.Transform(default).Y + b.Bounds.Height / 2;
-    }
-
-    /// <summary>收集宿主内"实际可见"的 CustomSelectableTextBlock 并按视觉位置（Y 后 X）排序。</summary>
-    private List<CustomSelectableTextBlock> OrderedBlocks()
-    {
-        var list = new List<CustomSelectableTextBlock>();
-        var host = _host;
-        if (host == null) return list;
-        CollectBlocks(host, list);
-
-        return list
-            .Where(IsEffectivelyShown)
-            .Select(b => new { B = b, P = b.TransformToVisual(host)?.Transform(default) ?? default })
-            .OrderBy(x => x.P.Y)
-            .ThenBy(x => x.P.X)
-            .Select(x => x.B)
-            .ToList();
     }
 
     /// <summary>块是否真实可见：祖先 IsVisible=false / Opacity=0 / 被折叠(MaxHeight==0) 视为不可见，跳过其参与选择。</summary>
@@ -371,5 +406,33 @@ public sealed class SelectionManager
                     CollectBlocks(c, result);
             }
         }
+    }
+
+    private static void Log(string s)
+    {
+        // Console.WriteLine(s);
+        // Debug.WriteLine(s);
+    }
+
+    private static string HitDesc(CustomSelectableTextBlock? b)
+    {
+        if (b == null) return "null";
+        var t = b.Text ?? "";
+        var snippet = t.Length > 12 ? t[..12] + "…" : t;
+        return $"[{b.GetType().Name}:{snippet}](len={t.Length})";
+    }
+
+    /// <summary>把空白点到块的本地坐标钳到块内，避免 TextLayout 对越界点返回怪异索引（下方→块尾、上方→块首）。</summary>
+    private static Point ClampToBlock(Point p, CustomSelectableTextBlock b)
+        => new(
+            Math.Max(0, Math.Min(p.X, b.Bounds.Width)),
+            Math.Max(0, Math.Min(p.Y, b.Bounds.Height)));
+
+    /// <summary>滚动视图坐标系中，点到块矩形之外的纵向优先距离。</summary>
+    private static double VerticalDistToRect(Point p, Rect r)
+    {
+        var dx = p.X < r.Left ? r.Left - p.X : (p.X > r.Right ? p.X - r.Right : 0);
+        var dy = p.Y < r.Top ? r.Top - p.Y : (p.Y > r.Bottom ? p.Y - r.Bottom : 0);
+        return dy * 10 + dx;
     }
 }
