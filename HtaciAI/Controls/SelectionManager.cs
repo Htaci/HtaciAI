@@ -36,6 +36,7 @@ public sealed class SelectionManager
     private CustomSelectableTextBlock? _anchorBlock;
     private int _anchorIndex;
     private bool _selecting;
+    private bool _selectionActive; // 是否已真正起选（移动超过 DragThreshold 后才置 true）
 
     private List<Container>? _containers;
     private List<CustomSelectableTextBlock>? _ordered;
@@ -127,12 +128,17 @@ public sealed class SelectionManager
         if (isButton) return; // 按钮/滚动条，放行（不进入选择，让它们可点击）
 
         ClearSelection(); // 开始新选择：先清空旧的（点击空白/文字都取消之前选区）
-        if (block == null) return; // 点到远处空白：清空即可，不起新选
 
+        // 仅点到文本/附近空白才进入选择；点到远处空白直接返回（保留该处滚动拖拽）
+        if (block == null) return;
+
+        // 按下只记录候选锚点，先不应用选区：
+        // 单次点击（未超过 DragThreshold）不该选中任何文本块，否则点击空白会被 ResolveEndpoint
+        // 解析到最近块而误把整块（如标题）高亮。真正拖动超过阈值后才在 OnPointerMoved 里起选。
         _anchorBlock = block;
         _anchorIndex = index;
         _selecting = true;
-        ApplySelectionToRange(block, index, _pressPoint.Y);
+        _selectionActive = false;
         e.Pointer.Capture(_host);
         _host.Focus();
         e.Handled = true;
@@ -148,6 +154,20 @@ public sealed class SelectionManager
         var dist = Math.Sqrt(Math.Pow(pp.X - _pressPoint.X, 2) + Math.Pow(pp.Y - _pressPoint.Y, 2));
         if (dist < DragThreshold) return;
 
+        // 首次越过阈值才算真正起选：按下时来自空白的锚点（ResolveEndpoint 的最近块）直接复用；
+        // 若按下时未能解析到块（远处空白），则以此刻指针正下方块为锚。
+        if (!_selectionActive)
+        {
+            if (_anchorBlock == null)
+            {
+                var (b, i) = ResolveEndpoint(e, out _);
+                if (b == null) return;
+                _anchorBlock = b;
+                _anchorIndex = i;
+            }
+            _selectionActive = true;
+        }
+
         var (block, index) = ResolveEndpoint(e, out _);
         if (block == null) return;
         ApplySelectionToRange(block, index, e.GetPosition(_host).Y);
@@ -159,6 +179,7 @@ public sealed class SelectionManager
         if (e.Pointer.Captured == _host)
         {
             _selecting = false;
+            _selectionActive = false;
             e.Pointer.Capture(null);
         }
     }
