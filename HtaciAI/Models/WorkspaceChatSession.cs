@@ -22,7 +22,11 @@ public sealed class WorkspaceChatSession
 
     public string Model { get; set; } = "";
 
-    public int Thinking { get; set; }
+    /// <summary>
+    /// 思考模式（<see cref="HtaciAI.Services.ThinkingMode"/> 的整型值）。
+    /// 默认 Default(none)，理由同 <see cref="ChatSession.Thinking"/>。
+    /// </summary>
+    public int Thinking { get; set; } = (int)HtaciAI.Services.ThinkingMode.Default;
 
     /// <summary>会话级追加提示词：描述本次会话是干什么的（拼接在 Agent / 工作区提示词之后，最具体）。</summary>
     public string SystemPrompt { get; set; } = "";

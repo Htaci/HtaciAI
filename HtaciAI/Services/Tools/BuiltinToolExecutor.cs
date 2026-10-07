@@ -10,6 +10,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using HtaciAI.Services.Attachments;
+using HtaciAI.Services.Skills;
 
 namespace HtaciAI.Services.Tools;
 
@@ -26,6 +28,18 @@ public sealed class BuiltinToolContext
 
     /// <summary>保存当前会话已启用技能。</summary>
     public Func<List<SessionSkill>, Task>? SaveSessionSkills { get; set; }
+
+    /// <summary>
+    /// 向用户提问并等待作答（由会话视图弹窗实现）。为 null 时 ask_user_question 工具不可用。
+    /// 返回 null 表示用户取消/关闭了对话框，未作答。
+    /// </summary>
+    public Func<List<AskQuestion>, Task<List<AskAnswer>?>>? AskUser { get; set; }
+
+    /// <summary>
+    /// 当前模型是否支持视觉。由会话视图在每次发送前按所选模型刷新；
+    /// 不支持时 view_image 直接返回错误，让模型自己知道看不了图并继续。
+    /// </summary>
+    public bool SupportsVision { get; set; }
 
     /// <summary>把入参（可为相对路径）解析为绝对路径；空入参返回空串。</summary>
     public static string ResolvePath(BuiltinToolContext ctx, string? path)
@@ -72,6 +86,34 @@ public sealed class BuiltinToolContext
             return null;
         }
     }
+
+    /// <summary>
+    /// 从工具调用参数 JSON 中读取某个布尔属性（缺省返回 null）。
+    /// 兼容 true/false、字符串 "true"/"false"、"1"/"0" 与数字 1/0 —— 模型不一定严格按 schema 的 boolean 传参。
+    /// </summary>
+    public static bool? GetBoolArg(ChatToolCall call, string name)
+    {
+        if (string.IsNullOrWhiteSpace(call.Arguments)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(call.Arguments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (!doc.RootElement.TryGetProperty(name, out var v)) return null;
+
+            return v.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Number => v.GetDouble() != 0,
+                JsonValueKind.String => bool.TryParse(v.GetString(), out var b) ? b : v.GetString() == "1",
+                _ => null,
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>
@@ -97,6 +139,8 @@ public sealed class BuiltinToolExecutor
                 "webfetch" => await WebfetchAsync(call, ct),
                 "load_skill" => await LoadSkillAsync(call, ctx),
                 "unload_skill" => await UnloadSkillAsync(call, ctx),
+                "ask_user_question" => await AskUserQuestionAsync(call, ctx),
+                "view_image" => ViewImage(call, ctx),
                 "invalid" => Invalid(call),
                 _ => ToolExecution.Fail($"暂不支持的内置工具：{tool.Name}"),
             };
@@ -263,7 +307,8 @@ public sealed class BuiltinToolExecutor
         var filePath = BuiltinToolContext.GetArg(call, "filePath") ?? "";
         var oldString = BuiltinToolContext.GetArg(call, "oldString") ?? "";
         var newString = BuiltinToolContext.GetArg(call, "newString") ?? "";
-        var replaceAll = BuiltinToolContext.GetIntArg(call, "replaceAll") == 1;
+        // schema 声明为 boolean，必须按布尔读取（此前用 GetIntArg 只认数字，模型传 true 会被忽略→"替换全部"失效）
+        var replaceAll = BuiltinToolContext.GetBoolArg(call, "replaceAll") ?? false;
         if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrEmpty(oldString))
             return ToolExecution.Fail("edit 需要 filePath 与 oldString");
 
@@ -355,9 +400,12 @@ public sealed class BuiltinToolExecutor
 
     private static async Task<ToolExecution> GrepAsync(ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
     {
+        const int MaxMatches = 200;
+
         var pattern = BuiltinToolContext.GetArg(call, "pattern") ?? "";
         var root = BuiltinToolContext.ResolvePath(ctx, BuiltinToolContext.GetArg(call, "path"));
         var include = BuiltinToolContext.GetArg(call, "include");
+        var contextLines = Math.Clamp(BuiltinToolContext.GetIntArg(call, "context") ?? 0, 0, 10);
         if (string.IsNullOrEmpty(pattern))
             return ToolExecution.Fail("缺少 pattern 参数");
         if (string.IsNullOrEmpty(root))
@@ -367,34 +415,83 @@ public sealed class BuiltinToolExecutor
         try { regex = new Regex(pattern, RegexOptions.Compiled); }
         catch (Exception ex) { return ToolExecution.Fail($"正则无效：{ex.Message}"); }
 
+        // include 同时按「相对路径」和「文件名」匹配：既支持 src/**/*.cs 这类路径模式，
+        // 也支持 *.cs 这种只写文件名后缀的常见写法（含分隔符时按路径匹配，否则按文件名匹配）。
+        Regex? includePathRegex = null;
+        Regex? includeNameRegex = null;
+        if (!string.IsNullOrWhiteSpace(include))
+        {
+            try
+            {
+                includePathRegex = GlobToPathRegex(include!);
+                includeNameRegex = GlobToNameRegex(include!);
+            }
+            catch (Exception ex)
+            {
+                return ToolExecution.Fail($"include 模式无效：{ex.Message}");
+            }
+        }
+
         try
         {
             if (!Directory.Exists(root))
                 return ToolExecution.Fail($"目录不存在：{root}");
 
-            var includeRegex = string.IsNullOrWhiteSpace(include) ? null : GlobToNameRegex(include!);
-            var matches = new List<string>();
+            var output = new List<string>();
+            var matchCount = 0;
+            var truncated = false;
+            var scanned = 0;
+
             foreach (var file in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
             {
                 ct.ThrowIfCancellationRequested();
-                var name = Path.GetFileName(file);
-                if (includeRegex is not null && !includeRegex.IsMatch(name)) continue;
-                if (new FileInfo(file).Length > MaxFileBytes) continue;
+                scanned++;
 
+                var name = Path.GetFileName(file);
                 var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
-                var lines = await File.ReadAllLinesAsync(file);
-                for (int i = 0; i < lines.Length; i++)
+
+                if (includePathRegex is not null &&
+                    !includePathRegex.IsMatch(rel) && !includeNameRegex!.IsMatch(name))
+                    continue;
+
+                // 跳过超大文件与二进制文件（含 NUL 字节，逐字符正则匹配没有意义且会有乱码输出）
+                var info = new FileInfo(file);
+                if (info.Length > MaxFileBytes) continue;
+
+                var text = await File.ReadAllTextAsync(file);
+                if (text.Contains('\0')) continue;
+
+                var lines = text.Replace("\r\n", "\n").Split('\n');
+                var hitIndices = new List<int>();
+                for (var i = 0; i < lines.Length; i++)
+                    if (regex.IsMatch(lines[i])) hitIndices.Add(i);
+
+                if (hitIndices.Count == 0) continue;
+
+                // 上下文区间合并去重后输出；匹配行用 ':' 分隔，上下文行用 '-' 分隔（对齐 ripgrep 习惯）
+                var hitSet = hitIndices.ToHashSet();
+                var emitted = new SortedSet<int>();
+                foreach (var hit in hitIndices)
                 {
-                    if (regex.IsMatch(lines[i]))
-                    {
-                        matches.Add($"{rel}:{i + 1}: {lines[i].Trim()}");
-                        if (matches.Count >= 200) break;
-                    }
+                    if (matchCount >= MaxMatches) { truncated = true; break; }
+                    matchCount++;
+                    for (var j = Math.Max(0, hit - contextLines); j <= Math.Min(lines.Length - 1, hit + contextLines); j++)
+                        emitted.Add(j);
                 }
-                if (matches.Count >= 200) break;
+
+                foreach (var j in emitted)
+                    output.Add($"{rel}:{j + 1}{(hitSet.Contains(j) ? ":" : "-")} {lines[j].Trim()}");
+
+                if (truncated) break;
             }
-            var output = string.Join("\n", matches);
-            return ToolExecution.Ok(string.IsNullOrEmpty(output) ? "（无匹配）" : $"（{matches.Count} 处匹配）\n" + output);
+
+            if (output.Count == 0)
+                return ToolExecution.Ok($"（无匹配，已扫描 {scanned} 个文件）");
+
+            var header = truncated
+                ? $"（已达到 {MaxMatches} 处匹配上限，结果被截断；请缩小 path 或收窄 pattern）"
+                : $"（{matchCount} 处匹配）";
+            return ToolExecution.Ok(header + "\n" + string.Join("\n", output));
         }
         catch (Exception ex)
         {
@@ -411,13 +508,41 @@ public sealed class BuiltinToolExecutor
             return ToolExecution.Fail("缺少 url 参数");
 
         var timeout = BuiltinToolContext.GetIntArg(call, "timeout") ?? 30;
+        var format = (BuiltinToolContext.GetArg(call, "format") ?? "text").Trim().ToLowerInvariant();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, timeout)));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cts.Token);
         try
         {
-            var content = await Http.GetStringAsync(url, linked.Token);
-            var text = string.IsNullOrWhiteSpace(content) ? "（无内容）" : content;
-            return ToolExecution.Ok($"（{url}，{text.Length} 字符）\n" + Truncate(text, 20000));
+            using var resp = await Http.GetAsync(url, linked.Token);
+            resp.EnsureSuccessStatusCode();
+
+            var raw = await resp.Content.ReadAsStringAsync(linked.Token);
+            if (string.IsNullOrWhiteSpace(raw))
+                return ToolExecution.Ok($"（{url}，无内容）");
+
+            var mediaType = resp.Content.Headers.ContentType?.MediaType ?? "";
+            var isHtml = mediaType.Contains("html", StringComparison.OrdinalIgnoreCase)
+                         || (mediaType.Length == 0 && raw.TrimStart().StartsWith("<", StringComparison.Ordinal));
+
+            // 非 HTML（JSON / 纯文本等）不做转换，原样返回，避免误伤
+            string body, kind;
+            if (!isHtml || format == "html")
+            {
+                body = raw;
+                kind = isHtml ? "原始 HTML" : mediaType is { Length: > 0 } ? mediaType : "原始内容";
+            }
+            else if (format == "markdown")
+            {
+                body = HtmlConverter.ToMarkdown(raw);
+                kind = "Markdown";
+            }
+            else
+            {
+                body = HtmlConverter.ToPlainText(raw);
+                kind = "纯文本";
+            }
+
+            return ToolExecution.Ok($"（{url}，{kind}，{body.Length} 字符）\n" + Truncate(body, 20000));
         }
         catch (OperationCanceledException)
         {
@@ -431,6 +556,14 @@ public sealed class BuiltinToolExecutor
 
     // ---- load_skill / unload_skill ----
 
+    /// <summary>
+    /// 把模型给的技能名解析为注册表中的真实技能：先按 id（目录名）匹配，再按 Name 匹配。
+    /// 解析失败返回 null —— 模型可能凭印象编造技能名，不能直接写进会话技能列表。
+    /// </summary>
+    private static SkillDefinition? ResolveSkill(string name)
+        => SkillRegistry.Instance.ResolveById(name)
+           ?? SkillRegistry.Instance.GetAll().FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+
     private static async Task<ToolExecution> LoadSkillAsync(ChatToolCall call, BuiltinToolContext ctx)
     {
         var name = BuiltinToolContext.GetArg(call, "name") ?? "";
@@ -438,14 +571,19 @@ public sealed class BuiltinToolExecutor
         if (ctx.GetSessionSkills is null || ctx.SaveSessionSkills is null)
             return ToolExecution.Fail("当前会话不支持技能加载");
 
+        var skill = ResolveSkill(name);
+        if (skill is null)
+            return ToolExecution.Fail($"技能不存在：{name}。可加载的技能见系统提示词中的技能列表。");
+
+        // 统一用 id 记录（name 是展示名，可能与目录名不同）
         var skills = await ctx.GetSessionSkills() ?? new List<SessionSkill>();
-        var existing = skills.FirstOrDefault(s => s.Id == name);
+        var existing = skills.FirstOrDefault(s => s.Id == skill.Id);
         if (existing is null)
-            skills.Add(new SessionSkill { Id = name, Status = "loaded" });
+            skills.Add(new SessionSkill { Id = skill.Id, Status = "loaded" });
         else
             existing.Status = "loaded";
         await ctx.SaveSessionSkills(skills);
-        return ToolExecution.Ok($"已加载技能：{name}");
+        return ToolExecution.Ok($"已加载技能：{skill.Name}（{skill.Id}）");
     }
 
     private static async Task<ToolExecution> UnloadSkillAsync(ChatToolCall call, BuiltinToolContext ctx)
@@ -455,13 +593,57 @@ public sealed class BuiltinToolExecutor
         if (ctx.GetSessionSkills is null || ctx.SaveSessionSkills is null)
             return ToolExecution.Fail("当前会话不支持技能卸载");
 
+        // 解析失败时回退用原始入参：技能可能已被禁用/删除，但会话里仍留着它的加载记录
+        var id = ResolveSkill(name)?.Id ?? name;
+
         var skills = await ctx.GetSessionSkills() ?? new List<SessionSkill>();
         var before = skills.Count;
-        skills.RemoveAll(s => s.Id == name);
+        skills.RemoveAll(s => s.Id == id);
         if (skills.Count == before)
             return ToolExecution.Fail($"技能未加载：{name}");
         await ctx.SaveSessionSkills(skills);
         return ToolExecution.Ok($"已卸载技能：{name}");
+    }
+
+    // ---- view_image ----
+
+    /// <summary>单张图片的大小上限（超过就不往上下文里塞了）。</summary>
+    private const long MaxImageBytes = 10 * 1024 * 1024;
+
+    private static ToolExecution ViewImage(ChatToolCall call, BuiltinToolContext ctx)
+    {
+        var path = BuiltinToolContext.ResolvePath(ctx, BuiltinToolContext.GetArg(call, "path"));
+        if (string.IsNullOrEmpty(path)) return ToolExecution.Fail("缺少 path 参数");
+
+        // 不支持视觉的模型：明确告诉它看不了，让它据此继续，而不是让整轮请求失败
+        if (!ctx.SupportsVision)
+            return ToolExecution.Fail("当前模型不支持视觉图像，无法查看图片内容。请基于文件名与用户描述继续，或请用户直接说明图片内容。");
+
+        if (!File.Exists(path)) return ToolExecution.Fail($"文件不存在：{path}");
+        if (!AttachmentStore.IsImage(path)) return ToolExecution.Fail($"不是可识别的图片格式：{path}");
+
+        var bytes = new FileInfo(path).Length;
+        if (bytes > MaxImageBytes)
+            return ToolExecution.Fail($"图片过大（{bytes / 1024 / 1024} MB），上限 {MaxImageBytes / 1024 / 1024} MB");
+
+        return ToolExecution.OkImage($"已读取图片：{path}", path);
+    }
+
+    // ---- ask_user_question ----
+
+    private static async Task<ToolExecution> AskUserQuestionAsync(ChatToolCall call, BuiltinToolContext ctx)
+    {
+        if (ctx.AskUser is null)
+            return ToolExecution.Fail("当前会话不支持向用户提问");
+
+        var questions = AskUserQuestionTool.Parse(call.Arguments, out var error);
+        if (questions is null)
+            return ToolExecution.Fail(error ?? "问题参数无效");
+
+        var answers = await ctx.AskUser(questions);
+        return ToolExecution.Ok(answers is null
+            ? AskUserQuestionTool.CancelledText
+            : AskUserQuestionTool.FormatAnswers(questions, answers));
     }
 
     // ---- invalid ----
@@ -493,6 +675,36 @@ public sealed class BuiltinToolExecutor
                 case '?': sb.Append("."); break;
                 case '/': sb.Append("/"); break;
                 case '.': sb.Append("\\."); break;
+                default: sb.Append(Regex.Escape(c.ToString())); break;
+            }
+        }
+        sb.Append('$');
+        return new Regex(sb.ToString(), RegexOptions.Compiled);
+    }
+
+    /// <summary>
+    /// 把 glob 转成「相对路径」正则：* 不跨目录、** 跨目录、且 **/ 允许零级目录
+    /// （因此 **/*.cs 也能匹配根目录下的 a.cs）。
+    /// </summary>
+    private static Regex GlobToPathRegex(string pattern)
+    {
+        var sb = new StringBuilder("^");
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            var c = pattern[i];
+            switch (c)
+            {
+                case '*':
+                    if (i + 1 < pattern.Length && pattern[i + 1] == '*')
+                    {
+                        i++;
+                        if (i + 1 < pattern.Length && pattern[i + 1] == '/') { i++; sb.Append("(?:.*/)?"); }
+                        else sb.Append(".*");
+                    }
+                    else sb.Append("[^/]*");
+                    break;
+                case '?': sb.Append("[^/]"); break;
+                case '/': sb.Append('/'); break;
                 default: sb.Append(Regex.Escape(c.ToString())); break;
             }
         }

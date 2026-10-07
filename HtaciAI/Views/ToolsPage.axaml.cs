@@ -7,9 +7,11 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using HtaciAI.Data;
 using HtaciAI.Services.ScriptRuntimes;
 using HtaciAI.Services.Tools;
 using HtaciAI.Views.Tools;
+using HtaciAI.Controls;
 
 namespace HtaciAI.Views;
 
@@ -29,12 +31,17 @@ public partial class ToolsPage : UserControl
         ReloadFromRegistry();
     }
 
-    /// <summary>从注册表重新拉取工具集列表并刷新两侧面板。</summary>
-    private void ReloadFromRegistry()
+    /// <summary>从注册表重新拉取工具集列表并刷新两侧面板。传 <paramref name="select"/> 则切到该集合。</summary>
+    private void ReloadFromRegistry(Toolset? select = null)
     {
         _toolsets = ToolRegistry.Instance.GetToolsets().ToList();
+
+        if (select is not null)
+            _selectedToolset = _toolsets.FirstOrDefault(t => t.Id == select.Id);
+
         if (_selectedToolset is null || _toolsets.All(t => t.Id != _selectedToolset.Id))
             _selectedToolset = _toolsets.FirstOrDefault();
+
         RefreshToolsetList();
         UpdateRightPanel();
     }
@@ -42,6 +49,7 @@ public partial class ToolsPage : UserControl
     private void SetupButtons()
     {
         SetupHoverAction(AddToolsetBtn, OnAddToolsetClick);            // 透明图标按钮：浅灰 hover
+        SetupHoverAction(AddToolBtn, OnAddToolClick);
         SetupHoverAction(CreateToolBtn, OnCreateToolClick, "#2F2F3C"); // 深色填充按钮：深一档 hover
     }
 
@@ -69,22 +77,64 @@ public partial class ToolsPage : UserControl
         };
     }
 
-    private void OnAddToolsetClick()
-    {
-        // TODO: 新建工具集窗口（名称/描述），创建后入库 + 注册表
-        SetHint("新建工具集功能开发中，敬请期待");
-    }
-
-    /// <summary>打开创建工具对话框，保存后刷新列表。</summary>
-    private async void OnCreateToolClick()
+    /// <summary>左上角加号：新建一个工具集（分组），建完自动切过去。</summary>
+    private async void OnAddToolsetClick()
     {
         var owner = TopLevel.GetTopLevel(this) as Window;
-        var dialog = new CreateToolWindow();
+        var dialog = new CreateToolsetWindow();
+        if (owner is not null)
+            await dialog.ShowDialog(owner);
+
+        if (dialog.Result is null) return;
+        ReloadFromRegistry(dialog.Result);
+    }
+
+    /// <summary>创建工具：归属预选当前集合（自动集合不能当归属，交给用户自己勾）。</summary>
+    private async void OnCreateToolClick()
+    {
+        var preset = _selectedToolset is { IsAuto: false } set ? set.Id : null;
+
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        var dialog = new CreateToolWindow(preset);
         if (owner != null)
             await dialog.ShowDialog(owner);
 
         if (dialog.Result is null) return;
         ReloadFromRegistry();
+    }
+
+    /// <summary>把其他集合里的工具加进当前集合：工具仍在原来的集合里，只是多了一个归属。</summary>
+    private async void OnAddToolClick()
+    {
+        if (_selectedToolset is not { IsAuto: false } target)
+        {
+            SetHint("「全部」「内置」是自动集合，成员由规则决定，不能手工添加");
+            return;
+        }
+
+        var candidates = ToolRegistry.Instance.GetEnabled()
+            .Where(t => !Toolset.Contains(target.Id, t))
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            SetHint($"所有工具都已经在「{target.Name}」里了");
+            return;
+        }
+
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        var dialog = new AddToolsWindow(target, candidates);
+        if (owner is not null)
+            await dialog.ShowDialog(owner);
+        if (dialog.SelectedToolIds.Count == 0) return;
+
+        foreach (var id in dialog.SelectedToolIds)
+        {
+            try { await ToolRepository.AddToolLinkAsync(id, target.Id); } catch { /* 落库失败不阻塞内存更新 */ }
+            ToolRegistry.Instance.AddToolToToolset(id, target.Id);
+        }
+
+        RefreshToolsetList();
+        UpdateRightPanel();
     }
 
     // ---- 左侧：工具集列表 ----
@@ -169,6 +219,8 @@ public partial class ToolsPage : UserControl
 
     private void UpdateRightPanel()
     {
+        UpdateHeader();
+
         if (_selectedToolset is null)
         {
             SetHint("选择左侧工具集查看其中的工具");
@@ -178,11 +230,29 @@ public partial class ToolsPage : UserControl
         var tools = ToolRegistry.Instance.GetByToolset(_selectedToolset.Id);
         if (tools.Count == 0)
         {
-            SetHint($"工具集「{_selectedToolset.Name}」还没有工具，点击右上角创建新工具");
+            SetHint(_selectedToolset.IsAuto
+                ? $"「{_selectedToolset.Name}」里还没有工具"
+                : $"工具集「{_selectedToolset.Name}」还没有工具，点右上角「创建新工具」，或用「添加工具」把别的集合里的工具拉进来");
             return;
         }
 
         BuildToolList(tools);
+    }
+
+    /// <summary>标题栏跟着当前集合走，并同步「添加工具」的可用性（自动集合不能手工加）。</summary>
+    private void UpdateHeader()
+    {
+        var canAdd = _selectedToolset is { IsAuto: false };
+        AddToolBtn.IsEnabled = canAdd;
+        AddToolBtn.Opacity = canAdd ? 1 : 0.45;
+
+        PanelTitle.Text = _selectedToolset?.Name ?? "工具";
+        PanelDesc.Text = _selectedToolset switch
+        {
+            null => "管理工具与工具集，为 AI 提供可调用的能力",
+            { IsAuto: true } ts => $"{ts.Description} · 自动集合，成员由规则决定",
+            var ts => string.IsNullOrWhiteSpace(ts.Description) ? "自建工具集" : ts.Description,
+        };
     }
 
     private void BuildToolList(IReadOnlyList<ToolDefinition> tools)
@@ -194,7 +264,7 @@ public partial class ToolsPage : UserControl
         foreach (var tool in tools)
             wrap.Children.Add(CreateToolCard(tool));
 
-        ToolListHost.Content = new ScrollViewer
+        ToolListHost.Content = new SmoothScrollViewer()
         {
             Content = wrap,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -204,8 +274,7 @@ public partial class ToolsPage : UserControl
 
     private Border CreateToolCard(ToolDefinition tool)
     {
-        var runtimeText = tool.Source == ToolSource.Builtin ? "内置"
-            : tool.Runtime == ScriptRuntimeKind.Node ? "Node.js" : "Python";
+        var (sourceText, sourceBg, sourceFg) = SourceBadge(tool);
 
         var levelBadge = BuildLevelBadge(tool.DangerLevel);
 
@@ -225,15 +294,15 @@ public partial class ToolsPage : UserControl
                 },
                 new Border
                 {
-                    Background = new SolidColorBrush(Color.Parse("#EDF4FC")),
+                    Background = new SolidColorBrush(Color.Parse(sourceBg)),
                     CornerRadius = new CornerRadius(10),
                     Padding = new Thickness(6, 2),
                     VerticalAlignment = VerticalAlignment.Center,
                     Child = new TextBlock
                     {
-                        Text = runtimeText,
+                        Text = sourceText,
                         FontSize = 10.5,
-                        Foreground = new SolidColorBrush(Color.Parse("#3A7BC8"))
+                        Foreground = new SolidColorBrush(Color.Parse(sourceFg))
                     }
                 },
                 levelBadge,
@@ -302,6 +371,14 @@ public partial class ToolsPage : UserControl
             VerticalAlignment = VerticalAlignment.Center
         };
     }
+
+    /// <summary>来源小标签：内置=蓝 / 脚本=青 / MCP=紫（与 MCP 服务卡片同色）。</summary>
+    private static (string Text, string Bg, string Fg) SourceBadge(ToolDefinition tool) => tool.Source switch
+    {
+        ToolSource.Builtin => ("内置", "#EDF4FC", "#3A7BC8"),
+        ToolSource.Mcp => ("MCP", "#F3EFF8", "#6A4F94"),
+        _ => (tool.Runtime == ScriptRuntimeKind.Node ? "Node.js" : "Python", "#EAF7F7", "#0B8A8B"),
+    };
 
     /// <summary>权限等级小标签：安全=绿 / 风险=橙 / 危险=红。</summary>
     private static Border BuildLevelBadge(ToolDangerLevel level)

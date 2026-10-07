@@ -1,24 +1,21 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
-using HtaciAI.Data;
 using HtaciAI.Models;
-using HtaciAI.Services;
 using HtaciAI.Services.Skills;
 using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Views;
 
 /// <summary>
-/// 新建工作空间窗口：生成一个 <see cref="WorkspaceConfig"/>（含 Agent 选择与二次配置）。
-/// 选择 Agent 后自动带入其默认工具/技能（可调整）；权限档位落在工作空间，作为新会话的默认值。
+/// 工作空间窗口：无参构造是「新建」，传入已有工作空间是「编辑」。
+/// 工具 / 技能默认值与权限档位落在工作空间，作为新会话的默认值。
 /// </summary>
 public partial class CreateWorkspaceWindow : Window
 {
@@ -32,15 +29,34 @@ public partial class CreateWorkspaceWindow : Window
         new("自由（所有工具免确认）", PermissionMode.Free),
     };
 
-    private List<Agent> _agents = new();
     private readonly List<ToolDefinition> _tools = new();
     private readonly List<SkillDefinition> _skills = new();
 
+    /// <summary>新建工作空间默认启用的技能 id。</summary>
+    private const string DefaultSkillId = "software-engineering-autonomous";
+
     public WorkspaceConfig? Result { get; private set; }
 
-    public CreateWorkspaceWindow()
+    /// <summary>正在编辑的工作空间；为 null 表示新建。</summary>
+    private WorkspaceConfig? _editing;
+
+    public CreateWorkspaceWindow() : this(null) { }
+
+    /// <summary>
+    /// <paramref name="existing"/> 为 null 时是新建；否则进入编辑模式：
+    /// 预填各字段，确认时把改动写回<b>同一个实例</b>（Id、创建时间等原样保留）。
+    /// </summary>
+    public CreateWorkspaceWindow(WorkspaceConfig? existing)
     {
         InitializeComponent();
+        _editing = existing;
+
+        if (existing is not null)
+        {
+            Title = "编辑工作空间";
+            HeaderText.Text = "编辑工作空间";
+            SubmitText.Text = "保存";
+        }
 
         _tools.AddRange(ToolRegistry.Instance.GetEnabled());
         _skills.AddRange(SkillRegistry.Instance.GetEnabled());
@@ -52,21 +68,42 @@ public partial class CreateWorkspaceWindow : Window
         PermissionCombo.SelectedIndex = 0;
         UpdatePermissionHint();
 
-        _ = LoadAgentsAsync();
+        if (existing is not null)
+            Prefill(existing);
+        else
+            ApplyNewWorkspaceDefaults();
     }
 
-    private async Task LoadAgentsAsync()
+    /// <summary>
+    /// 新建工作空间的默认值：开满全部工具，并预置「软件工程-自主」技能。
+    /// 只在新建时调用 —— 编辑模式套默认值会覆盖用户已保存的勾选。
+    /// </summary>
+    private void ApplyNewWorkspaceDefaults()
     {
-        try
-        {
-            _agents = await AgentRepository.GetAllAsync();
-            AgentCombo.ItemsSource = _agents;
-            AgentCombo.DisplayMemberBinding = new Binding(nameof(Agent.Name));
-        }
-        catch
-        {
-            // 数据库未就绪时无 Agent 可选
-        }
+        foreach (CheckBox cb in ToolsHost.Children.OfType<CheckBox>())
+            cb.IsChecked = true;
+        foreach (CheckBox cb in SkillsHost.Children.OfType<CheckBox>())
+            cb.IsChecked = (string)cb.Tag! == DefaultSkillId;
+    }
+
+    /// <summary>编辑模式预填：字段与工具 / 技能勾选，权限档位见末尾。</summary>
+    private void Prefill(WorkspaceConfig ws)
+    {
+        NameBox.Text = ws.Name;
+        DescBox.Text = ws.Description;
+        PathBox.Text = ws.Path;
+        SystemPromptBox.Text = ws.SystemPrompt;
+        McpBox.Text = string.Join("\n", ws.McpServers);
+
+        var tools = ws.EnabledToolIds.ToHashSet();
+        foreach (CheckBox cb in ToolsHost.Children.OfType<CheckBox>())
+            cb.IsChecked = tools.Contains((string)cb.Tag!);
+        var skills = ws.EnabledSkills.Select(s => s.Id).ToHashSet();
+        foreach (CheckBox cb in SkillsHost.Children.OfType<CheckBox>())
+            cb.IsChecked = skills.Contains((string)cb.Tag!);
+
+        var idx = Array.FindIndex(PermissionModes, p => p.Mode == ws.ToolPermissionMode);
+        PermissionCombo.SelectedIndex = idx < 0 ? 0 : idx;
     }
 
     // ---- 工具 / 技能选框 ----
@@ -84,7 +121,7 @@ public partial class CreateWorkspaceWindow : Window
         SkillsHost.Children.Clear();
         if (_skills.Count == 0) { SkillsHost.Children.Add(EmptyHint("暂无可用技能")); return; }
         foreach (var s in _skills)
-            SkillsHost.Children.Add(new CheckBox { Content = s.Name, Tag = s.Id, FontSize = 13 });
+            SkillsHost.Children.Add(new CheckBox { Content = s.DisplayName, Tag = s.Id, FontSize = 13 });
     }
 
     private static TextBlock EmptyHint(string text) => new()
@@ -93,26 +130,6 @@ public partial class CreateWorkspaceWindow : Window
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
     };
-
-    private void OnAgentChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (AgentCombo.SelectedItem is Agent agent)
-        {
-            var toolSet = agent.EnabledToolIds.ToHashSet();
-            foreach (CheckBox cb in ToolsHost.Children.OfType<CheckBox>())
-                cb.IsChecked = toolSet.Contains((string)cb.Tag!);
-            var skillSet = agent.EnabledSkills.Select(s => s.Id).ToHashSet();
-            foreach (CheckBox cb in SkillsHost.Children.OfType<CheckBox>())
-                cb.IsChecked = skillSet.Contains((string)cb.Tag!);
-        }
-        else
-        {
-            foreach (CheckBox cb in ToolsHost.Children.OfType<CheckBox>())
-                cb.IsChecked = false;
-            foreach (CheckBox cb in SkillsHost.Children.OfType<CheckBox>())
-                cb.IsChecked = false;
-        }
-    }
 
     // ---- 目录选择 ----
 
@@ -150,25 +167,21 @@ public partial class CreateWorkspaceWindow : Window
         if (string.IsNullOrEmpty(name))
             name = PathBox.Text is { Length: > 0 } p ? System.IO.Path.GetFileName(p.TrimEnd(System.IO.Path.DirectorySeparatorChar)) : "新工作空间";
 
-        var agent = AgentCombo.SelectedItem as Agent;
-        var ws = new WorkspaceConfig
-        {
-            Name = name,
-            Description = DescBox.Text ?? "",
-            Path = PathBox.Text ?? "",
-            AgentId = agent?.Id,
-            SystemPrompt = SystemPromptBox.Text ?? "",
-            EnabledToolIds = CollectChecked(ToolsHost),
-            EnabledSkills = CollectCheckedSkills(),
-            McpServers = McpBox.Text?
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => s.Trim())
-                .Where(s => s.Length > 0)
-                .ToList() ?? new(),
-            ToolPermissionMode = (PermissionCombo.SelectedItem as PermOption)?.Mode ?? PermissionMode.Normal,
-        };
-        if (agent is not null)
-            WorkspaceAgentPipeline.SeedWorkspaceFromAgent(ws, agent);
+        // 编辑时写回同一个实例（Id / 创建时间原样保留）；新建时另开一个
+        var ws = _editing ?? new WorkspaceConfig();
+
+        ws.Name = name;
+        ws.Description = DescBox.Text ?? "";
+        ws.Path = PathBox.Text ?? "";
+        ws.SystemPrompt = SystemPromptBox.Text ?? "";
+        ws.EnabledToolIds = CollectChecked(ToolsHost);
+        ws.EnabledSkills = CollectCheckedSkills();
+        ws.McpServers = McpBox.Text?
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .ToList() ?? new();
+        ws.ToolPermissionMode = (PermissionCombo.SelectedItem as PermOption)?.Mode ?? PermissionMode.Normal;
 
         Result = ws;
         Close();

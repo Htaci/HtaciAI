@@ -1,25 +1,34 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="60"
              x:Class="HtaciAI.Controls.TurnActivityCard">
     <UserControl.Styles>
         <!-- 卡片内容区专用：极细灰色滚动条（4px，圆角滑块） -->
-        <Style Selector="ScrollViewer.thin-scrollbar ScrollBar">
+        <Style Selector=".thin-scrollbar ScrollBar">
             <Setter Property="Width" Value="4"/>
             <Setter Property="MinWidth" Value="4"/>
+            <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollBar">
-                        <Grid Width="4">
+                        <Grid Width="4" Background="Transparent">
                             <Rectangle Fill="Transparent"/>
+                            <!-- Value 必须双向，且必须用 {TemplateBinding} 而不是
+                                 {Binding RelativeSource={RelativeSource TemplatedParent}}：
+                                 TemplateBindingExpression 的优先级是 Template，回写走 SetCurrentValue，
+                                 不会顶掉 ScrollBar 自己那条 Template 优先级的 Offset→Value 绑定。
+                                 少了 Mode=TwoWay，拖滑块时 Track.Value 传不回 ScrollBar.Value ——
+                                 现象就是「滑块能拖，但内容一动不动」。
+                                 其余属性照抄 Avalonia Fluent 的 ScrollBar 模板。 -->
                             <Track Name="PART_Track"
-                                   Orientation="Vertical"
+                                   Orientation="{TemplateBinding Orientation}"
                                    IsDirectionReversed="True"
                                    Minimum="{TemplateBinding Minimum}"
                                    Maximum="{TemplateBinding Maximum}"
-                                   Value="{TemplateBinding Value}"
+                                   Value="{TemplateBinding Value, Mode=TwoWay}"
                                    ViewportSize="{TemplateBinding ViewportSize}">
                                 <Track.DecreaseButton>
                                     <RepeatButton IsTabStop="False" Focusable="False"
@@ -30,10 +39,10 @@
                                                   Opacity="0" Width="0" Height="0"/>
                                 </Track.IncreaseButton>
                                 <Track.Thumb>
-                                    <Thumb MinHeight="24" IsTabStop="False">
+                                    <Thumb MinHeight="28" IsTabStop="False">
                                         <Thumb.Template>
                                             <ControlTemplate TargetType="Thumb">
-                                                <Border Background="#D0D0D3" CornerRadius="2" Margin="0,2"/>
+                                                <Border Background="#D8D8DC" CornerRadius="2"/>
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>
@@ -43,6 +52,11 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <!-- 悬停滑块加深，提示可拖拽 -->
+        <Style Selector=".thin-scrollbar ScrollBar /template/ Thumb:pointerover /template/ Border">
+            <Setter Property="Background" Value="#A6A6AD"/>
         </Style>
     </UserControl.Styles>
 
@@ -59,25 +73,14 @@
                     Background="Transparent"
                     CornerRadius="10"
                     Cursor="Hand">
-                <Grid ColumnDefinitions="Auto,*,Auto" Margin="18,0,18,0">
-                    <Border Width="20" Height="20"
-                            Margin="0,0,8,0"
-                            VerticalAlignment="Center">
-                        <TextBlock Text="&#xe950;"
-                                   FontFamily="Segoe Fluent Icons"
-                                   FontSize="14"
-                                   Foreground="#333333"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"/>
-                    </Border>
+                <Grid ColumnDefinitions="*,Auto" Margin="18,0,18,0">
                     <TextBlock x:Name="HeaderText"
-                               Grid.Column="1"
                                FontSize="13.5"
                                FontWeight="SemiBold"
                                Foreground="#1F1F1F"
                                VerticalAlignment="Center"/>
                     <TextBlock x:Name="Chevron"
-                               Grid.Column="2"
+                               Grid.Column="1"
                                Text="›"
                                FontSize="16"
                                Foreground="#C5C5C7"
@@ -86,13 +89,13 @@
             </Border>
 
             <!-- 内容区：可展开的步骤序列 -->
-            <ScrollViewer x:Name="ContentScroll"
+            <controls:SmoothScrollViewer x:Name="ContentScroll"
                           Classes="thin-scrollbar"
                           MaxHeight="0"
                           Opacity="0"
                           Margin="18,0,18,0">
                 <StackPanel x:Name="ContentPanel" Spacing="6" Margin="0,4,0,4"/>
-            </ScrollViewer>
+            </controls:SmoothScrollViewer>
         </StackPanel>
     </Border>
 </UserControl>

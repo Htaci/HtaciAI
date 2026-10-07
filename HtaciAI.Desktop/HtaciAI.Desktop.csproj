@@ -5,6 +5,9 @@
     See https://docs.avaloniaui.net/docs/guides/platforms/platform-specific-code/dotnet for more details.-->
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
+    <!-- 程序版本号的唯一来源（SDK 会同步 AssemblyInformationalVersion / FileVersion）。
+         发布新版本时改这里；「检查更新」拿它跟清单里的 version 比。 -->
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <PropertyGroup>

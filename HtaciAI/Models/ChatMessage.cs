@@ -20,6 +20,12 @@ public class ChatMessage
     public string? UsageJson { get; set; }
     public string? ModelName { get; set; }
     public string? Metadata { get; set; }
+    /// <summary>
+    /// 本轮的耗时（毫秒），只写在该轮最后一条 assistant 消息上。
+    /// 时间戳推不出时长（同一轮内所有消息共用同一个 now），所以单独落一列。
+    /// </summary>
+    public long? DurationMs { get; set; }
+
     public bool IsDeleted { get; set; }
     public long? DeletedAt { get; set; }
     public long CreatedAt { get; set; }

@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:HtaciAI.Controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="560" d:DesignHeight="760"
@@ -28,7 +29,8 @@
 
     <Grid RowDefinitions="Auto,*,Auto">
         <!-- 标题 -->
-        <TextBlock Grid.Row="0"
+        <TextBlock x:Name="HeaderText"
+                   Grid.Row="0"
                    Text="创建新工作空间"
                    FontSize="18"
                    FontWeight="Bold"
@@ -36,7 +38,7 @@
                    Margin="24,18,24,6"/>
 
         <!-- 表单 -->
-        <ScrollViewer Grid.Row="1"
+        <controls:SmoothScrollViewer Grid.Row="1"
                       Margin="24,8,24,8"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
@@ -98,23 +100,7 @@
                              Padding="10,0"
                              CornerRadius="6"
                              IsReadOnly="True"
-                             PlaceholderText="选择 Agent 干活的项目根目录"/>
-                </StackPanel>
-
-                <!-- Agent -->
-                <StackPanel Spacing="6">
-                    <TextBlock Text="Agent"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="#374151"/>
-                    <ComboBox x:Name="AgentCombo"
-                              Height="34"
-                              CornerRadius="6"
-                              SelectionChanged="OnAgentChanged"/>
-                    <TextBlock Text="选择后自动带入该 Agent 的默认工具 / 技能（可在下方二次调整）"
-                               FontSize="11"
-                               Foreground="#9CA3AF"
-                               TextWrapping="Wrap"/>
+                             PlaceholderText="选择项目根目录"/>
                 </StackPanel>
 
                 <!-- 默认工具 -->
@@ -128,11 +114,11 @@
                             BorderBrush="#E5E7EB"
                             BorderThickness="1"
                             Padding="10,8">
-                        <ScrollViewer MaxHeight="110"
+                        <controls:SmoothScrollViewer MaxHeight="110"
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto">
                             <StackPanel x:Name="ToolsHost" Spacing="4"/>
-                        </ScrollViewer>
+                        </controls:SmoothScrollViewer>
                     </Border>
                 </StackPanel>
 
@@ -147,11 +133,11 @@
                             BorderBrush="#E5E7EB"
                             BorderThickness="1"
                             Padding="10,8">
-                        <ScrollViewer MaxHeight="110"
+                        <controls:SmoothScrollViewer MaxHeight="110"
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto">
                             <StackPanel x:Name="SkillsHost" Spacing="4"/>
-                        </ScrollViewer>
+                        </controls:SmoothScrollViewer>
                     </Border>
                 </StackPanel>
 
@@ -199,7 +185,7 @@
                                TextWrapping="Wrap"/>
                 </StackPanel>
             </StackPanel>
-        </ScrollViewer>
+        </controls:SmoothScrollViewer>
 
         <!-- 底部按钮 -->
         <Grid Grid.Row="2"
@@ -224,7 +210,7 @@
                     Foreground="White"
                     Cursor="Hand"
                     Click="OnCreateClick">
-                <TextBlock Text="创建" FontSize="13"/>
+                <TextBlock x:Name="SubmitText" Text="创建" FontSize="13"/>
             </Button>
         </Grid>
     </Grid>

@@ -1,11 +1,86 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="using:HtaciAI"
+             xmlns:controls="using:HtaciAI.Controls"
              x:Class="HtaciAI.App"
              RequestedThemeVariant="Default">
              <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
 
+    <!-- Styles 必须写在 Resources 之前：下面的 ControlTheme 用 StaticResource 引用
+         Fluent 里的 {x:Type ScrollViewer}，要靠它先挂在 Application.Styles 上才找得到。 -->
     <Application.Styles>
         <FluentTheme />
+
+        <!-- 下面这些放在 FluentTheme 之后：同一个 Styles 集合里，后写的优先级更高。 -->
+
+        <!-- ===== 菜单（MenuFlyout / ContextMenu）=====
+             菜单里「行高亮距菜单边缘多远」由三个量相加而成（见 Fluent 的
+             MenuFlyoutPresenter 模板）：
+               MenuFlyoutPresenter.Padding          ← MenuFlyoutPresenterThemePadding
+             + 模板内层 Border.Padding              ← FlyoutBorderThemePadding（下面置 0）
+             + ItemsPresenter.Margin               ← MenuFlyoutScrollerMargin（默认只作用上下！）
+             最后那个只加在上下、不加在左右，正是「上边距和左右不一样宽」的来源。
+             这里把三处都显式钉死成同一个值，四边必然相等。 -->
+        <Style Selector="MenuFlyoutPresenter">
+            <Setter Property="Padding" Value="6"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <!-- 长菜单（工具那种十来项）改为菜单内部滚动，别顶出屏幕 -->
+            <Setter Property="MaxHeight" Value="420"/>
+        </Style>
+
+        <!-- 自定义 Flyout（会话/工作空间的「···」菜单，内容是手搓的行）跟着同一套观感 -->
+        <Style Selector="FlyoutPresenter">
+            <Setter Property="CornerRadius" Value="10"/>
+        </Style>
+
+        <!-- 菜单行：默认 CornerRadius 是 0，高亮会是一条通栏方块；
+             给点圆角才像参考图那样是内缩的一小块。 -->
+        <Style Selector="MenuItem">
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+
+        <Style Selector="MenuItem:separator">
+            <Setter Property="Margin" Value="8,3"/>
+        </Style>
+
+        <!-- 菜单里的「分组标题」行（如技能菜单的「已加载（全文注入）」）。
+             它们是禁用的 MenuItem，这里压小一点、收紧行高，让它读起来像标题而不是可点的项。 -->
+        <Style Selector="MenuItem.menu-header">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Padding" Value="12,6"/>
+        </Style>
     </Application.Styles>
+
+    <Application.Resources>
+        <!-- Fluent 的 FlyoutPresenter 用它作 Padding，默认值很大（WinUI 里是 16,15,16,17），
+             弹出的菜单外框会显得很空。这里收窄到刚好贴合行内容。
+             同一个键还被模板内层 Border 的 Padding 使用，一并收紧，
+             避免出现「外框很大、内容缩在中间」的效果。
+             值与上面的 MenuFlyoutPresenter.Padding 保持一致，两套菜单看起来才是一家。 -->
+        <Thickness x:Key="FlyoutContentThemePadding">6</Thickness>
+        <Thickness x:Key="FlyoutBorderThemePadding">0</Thickness>
+
+        <!-- 默认是 0,4,0,4 —— 只作用上下，会让菜单四边内边距不等。归零，让位给上面那个统一的 6。 -->
+        <Thickness x:Key="MenuFlyoutScrollerMargin">0</Thickness>
+
+        <!-- 菜单行的内边距（默认偏挤）。行高一点、间距松一点，接近参考图的疏朗感。 -->
+        <Thickness x:Key="MenuFlyoutItemThemePaddingNarrow">12,8</Thickness>
+
+        <!-- FlyoutPresenter 还带 MaxWidth/MaxHeight（WinUI 是 456/758），而它模板里的
+             ScrollViewer 水平方向是 Auto。工作空间选择器面板是按卡片宽度算的（约 500），
+             超过上限就会被压窄、内容向右溢出裁掉，还会多出一条横向滚动条。
+             这里放宽；只影响上限，窄菜单（会话「···」、权限菜单）不受影响。 -->
+        <x:Double x:Key="FlyoutThemeMaxWidth">1200</x:Double>
+        <x:Double x:Key="FlyoutThemeMaxHeight">1200</x:Double>
+
+        <!-- ControlTheme 按【精确类型】匹配，不会再往上找基类的主题。
+             所以任何继承自已有控件的自定义控件都必须自己声明一份主题，
+             用 BasedOn 把基类那套模板/资源继承过来；
+             少这一步的表现是：控件退化成基类外观（这里是 ContentControl 的
+             ContentPresenter），既不滚动也没有滚动条，且不报任何错。 -->
+        <ControlTheme x:Key="{x:Type controls:SmoothScrollViewer}"
+                      TargetType="controls:SmoothScrollViewer"
+                      BasedOn="{StaticResource {x:Type ScrollViewer}}" />
+    </Application.Resources>
 </Application>

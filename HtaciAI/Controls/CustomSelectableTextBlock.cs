@@ -14,13 +14,30 @@ namespace HtaciAI.Controls;
 /// </summary>
 public sealed class CustomSelectableTextBlock : SelectableTextBlock
 {
+    private bool _nativeSelectionEnabled;
+
     public CustomSelectableTextBlock()
     {
-        // 选中光标形状，提示可选中
-        Cursor = new Cursor(StandardCursorType.Ibeam);
+        // 默认不可选中 → 用普通箭头光标；置为可选中时才切 I 形，避免暗示"这里的文字能选"
+        Cursor = new Cursor(StandardCursorType.Arrow);
         // 显式设置选中高亮：让 SelectionBrush/SelectionForegroundBrush 生效，避免默认透明导致看不到
         SelectionBrush = new SolidColorBrush(Color.FromArgb(100, 51, 153, 255));
         SelectionForegroundBrush = Brushes.White;
+    }
+
+    /// <summary>
+    /// 是否启用原生选择。默认 false：交给外部管理器协调（见 <see cref="SelectionManager"/>）。
+    /// 置 true 后本块自己处理指针事件，可独立拖选/双击选词/Ctrl+C。
+    /// </summary>
+    public bool NativeSelectionEnabled
+    {
+        get => _nativeSelectionEnabled;
+        set
+        {
+            if (_nativeSelectionEnabled == value) return;
+            _nativeSelectionEnabled = value;
+            Cursor = new Cursor(value ? StandardCursorType.Ibeam : StandardCursorType.Arrow);
+        }
     }
 
     /// <summary>管理器设置选中范围，触发本块高亮（自动钳制到文本长度内）。</summary>
@@ -44,19 +61,35 @@ public sealed class CustomSelectableTextBlock : SelectableTextBlock
         return layout.HitTestPoint(local).TextPosition;
     }
 
-    // ---- 禁用原生选择：拦截鼠标，不让 SelectableTextBlock 自己开始选择 ----
+    // ---- 默认禁用原生选择：拦截鼠标，不让 SelectableTextBlock 自己开始选择 ----
+    // NativeSelectionEnabled=true 时走 base，交还原生选择（拖选/双击选词/键盘操作）。
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
+        if (NativeSelectionEnabled)
+        {
+            base.OnPointerPressed(e);
+            return;
+        }
         // 不调用 base：不触发原生拖选；事件继续冒泡到宿主的 SelectionManager
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
+        if (NativeSelectionEnabled)
+        {
+            base.OnPointerMoved(e);
+            return;
+        }
         // 禁用原生
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (NativeSelectionEnabled)
+        {
+            base.OnPointerReleased(e);
+            return;
+        }
         // 禁用原生
     }
 }

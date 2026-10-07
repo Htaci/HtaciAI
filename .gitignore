@@ -20,6 +20,9 @@
 artifacts/
 publish/
 
+# --- 便携模式的数据目录（正常在 exe 旁，这里兜底防止误提交） ---
+/data/
+
 # --- Visual Studio ---
 .vs/
 *.sln.iml

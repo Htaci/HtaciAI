@@ -9,7 +9,7 @@ namespace HtaciAI.Data;
 
 /// <summary>
 /// 工具仓储（tool_toolsets / tool_tools / tool_tool_links 三表）。
-/// 工具与工具集为多对多；未指定归属的工具自动归入内置默认集。
+/// 工具与工具集为多对多；归属只记用户自建的集合，「全部」「内置」是自动集合、不落链接。
 /// </summary>
 public static class ToolRepository
 {
@@ -139,7 +139,7 @@ public static class ToolRepository
             await cmd.ExecuteNonQueryAsync();
         }
 
-        foreach (var tsId in tool.EffectiveToolsetIds)
+        foreach (var tsId in tool.ToolsetIds)
             await InsertLinkAsync(conn, tool.Id, tsId);
     }
 
@@ -176,8 +176,15 @@ public static class ToolRepository
             del.Parameters.AddWithValue("$tool_id", tool.Id);
             await del.ExecuteNonQueryAsync();
         }
-        foreach (var tsId in tool.EffectiveToolsetIds)
+        foreach (var tsId in tool.ToolsetIds)
             await InsertLinkAsync(conn, tool.Id, tsId);
+    }
+
+    /// <summary>把已有工具加进某个工具集（多对多，已存在则忽略）。</summary>
+    public static async Task AddToolLinkAsync(string toolId, string toolsetId)
+    {
+        await using var conn = await DatabaseService.OpenWithForeignKeysAsync();
+        await InsertLinkAsync(conn, toolId, toolsetId);
     }
 
     public static async Task DeleteAsync(string id)

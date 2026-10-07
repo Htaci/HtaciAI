@@ -10,7 +10,9 @@ public enum ToolSource
     Builtin,
     /// <summary>外部脚本工具（Python / Node.js）。</summary>
     Script,
-    // 未来：Mcp、Terminal
+    /// <summary>MCP 服务端提供的工具（<see cref="ToolDefinition.Target"/> 存所属服务 id）。</summary>
+    Mcp,
+    // 未来：Terminal
 }
 
 /// <summary>工具的权限等级：决定在「非自由」模式下是否需要用户确认。</summary>
@@ -47,10 +49,13 @@ public sealed class ToolDefinition
     /// <summary>脚本工具：使用的运行时。</summary>
     public ScriptRuntimeKind Runtime { get; init; }
 
-    /// <summary>脚本工具：目标脚本文件路径（未来终端工具存命令模板）。</summary>
+    /// <summary>脚本工具：目标脚本文件路径；MCP 工具：所属服务 id。</summary>
     public string? Target { get; init; }
 
-    /// <summary>所属工具集 id 集合（多对多）。为空时视为默认集。</summary>
+    /// <summary>
+    /// 所属工具集 id 集合（多对多）。只存用户自建的集合——「全部」「内置」是自动集合，不进这里；
+    /// 为空表示不属于任何自建集合，但它依然出现在「全部」里。
+    /// </summary>
     public IReadOnlyList<string> ToolsetIds { get; set; } = new List<string>();
 
     public bool Enabled { get; init; } = true;
@@ -63,7 +68,10 @@ public sealed class ToolDefinition
     /// </summary>
     public bool IsInternal { get; init; }
 
-    /// <summary>有效所属集合：未显式指定时归入默认集。</summary>
-    public IReadOnlyList<string> EffectiveToolsetIds
-        => ToolsetIds.Count > 0 ? ToolsetIds : new[] { Toolset.Default.Id };
+    /// <summary>
+    /// 该工具不参与权限审批。用于本身就是一次用户交互的工具（如 ask_user_question）：
+    /// 在严格档位下再套一层审批框，会出现「先确认要不要提问、再回答问题」的荒谬两步。
+    /// </summary>
+    public bool SkipApproval { get; init; }
+
 }

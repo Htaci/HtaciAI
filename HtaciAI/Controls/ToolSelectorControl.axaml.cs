@@ -33,7 +33,7 @@ public partial class ToolSelectorControl : UserControl
     // 依赖属性
     // ============================================================
 
-    /// <summary>可选工具集列表（含内置默认集）。</summary>
+    /// <summary>可选工具集列表（含「全部」「内置」两个自动集合）。</summary>
     public static readonly StyledProperty<IEnumerable<Toolset>> ToolsetsProperty =
         AvaloniaProperty.Register<ToolSelectorControl, IEnumerable<Toolset>>(
             nameof(Toolsets),
@@ -160,7 +160,7 @@ public partial class ToolSelectorControl : UserControl
         // 工具集区：勾选 = 全选/全不选该集下所有工具
         foreach (var ts in _toolsets)
         {
-            var groupTools = _tools.Where(t => t.EffectiveToolsetIds.Contains(ts.Id)).ToList();
+            var groupTools = _tools.Where(t => Toolset.Contains(ts.Id, t)).ToList();
             if (groupTools.Count == 0) continue;
 
             var mi = new MenuItem
@@ -198,7 +198,7 @@ public partial class ToolSelectorControl : UserControl
 
     private void ToggleToolset(string toolsetId)
     {
-        var groupTools = _tools.Where(t => t.EffectiveToolsetIds.Contains(toolsetId)).ToList();
+        var groupTools = _tools.Where(t => Toolset.Contains(toolsetId, t)).ToList();
         if (groupTools.Count == 0) return;
 
         var allSelected = groupTools.All(t => _selected.Contains(t.Id));
@@ -227,7 +227,7 @@ public partial class ToolSelectorControl : UserControl
         foreach (var mi in _toolsetItems)
         {
             if (mi.Tag is not string tsId) continue;
-            var group = _tools.Where(t => t.EffectiveToolsetIds.Contains(tsId)).ToList();
+            var group = _tools.Where(t => Toolset.Contains(tsId, t)).ToList();
             mi.IsChecked = group.Count > 0 && group.All(t => _selected.Contains(t.Id));
         }
         foreach (var mi in _toolItems)

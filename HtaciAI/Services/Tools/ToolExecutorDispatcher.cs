@@ -1,9 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Services;
+using HtaciAI.Services.Mcp;
 
 namespace HtaciAI.Services.Tools;
 
@@ -20,11 +21,12 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
     private readonly ToolRegistry _registry;
     private readonly ScriptToolExecutor _scripts = new();
     private readonly BuiltinToolExecutor _builtin = new();
+    private readonly McpToolInvoker _mcp = new();
 
     /// <summary>当前权限审批档位（由输入框权限图标切换，写自 AppSettings）。</summary>
     public PermissionMode Mode { get; set; } = PermissionMode.Normal;
 
-    /// <summary>审批回调：需要用户确认时调用（ChatView 提供弹窗），返回 true=允许执行。</summary>
+    /// <summary>审批回调：需要用户确认时调用（由会话视图提供弹窗），返回 true=允许执行。</summary>
     public Func<ChatToolCall, ToolDefinition, Task<bool>>? ApprovalGate { get; set; }
 
     /// <summary>内置工具宿主上下文（基准目录 + 会话技能读写）。</summary>
@@ -54,8 +56,9 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
         if (prereq is not null)
             return ToolExecution.Fail(prereq);
 
-        // 权限审批：内部辅助工具（invalid 等哨兵）从不进模型视野，也不应触发用户确认，直接放行。
-        if (!tool.IsInternal && ToolPermission.RequiresApproval(tool.DangerLevel, Mode))
+        // 权限审批：内部辅助工具（invalid 等哨兵）从不进模型视野，也不应触发用户确认；
+        // SkipApproval 的工具本身就是一次用户交互（ask_user_question），同样直接放行。
+        if (!tool.IsInternal && !tool.SkipApproval && ToolPermission.RequiresApproval(tool.DangerLevel, Mode))
         {
             var allowed = ApprovalGate is null ? true : await ApprovalGate(call, tool);
             if (!allowed)
@@ -70,6 +73,7 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
             {
                 ToolSource.Script => await _scripts.ExecuteAsync(tool, call, ct),
                 ToolSource.Builtin => await _builtin.ExecuteAsync(tool, call, Context, ct),
+                ToolSource.Mcp => await _mcp.ExecuteAsync(tool, call, ct),
                 _ => ToolExecution.Fail($"暂不支持的工具来源：{tool.Source}"),
             };
         }

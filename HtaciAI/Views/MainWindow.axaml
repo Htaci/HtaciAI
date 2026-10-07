@@ -10,7 +10,7 @@
         x:DataType="views:MainWindow"
         Icon="/Assets/logo.ico"
         Title="HtaciAI"
-        TransparencyLevelHint="Transparent"
+        TransparencyLevelHint="None"
         Width="1200" Height="750"
         MinWidth="1200" MinHeight="550"
         WindowStartupLocation="CenterScreen">
@@ -89,10 +89,12 @@
                 BorderThickness="0,0,0,0"
                 PointerPressed="Form_OnDrag">
             <Grid>
-                <!-- 标签页头 + 新增按钮 -->
+                <!-- 标签页头 + 新增按钮。右边距要留够给下面那排按钮
+                     （检查更新约 82px + 齿轮 50 + 最小化/最大化/关闭各 50），
+                     否则标签多了会压到它们身上。 -->
                 <StackPanel x:Name="TabHeaderPanel"
                             Orientation="Horizontal"
-                            Margin="0,0,200,0">
+                            Margin="0,0,300,0">
                     <Button x:Name="AddTabBtn"
                             Background="Transparent"
                             Padding="0"
@@ -127,8 +129,10 @@
                         HorizontalAlignment="Right"
                         VerticalAlignment="Top"
                         Width="50" Height="40"
-                        Margin="0,0,50,0">
-                    <TextBlock Text="&#xe922;"
+                        Margin="0,0,50,0"
+                        Click="MaximizeButton_Click">
+                    <TextBlock x:Name="MaximizeGlyph"
+                               Text="&#xe922;"
                                FontFamily="Segoe Fluent Icons"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
@@ -139,7 +143,8 @@
                         HorizontalAlignment="Right"
                         VerticalAlignment="Top"
                         Width="50" Height="40"
-                        Margin="0,0,100,0">
+                        Margin="0,0,100,0"
+                        Click="MinimizeButton_Click">
                     <TextBlock Text="&#xe921;"
                                FontFamily="Segoe Fluent Icons"
                                HorizontalAlignment="Center"
@@ -160,6 +165,38 @@
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="14"/>
+                </Button>
+
+                <!-- 检查更新：平时是幽灵按钮，发现新版本时整颗变绿。外观与文案都由
+                     MainWindow.ApplyUpdateState 按状态机设置，这里只给初值。 -->
+                <Button x:Name="UpdateBtn"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Height="28"
+                        Margin="0,0,208,0"
+                        Padding="10,0"
+                        CornerRadius="14"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        IsTabStop="False"
+                        Focusable="False"
+                        Cursor="Hand"
+                        Click="OnUpdateClick">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="6"
+                                VerticalAlignment="Center">
+                        <TextBlock x:Name="UpdateIcon"
+                                   Text="&#xe72c;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="12"
+                                   Foreground="#374151"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock x:Name="UpdateLabel"
+                                   Text="检查更新"
+                                   FontSize="12"
+                                   Foreground="#374151"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Button>
             </Grid>
         </Border>

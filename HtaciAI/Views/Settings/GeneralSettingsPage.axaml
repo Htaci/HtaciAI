@@ -2,13 +2,36 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
              x:Class="HtaciAI.Views.Settings.GeneralSettingsPage">
-    <Grid Background="Transparent">
-        <TextBlock Text="这是常规设置页面"
-                   FontSize="14"
+    <Grid Margin="28,24"
+          RowDefinitions="Auto,Auto,*,Auto">
+        <TextBlock Text="常规设置"
+                   FontSize="20"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"/>
+        <TextBlock Grid.Row="1"
+                   Text="界面行为与更新检查。改动即时保存，无需确认。"
+                   FontSize="12"
                    Foreground="#9CA3AF"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center"/>
+                   Margin="0,6,0,20"
+                   TextWrapping="Wrap"/>
+
+        <!-- 设置卡片（代码生成，与「默认配置」页同一套样式） -->
+        <controls:SmoothScrollViewer Grid.Row="2"
+                                     HorizontalScrollBarVisibility="Disabled"
+                                     VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="ContentPanel"
+                        Spacing="14"/>
+        </controls:SmoothScrollViewer>
+
+        <!-- 保存失败提示（保存成功时保持空白） -->
+        <TextBlock x:Name="FooterHint"
+                   Grid.Row="3"
+                   FontSize="12"
+                   Foreground="#9CA3AF"
+                   TextWrapping="Wrap"
+                   Margin="0,14,0,0"/>
     </Grid>
 </UserControl>

@@ -38,7 +38,7 @@
                    Margin="24,18,24,6"/>
 
         <!-- 表单 -->
-        <ScrollViewer Grid.Row="1"
+        <controls:SmoothScrollViewer Grid.Row="1"
                       Margin="24,8,24,8"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
@@ -125,7 +125,7 @@
                     <ComboBox x:Name="CurrencyCombo" Height="34" CornerRadius="6"/>
                 </StackPanel>
             </StackPanel>
-        </ScrollViewer>
+        </controls:SmoothScrollViewer>
 
         <!-- 底部按钮 -->
         <Grid Grid.Row="2"

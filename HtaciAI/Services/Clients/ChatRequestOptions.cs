@@ -23,4 +23,10 @@ public sealed class ChatRequestOptions
 
     /// <summary>当前激活的工具定义（去重后），非空时作为 tools 数组下发给 LLM。</summary>
     public IReadOnlyList<ToolDefinition>? Tools { get; set; }
+
+    /// <summary>
+    /// 当前模型是否支持视觉。历史里可能留着 view_image 产生的图片 tool 结果，
+    /// 换到不支持视觉的模型后必须把它们降级成文本，否则整轮请求会被 API 拒绝。
+    /// </summary>
+    public bool SupportsVision { get; set; }
 }

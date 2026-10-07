@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
@@ -11,10 +11,9 @@ namespace HtaciAI.Views;
 public partial class NewTabPage : UserControl
 {
     public event EventHandler? SmartChatSelected;
-    public event EventHandler? WorkspaceSelected;
-    public event EventHandler? AgentSelected;
     public event EventHandler? ToolsSelected;
     public event EventHandler? SkillsSelected;
+    public event EventHandler? McpSelected;
 
     public NewTabPage()
     {
@@ -24,49 +23,25 @@ public partial class NewTabPage : UserControl
 
     private void CreateCards()
     {
-        //CardsPanel.Children.Add(CreateCard(new CardData
-        //{
-        //    Title = "智能对话",
-        //    Description = "基础对话和网络搜索，聚焦于回答你想知道的问题。",
-        //    Tags = new[] { "基础对话", "网络搜索" },
-        //    MainColor = Color.FromArgb(0xFF, 0x4A, 0x90, 0xD9),
-        //    LightBg = Color.FromArgb(0xFF, 0xEE, 0xF4, 0xFB),
-        //    GlowAlpha = 0x26,
-        //    TagBg = Color.FromArgb(0xFF, 0xED, 0xF4, 0xFC),
-        //    TagFg = Color.FromArgb(0xFF, 0x3A, 0x7B, 0xC8),
-        //    OnClick = () => SmartChatSelected?.Invoke(this, EventArgs.Empty)
-        //}));
-
         CardsPanel.Children.Add(CreateCard(new CardData
         {
-            Title = "工作空间",
-            Description = "管理 AI 的工作空间",
-
-            MainColor = Color.FromArgb(0xFF, 0x54, 0x6E, 0x7A),
-            LightBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
-            GlowAlpha = 0x1A,
-            TagBg = Color.FromArgb(0xFF, 0xEC, 0xEF, 0xF1),
-            TagFg = Color.FromArgb(0xFF, 0x45, 0x5A, 0x64),
-            OnClick = () => WorkspaceSelected?.Invoke(this, EventArgs.Empty)
-        }));
-
-        CardsPanel.Children.Add(CreateCard(new CardData
-        {
-            Title = "Agent 智能体",
-            Description = "自定义可复用的智能体：提示词 + 默认工具 / 技能 / MCP",
-            Tags = new[] { "Agent", "自定义" },
-            MainColor = Color.FromArgb(0xFF, 0x8B, 0x5C, 0xF6),
-            LightBg = Color.FromArgb(0xFF, 0xF3, 0xEE, 0xFD),
-            GlowAlpha = 0x22,
-            TagBg = Color.FromArgb(0xFF, 0xEF, 0xE9, 0xFC),
-            TagFg = Color.FromArgb(0xFF, 0x6B, 0x3E, 0xE0),
-            OnClick = () => AgentSelected?.Invoke(this, EventArgs.Empty)
+            Title = "智能对话",
+            Description = "对话、工作空间与任务的统一入口",
+            IconGlyph = "",                          // Chat
+            Tags = new[] { "对话", "工作空间" },
+            MainColor = Color.FromArgb(0xFF, 0x4A, 0x90, 0xD9),
+            LightBg = Color.FromArgb(0xFF, 0xEE, 0xF4, 0xFB),
+            GlowAlpha = 0x26,
+            TagBg = Color.FromArgb(0xFF, 0xED, 0xF4, 0xFC),
+            TagFg = Color.FromArgb(0xFF, 0x3A, 0x7B, 0xC8),
+            OnClick = () => SmartChatSelected?.Invoke(this, EventArgs.Empty)
         }));
 
         CardsPanel.Children.Add(CreateCard(new CardData
         {
             Title = "工具",
             Description = "管理工具和工具集，创建新的工具",
+            IconGlyph = "",                          // Repair
             Tags = new[] { "Tools", "管理" },
             MainColor = Color.FromArgb(0xFF, 0x0E, 0xA5, 0xA6),
             LightBg = Color.FromArgb(0xFF, 0xEA, 0xF7, 0xF7),
@@ -91,9 +66,10 @@ public partial class NewTabPage : UserControl
 
         CardsPanel.Children.Add(CreateCard(new CardData
         {
-            Title = "插件与技能",
-            Description = "管理已安装的插件与技能",
-            Tags = new[] { "Plugin", "Skills" },
+            Title = "技能",
+            Description = "管理已安装的技能",
+            IconGlyph = "",                          // Certificate（与输入框技能选择器一致）
+            Tags = new[] { "Skills" },
             MainColor = Color.FromArgb(0xFF, 0x2E, 0xAF, 0x7D),
             LightBg = Color.FromArgb(0xFF, 0xED, 0xF8, 0xF3),
             GlowAlpha = 0x26,
@@ -115,16 +91,30 @@ public partial class NewTabPage : UserControl
         //    OnClick = null
         //}));
 
+        //CardsPanel.Children.Add(CreateCard(new CardData
+        //{
+        //    Title = "插件与技能市场",
+        //    Description = "管理和发现新的插件与技能，扩展 AI 的功能。",
+        //    MainColor = Color.FromArgb(0xFF, 0x7B, 0x5E, 0xA7),
+        //    LightBg = Color.FromArgb(0xFF, 0xF3, 0xEF, 0xF8),
+        //    GlowAlpha = 0x26,
+        //    TagBg = Color.FromArgb(0xFF, 0xF1, 0xED, 0xF6),
+        //    TagFg = Color.FromArgb(0xFF, 0x6A, 0x4F, 0x94),
+        //    OnClick = null
+        //}));
+
         CardsPanel.Children.Add(CreateCard(new CardData
         {
-            Title = "插件与技能市场",
-            Description = "管理和发现新的插件与技能，扩展 AI 的功能。",
+            Title = "MCP服务",
+            Description = "连接并管理 MCP 服务器，为 AI 扩展外部工具能力。",
+            IconGlyph = "",                          // Remote
+            Tags = new[] { "MCP", "服务" },
             MainColor = Color.FromArgb(0xFF, 0x7B, 0x5E, 0xA7),
             LightBg = Color.FromArgb(0xFF, 0xF3, 0xEF, 0xF8),
             GlowAlpha = 0x26,
             TagBg = Color.FromArgb(0xFF, 0xF1, 0xED, 0xF6),
             TagFg = Color.FromArgb(0xFF, 0x6A, 0x4F, 0x94),
-            OnClick = null
+            OnClick = () => McpSelected?.Invoke(this, EventArgs.Empty)
         }));
 
         //CardsPanel.Children.Add(CreateCard(new CardData
@@ -144,6 +134,7 @@ public partial class NewTabPage : UserControl
         {
             Title = "自动化",
             Description = "规划定时任务和自动化流程",
+            IconGlyph = "",                          // Stopwatch
             Tags = new[] { "Automation", "Scheduling" },
             MainColor = Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
             LightBg = Color.FromArgb(0xFF, 0xFF, 0xF9, 0xF0),
@@ -184,7 +175,16 @@ public partial class NewTabPage : UserControl
             {
                 OffsetX = 0, OffsetY = 4, Blur = 14, Spread = 0,
                 Color = Color.FromArgb(46, data.MainColor.R, data.MainColor.G, data.MainColor.B)
-            })
+            }),
+            Child = new TextBlock
+            {
+                Text = data.IconGlyph,
+                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                FontSize = 24,
+                Foreground = new SolidColorBrush(data.MainColor),
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+            }
         };
 
         // ---- 标题 ----
@@ -351,6 +351,10 @@ public partial class NewTabPage : UserControl
     {
         public string Title { get; init; } = "";
         public string Description { get; init; } = "";
+
+        /// <summary>Segoe Fluent Icons 字形码位（如 ""）。</summary>
+        public string IconGlyph { get; init; } = "";
+
         public string[] Tags { get; init; } = [];
         public Color MainColor { get; init; }
         public Color LightBg { get; init; }

@@ -1,11 +1,12 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="550"
              x:Class="HtaciAI.Views.Settings.ModelServicePage">
     <Grid Background="Transparent">
-        <ScrollViewer>
+        <controls:SmoothScrollViewer>
 	        <StackPanel Margin="20">
 			    <TextBlock Text="模型管理"
 					       FontSize="18"
@@ -18,15 +19,6 @@
 					       HorizontalAlignment="Left"
 					       VerticalAlignment="Top"
 					       Margin="0,10,0,20"/>
-
-                <!-- 内置模型（表格由 code-behind 生成，与自定义模型同款渲染，仅少操作列） -->
-                <Grid Margin="0,10,0,0">
-                    <TextBlock Text="内置模型" FontWeight="Bold" Margin="0,5,0,0"/>
-                    <Button Margin="5,0,0,10" Background="Transparent" ToolTip.Tip="刷新模型列表" HorizontalAlignment="Right">
-                        <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xe895;"/>
-                    </Button>
-                </Grid>
-                <StackPanel x:Name="BuiltinTable"/>
 
                 <!-- 自定义模型：服务商分组，动态渲染 -->
                 <Grid Margin="0,10,0,0">
@@ -43,6 +35,6 @@
                 </Grid>
                 <StackPanel x:Name="ProviderList" Margin="0,4,0,0"/>
             </StackPanel>
-        </ScrollViewer>
+        </controls:SmoothScrollViewer>
     </Grid>
 </UserControl>

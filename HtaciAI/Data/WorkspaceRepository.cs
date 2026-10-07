@@ -102,8 +102,15 @@ public static class WorkspaceRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>
+    /// 删除工作空间。工作空间本身是硬删除，但它下面的会话先做软删除
+    /// —— workspace_sessions.workspace_id 没有建外键，不显式处理的话这些会话会变成
+    /// 孤儿行：侧栏按工作空间遍历，它们再也不会显示，消息却一直留在库里。
+    /// </summary>
     public static async Task DeleteAsync(string id)
     {
+        await WorkspaceSessionRepository.SoftDeleteByWorkspaceAsync(id);
+
         await using var conn = DatabaseService.CreateConnection();
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();

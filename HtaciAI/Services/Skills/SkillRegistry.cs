@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
+using HtaciAI.Services.Storage;
 
 namespace HtaciAI.Services.Skills;
 
 /// <summary>
 /// 技能注册表：从磁盘目录加载技能定义并提供 id 解析。全局单例（跨页面、跨对话共享）。
-/// 技能存放于 <c>%USERPROFILE%/.htaci/skills/&lt;skill-id&gt;/SKILL.md</c>，
+/// 技能存放于 <c>&lt;数据根&gt;/skills/&lt;skill-id&gt;/SKILL.md</c>（数据根见 <see cref="AppPaths"/>），
 /// SKILL.md 以 frontmatter（`---` 分隔的 name / description）+ 正文构成。
 /// <see cref="Body"/> 即正文（不含 frontmatter），注入 system 时全文下发。
 /// </summary>
@@ -16,29 +18,35 @@ public sealed class SkillRegistry
     /// <summary>全局单例。</summary>
     public static SkillRegistry Instance { get; } = new();
 
-    /// <summary>技能根目录：%USERPROFILE%/.htaci/skills。</summary>
-    public static string SkillsRoot { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".htaci", "skills");
+    /// <summary>技能根目录：<c>&lt;数据根&gt;/skills</c>，见 <see cref="AppPaths"/>。</summary>
+    public static string SkillsRoot => AppPaths.Skills;
 
     private readonly List<SkillDefinition> _skills = new();
     private readonly Dictionary<string, SkillDefinition> _byId = new();
 
     private SkillRegistry() { }
 
-    /// <summary>首次运行写入内置示例技能（幂等：SKILL.md 已存在则不覆盖）。</summary>
+    /// <summary>
+    /// 首次运行写入内置技能（幂等：SKILL.md 已存在则不覆盖，用户改写的内容会被保留）。
+    /// 只判「文件不存在」，因此内置技能被删掉后下次启动会重新出现。
+    /// 逐个 try：某一个写入失败不影响其余技能。
+    /// </summary>
     public void EnsureSeeded()
     {
-        try
+        foreach (var (id, md) in BuiltinSkills.All)
         {
-            var dir = Path.Combine(SkillsRoot, "code-review");
-            Directory.CreateDirectory(dir);
-            var file = Path.Combine(dir, "SKILL.md");
-            if (!File.Exists(file))
-                File.WriteAllText(file, CodeReviewSkillMd);
-        }
-        catch
-        {
-            // 种子写入失败不影响主流程
+            try
+            {
+                var dir = Path.Combine(SkillsRoot, id);
+                Directory.CreateDirectory(dir);
+                var file = Path.Combine(dir, "SKILL.md");
+                if (!File.Exists(file))
+                    File.WriteAllText(file, md);
+            }
+            catch
+            {
+                // 单个种子写入失败不影响主流程
+            }
         }
     }
 
@@ -66,6 +74,56 @@ public sealed class SkillRegistry
         }
     }
 
+    /// <summary>
+    /// 新建技能：写入 <c>&lt;SkillsRoot&gt;/&lt;id&gt;/SKILL.md</c> 后重载注册表。
+    /// 写入与解析都在这里，格式不会两头跑偏。id 已被占用时抛 <see cref="InvalidOperationException"/>。
+    /// </summary>
+    public SkillDefinition CreateOnDisk(string id, string name, string alias, string description, string body)
+    {
+        var dir = Path.Combine(SkillsRoot, id);
+        var file = Path.Combine(dir, "SKILL.md");
+        if (File.Exists(file))
+            throw new InvalidOperationException($"技能「{id}」已存在");
+
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(file, BuildSkillMd(name, alias, description, body), Encoding.UTF8);
+        LoadFromDisk();
+
+        return ResolveById(id) ?? new SkillDefinition
+        {
+            Id = id,
+            Name = name,
+            Alias = alias,
+            Description = description,
+            Body = body,
+        };
+    }
+
+    /// <summary>
+    /// 按 SKILL.md 的约定拼文件内容：frontmatter 只写非空项，与正文之间留一个空行。
+    /// 元数据项必须是单行，否则会破坏 frontmatter 解析，所以这里统一压平。
+    /// </summary>
+    public static string BuildSkillMd(string name, string alias, string description, string body)
+    {
+        var sb = new StringBuilder();
+        sb.Append("---\n");
+        sb.Append("name: ").Append(OneLine(name)).Append('\n');
+        if (!string.IsNullOrWhiteSpace(alias)) sb.Append("alias: ").Append(OneLine(alias)).Append('\n');
+        if (!string.IsNullOrWhiteSpace(description)) sb.Append("description: ").Append(OneLine(description)).Append('\n');
+        sb.Append("---\n\n");
+        sb.Append(body);
+        sb.Append('\n');
+        return sb.ToString();
+    }
+
+    /// <summary>把可能带换行的文本压成单行（多余空白折叠为一个空格）。</summary>
+    public static string OneLine(string? text)
+        => string.IsNullOrWhiteSpace(text)
+            ? ""
+            // 分隔符必须显式给成数组：Split('\r', '\n', opts) 会绑到
+            // Split(char separator, int count, StringSplitOptions) —— '\n' 被当成 count，结果一个都不切。
+            : string.Join(' ', text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)).Trim();
+
     public void Register(SkillDefinition skill)
     {
         if (string.IsNullOrEmpty(skill.Id)) return;
@@ -90,7 +148,7 @@ public sealed class SkillRegistry
         return _skills.Where(s => set.Contains(s.Id)).ToList();
     }
 
-    /// <summary>解析单个 SKILL.md：frontmatter 的 name / description + 正文（Body）。</summary>
+    /// <summary>解析单个 SKILL.md：frontmatter 的 name / alias / description + 正文（Body）。</summary>
     private static SkillDefinition? ParseSkill(string id, string file)
     {
         try
@@ -99,7 +157,8 @@ public sealed class SkillRegistry
             var (meta, body) = SplitFrontMatter(text);
             var name = meta.TryGetValue("name", out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : id;
             var desc = meta.TryGetValue("description", out var d) ? d.Trim() : "";
-            return new SkillDefinition { Id = id, Name = name, Description = desc, Body = body };
+            var alias = meta.TryGetValue("alias", out var a) ? a.Trim() : "";
+            return new SkillDefinition { Id = id, Name = name, Alias = alias, Description = desc, Body = body };
         }
         catch
         {
@@ -130,29 +189,4 @@ public sealed class SkillRegistry
         return (meta, t);
     }
 
-    /// <summary>内置示例技能：代码审查（端到端验证技能注入链路）。</summary>
-    private const string CodeReviewSkillMd = """
-        ---
-        name: code-review
-        description: 执行代码审查：定位潜在 bug、安全问题与可读性/性能改进点，并给出修复建议
-        ---
-
-        # code-review（代码审查）
-
-        当用户请求“审查代码”“检查这段代码”“评审改动”或给出一个 diff/mr 让你评估时，启用本技能。
-
-        ## 审查维度
-        1. 正确性：逻辑错误、边界条件遗漏、空引用 / 越界 / 资源泄漏风险。
-        2. 安全：注入、权限绕过、敏感信息泄露、不安全的反序列化。
-        3. 性能：明显复杂度问题、无效循环、可避免的分配。
-        4. 可读性：命名、抽象、重复代码、注释是否与实现一致。
-
-        ## 输出格式
-        无问题的维度可跳过；有问题的项按下面结构给出：
-        - **问题**（级别：严重 / 中等 / 建议）
-        - **证据**：文件:行号 + 问题代码摘录
-        - **修复建议**：给出改法或示例代码
-
-        只针对用户指定的文件 / 改动给出结论，不要泛泛而谈。
-        """;
 }

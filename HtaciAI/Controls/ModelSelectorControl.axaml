@@ -8,27 +8,42 @@
         模型选择器（可复用控件）：
         按钮本体显示「模型图标 + 当前模型名 + · + 当前思考模式」，
         点击弹出菜单：模型列表（动态）→ 分隔线 → 思考模式子菜单。
-        模型列表由外部通过 Models 属性注入（数据库加载），内置默认模型兜底；
+        模型列表由外部通过 Models 属性注入（数据库加载）；一个可用模型都没有时
+        没有选中项，标签显示「未配置模型」，调用方负责提示用户去配置。
         思考模式选项固定为 NoThink/none/low/high/max。
     -->
+    <UserControl.Styles>
+        <!-- 三个小选择器（工具/技能/MCP）都有 ToolTip，就它没有；顺手补上。
+             另外这个按钮是文字按钮，必须给悬停反馈，否则鼠标移上去毫无反应。 -->
+        <Style Selector="Button#ModelAndThinkBtn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#F1F3F5"/>
+        </Style>
+        <Style Selector="Button#ModelAndThinkBtn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="#E5E7EB"/>
+        </Style>
+    </UserControl.Styles>
+
     <Button x:Name="ModelAndThinkBtn"
             MinWidth="100"
             Height="28"
-            Padding="0"
+            Padding="8,0"
             CornerRadius="8"
             Background="Transparent">
         <Button.Flyout>
             <MenuFlyout/>
         </Button.Flyout>
+        <ToolTip.Tip>
+            <TextBlock Text="模型与思考模式"/>
+        </ToolTip.Tip>
         <StackPanel Orientation="Horizontal">
             <TextBlock Text="&#xf158;"
                        FontFamily="Segoe Fluent Icons"
                        FontSize="14"
-                       Margin="5"
+                       Margin="0,0,6,0"
                        HorizontalAlignment="Left"
                        VerticalAlignment="Center"/>
             <TextBlock x:Name="ModelLabel"
-                       Text=""
+                       Text="未配置模型"
                        FontSize="12"
                        HorizontalAlignment="Left"
                        VerticalAlignment="Center"/>
@@ -40,7 +55,6 @@
             <TextBlock x:Name="ThinkingLabel"
                        Text="none"
                        FontSize="12"
-                       Margin="0,0,10,0"
                        HorizontalAlignment="Left"
                        VerticalAlignment="Center"/>
         </StackPanel>

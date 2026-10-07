@@ -13,6 +13,16 @@ public sealed class SkillDefinition
     /// <summary>技能名（snake_case），用于元数据列表展示与按需触发。</summary>
     public string Name { get; init; } = "";
 
+    /// <summary>
+    /// 备注名（SKILL.md frontmatter 的 <c>alias</c>）：给人看的可读名字。
+    /// 只影响 UI 显示，不参与提示词注入（注入仍用 <see cref="Name"/>，
+    /// 因为模型按 id 调用 load_skill，两边必须是同一个串）。
+    /// </summary>
+    public string Alias { get; init; } = "";
+
+    /// <summary>界面上显示的名字：有备注用备注，否则回退到 <see cref="Name"/>。</summary>
+    public string DisplayName => string.IsNullOrWhiteSpace(Alias) ? Name : Alias;
+
     /// <summary>一句话描述：做什么、何时用。模型凭它在“可用技能列表”中判断是否触发。</summary>
     public string Description { get; init; } = "";
 

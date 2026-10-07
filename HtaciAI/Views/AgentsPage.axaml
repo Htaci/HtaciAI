@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="600"
@@ -36,12 +37,12 @@
                                    VerticalAlignment="Center"/>
                     </Border>
                 </Grid>
-                <ScrollViewer Grid.Row="1"
+                <controls:SmoothScrollViewer Grid.Row="1"
                               HorizontalScrollBarVisibility="Disabled"
                               VerticalScrollBarVisibility="Auto">
                     <StackPanel x:Name="AgentList"
                                 Spacing="2"/>
-                </ScrollViewer>
+                </controls:SmoothScrollViewer>
             </Grid>
         </Border>
 
@@ -150,7 +151,7 @@
                 </StackPanel>
             </Grid>
 
-            <ScrollViewer Grid.Row="1"
+            <controls:SmoothScrollViewer Grid.Row="1"
                           HorizontalScrollBarVisibility="Disabled"
                           VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="16"
@@ -206,12 +207,12 @@
                                 BorderBrush="#E5E7EB"
                                 BorderThickness="1"
                                 Padding="12,10">
-                            <ScrollViewer MaxHeight="160"
+                            <controls:SmoothScrollViewer MaxHeight="160"
                                           HorizontalScrollBarVisibility="Disabled"
                                           VerticalScrollBarVisibility="Auto">
                                 <StackPanel x:Name="ToolsHost"
                                             Spacing="6"/>
-                            </ScrollViewer>
+                            </controls:SmoothScrollViewer>
                         </Border>
                     </StackPanel>
                     <!-- 默认启用的技能 -->
@@ -225,12 +226,12 @@
                                 BorderBrush="#E5E7EB"
                                 BorderThickness="1"
                                 Padding="12,10">
-                            <ScrollViewer MaxHeight="160"
+                            <controls:SmoothScrollViewer MaxHeight="160"
                                           HorizontalScrollBarVisibility="Disabled"
                                           VerticalScrollBarVisibility="Auto">
                                 <StackPanel x:Name="SkillsHost"
                                             Spacing="6"/>
-                            </ScrollViewer>
+                            </controls:SmoothScrollViewer>
                         </Border>
                     </StackPanel>
                     <!-- MCP -->
@@ -250,7 +251,7 @@
                                  FontFamily="Consolas"/>
                     </StackPanel>
                 </StackPanel>
-            </ScrollViewer>
+            </controls:SmoothScrollViewer>
         </Grid>
     </Grid>
 </UserControl>

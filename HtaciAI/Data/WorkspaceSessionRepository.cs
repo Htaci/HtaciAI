@@ -49,6 +49,25 @@ public static class WorkspaceSessionRepository
         return await r.ReadAsync() ? Map(r) : null;
     }
 
+    /// <summary>
+    /// 最近一次用过的模型名与使用时间（工作区会话侧）。与 <see cref="ChatRepository.GetLastUsedModelAsync"/>
+    /// 配合，供「新会话默认模型 = 上次使用的模型」使用。
+    /// </summary>
+    public static async Task<(string Model, long At)?> GetLastUsedModelAsync()
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT model, COALESCE(last_message_at, created_at) AS at FROM workspace_sessions
+            WHERE model IS NOT NULL AND model <> ''
+            ORDER BY at DESC
+            LIMIT 1;
+            """;
+        await using var r = await cmd.ExecuteReaderAsync();
+        return await r.ReadAsync() ? (r.GetString(0), r.GetInt64(1)) : null;
+    }
+
     public static async Task CreateAsync(WorkspaceChatSession s)
     {
         var now = Now();
@@ -111,16 +130,65 @@ public static class WorkspaceSessionRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
-    /// <summary>更新会话草稿（单客户端无并发，防抖写入可忽略）。</summary>
+    /// <summary>
+    /// 按工作空间汇总未删除会话的数量与最近使用时间，供工作空间选择器显示「N 个会话 · 最近使用」。
+    /// 一次性分组聚合，避免在选择器里对每个工作空间各查一遍。
+    /// </summary>
+    public static async Task<Dictionary<string, (int Count, long LastAt)>> GetStatsAsync()
+    {
+        var result = new Dictionary<string, (int Count, long LastAt)>();
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT workspace_id, COUNT(*) AS cnt, MAX(COALESCE(last_message_at, created_at)) AS last_at
+            FROM workspace_sessions
+            WHERE is_deleted = 0
+            GROUP BY workspace_id;
+            """;
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+        {
+            if (r.IsDBNull(0)) continue;
+            var cnt = r.IsDBNull(1) ? 0 : r.GetInt32(1);
+            var lastAt = r.IsDBNull(2) ? 0L : r.GetInt64(2);
+            result[r.GetString(0)] = (cnt, lastAt);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 更新会话草稿（单客户端无并发，防抖写入可忽略）。
+    /// 同 <see cref="ChatRepository.SaveDraftAsync"/>：<b>不动 updated_at</b>——草稿是打字过程不是会话活动，
+    /// 而且打开会话恢复草稿时也会触发一次写入。
+    /// </summary>
     public static async Task SaveDraftAsync(string id, string draft)
     {
         await using var conn = DatabaseService.CreateConnection();
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE workspace_sessions SET draft = $draft, updated_at = $now WHERE id = $id;";
+        cmd.CommandText = "UPDATE workspace_sessions SET draft = $draft WHERE id = $id;";
         cmd.Parameters.AddWithValue("$draft", draft);
-        cmd.Parameters.AddWithValue("$now", Now());
         cmd.Parameters.AddWithValue("$id", id);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// 把某个工作空间下的所有会话标记为已删除（软删除，消息保留），
+    /// 供 <see cref="WorkspaceRepository.DeleteAsync"/> 级联调用。
+    /// </summary>
+    public static async Task SoftDeleteByWorkspaceAsync(string workspaceId)
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE workspace_sessions
+            SET is_deleted = 1, deleted_at = $now
+            WHERE workspace_id = $id AND is_deleted = 0;
+            """;
+        cmd.Parameters.AddWithValue("$now", Now());
+        cmd.Parameters.AddWithValue("$id", workspaceId);
         await cmd.ExecuteNonQueryAsync();
     }
 

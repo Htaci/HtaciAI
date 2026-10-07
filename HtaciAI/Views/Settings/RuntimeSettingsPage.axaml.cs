@@ -23,7 +23,7 @@ public partial class RuntimeSettingsPage : UserControl
     {
         InitializeComponent();
 
-        foreach (var kind in new[] { ScriptRuntimeKind.Python, ScriptRuntimeKind.Node })
+        foreach (var kind in new[] { ScriptRuntimeKind.Python, ScriptRuntimeKind.Node, ScriptRuntimeKind.Git })
             RuntimeList.Children.Add(CreateCard(kind));
 
         _ = RefreshAllAsync();

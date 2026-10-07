@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Models;
@@ -9,7 +8,7 @@ namespace HtaciAI.Services;
 
 /// <summary>
 /// 模型目录：读取服务商/模型两表，装配成统一 <see cref="ModelDetails"/>，并按协议构建客户端。
-/// 内置模型后续改为直接请求自有服务返回列表，当前仅管理自定义模型。
+/// 可用模型<b>完全由用户配置决定</b>：一个都没配时列表就是空的，调用方必须自己处理这种情况。
 /// </summary>
 public static class ModelCatalog
 {
@@ -28,7 +27,10 @@ public static class ModelCatalog
         return Assemble(model, provider);
     }
 
-    /// <summary>列出所有启用的模型详情（供模型选择器/UI）。</summary>
+    /// <summary>
+    /// 列出所有启用的模型详情（供模型选择器/UI）。服务商或模型被停用都会排除在外，
+    /// 结果可能为空 —— 调用方要能处理「一个模型都没有」。
+    /// </summary>
     public static async Task<List<ModelDetails>> ListEnabledAsync()
     {
         var list = new List<ModelDetails>();
@@ -41,11 +43,6 @@ public static class ModelCatalog
                 list.Add(Assemble(model, provider));
             }
         }
-        // 内置默认模型（ChatConfig 配置，未落库）始终作为兜底追加到列表尾部（按调用 id 去重）。
-        // 否则模型选择器会把它误判为"不在列表"而切到第一个自定义模型，会话恢复也匹配不到它，
-        // 导致选了 DeepSeek V4 Flash 却实际调用自定义模型。
-        if (list.All(m => m.ModelName != ModelDetails.Default.ModelName))
-            list.Add(ModelDetails.Default);
         return list;
     }
 

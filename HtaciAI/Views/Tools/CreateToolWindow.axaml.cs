@@ -24,7 +24,13 @@ public partial class CreateToolWindow : Window
     /// <summary>保存成功后的工具定义（供调用方读取）。</summary>
     public ToolDefinition? Result { get; private set; }
 
-    public CreateToolWindow()
+    /// <summary>无参构造只为满足 XAML 加载器/设计器（缺了会报 AVLN3001），正常调用走带参那个。</summary>
+    public CreateToolWindow() : this(null) { }
+
+    /// <param name="presetToolsetId">
+    /// 在工具页某个集合里点「创建新工具」时传入，对应勾选框预选上。自动集合（全部/内置）传 null。
+    /// </param>
+    public CreateToolWindow(string? presetToolsetId)
     {
         InitializeComponent();
 
@@ -34,20 +40,29 @@ public partial class CreateToolWindow : Window
         DangerCombo.ItemsSource = new List<string> { "安全", "风险", "危险" };
         DangerCombo.SelectedIndex = 2; // 未选择时默认「危险」
 
-        // 归属工具集勾选（默认勾选内置默认集）
-        foreach (var ts in ToolRegistry.Instance.GetToolsets())
+        // 归属工具集勾选：自动集合（全部/内置）不参与归属，不能勾
+        foreach (var ts in ToolRegistry.Instance.GetToolsets().Where(ts => !ts.IsAuto))
         {
             var cb = new CheckBox
             {
                 Content = ts.Name,
                 FontSize = 13,
                 Foreground = new SolidColorBrush(Color.Parse("#374151")),
-                IsChecked = ts.Id == Toolset.Default.Id,
+                IsChecked = ts.Id == presetToolsetId,
                 Tag = ts.Id,
             };
             _toolsetChecks.Add(cb);
             ToolsetPanel.Children.Add(cb);
         }
+
+        if (_toolsetChecks.Count == 0)
+            ToolsetPanel.Children.Add(new TextBlock
+            {
+                Text = "还没有自建工具集，创建后可在工具页把工具加进去",
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+                TextWrapping = TextWrapping.Wrap,
+            });
     }
 
     private ScriptRuntimeKind SelectedRuntime
@@ -133,7 +148,6 @@ public partial class CreateToolWindow : Window
         }
 
         var selectedSets = _toolsetChecks.Where(c => c.IsChecked == true).Select(c => (string)c.Tag!).ToList();
-        if (selectedSets.Count == 0) selectedSets.Add(Toolset.Default.Id);
 
         var tool = new ToolDefinition
         {

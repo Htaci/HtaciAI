@@ -1,13 +1,14 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="600"
              x:Class="HtaciAI.Views.NewTabPage">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+    <controls:SmoothScrollViewer HorizontalScrollBarVisibility="Disabled"
                   VerticalScrollBarVisibility="Auto">
         <WrapPanel x:Name="CardsPanel"
                    Orientation="Horizontal"
                    Margin="32"/>
-    </ScrollViewer>
+    </controls:SmoothScrollViewer>
 </UserControl>

@@ -5,6 +5,24 @@
              xmlns:controls="clr-namespace:HtaciAI.Controls"
              mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
              x:Class="HtaciAI.Views.NewChatView">
+    <UserControl.Styles>
+        <!-- 与 ConversationView 同一套输入框聚焦视觉，两处必须一致。
+             缘由见 ConversationView.axaml 里的注释：Fluent 的 TextBox 主题在 :focus 时
+             会给模板内的 Border#PART_BorderElement 直接设 2px 蓝边，
+             文本框自身的 BorderThickness="0" 压不住，得在这里覆盖。 -->
+        <Style Selector="TextBox#InputBox:focus /template/ Border#PART_BorderElement">
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style Selector="TextBox#InputBox:focus /template/ Border">
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+
+        <Style Selector="Border#InputShell:focus-within">
+            <Setter Property="BorderBrush" Value="#7EB3E8"/>
+            <Setter Property="BoxShadow" Value="0 0 0 1 #7EB3E8, 0 0 7 2 #4D7EB3E8"/>
+        </Style>
+    </UserControl.Styles>
+
     <Grid x:Name="FullRoot" Background="Transparent" PointerPressed="OnBackgroundPressed">
         <Grid HorizontalAlignment="Center" VerticalAlignment="Center" Width="500" Background="Transparent">
         <StackPanel Spacing="20">
@@ -14,8 +32,48 @@
                        Foreground="#1A1A2E"
                        HorizontalAlignment="Center"/>
 
+            <!-- 目标分类：普通会话 / 工作空间。轨道半透明，选中项是白色胶囊。
+                 这里用 Border + PointerPressed 而不是 Button：Button 的模板会在
+                 :pointerover 时往自己的 ContentPresenter 上叠一层灰，本地值覆盖不掉，
+                 而这一行不需要悬停高亮（白色胶囊本身已经表示选中）。 -->
+            <StackPanel Spacing="10" HorizontalAlignment="Center" Margin="0,14,0,0">
+                <Border HorizontalAlignment="Center"
+                        CornerRadius="18"
+                        Background="#0F000000"
+                        Padding="4">
+                    <StackPanel Orientation="Horizontal">
+                        <Border x:Name="ModePlainBtn"
+                                Width="96" Height="28"
+                                CornerRadius="14"
+                                Background="#FFFFFF"
+                                Cursor="Hand">
+                            <TextBlock x:Name="ModePlainText"
+                                       Text="普通会话"
+                                       FontSize="13"
+                                       Foreground="#1A1A2E"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Border>
+                        <Border x:Name="ModeWorkspaceBtn"
+                                Width="96" Height="28"
+                                CornerRadius="14"
+                                Background="Transparent"
+                                Cursor="Hand">
+                            <TextBlock x:Name="ModeWorkspaceText"
+                                       Text="工作空间"
+                                       FontSize="13"
+                                       Foreground="#6B7280"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+
             <!-- 输入框 -->
-            <Border CornerRadius="8"
+            <Border x:Name="InputShell"
+                    CornerRadius="8"
                     Background="#FFFFFF"
                     BorderBrush="#E5E7EB"
                     BorderThickness="1">
@@ -84,7 +142,7 @@
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Button>
-                            <!-- 知识库 -->
+                            <!-- 知识库：功能尚未实现，先不放出入口
                             <Button x:Name="KnowledgeBaseBtn"
                                 Width="28"
                                 Height="28"
@@ -94,13 +152,8 @@
                                 Margin="5">
                                 <ToolTip.Tip>
                                     <StackPanel>
-                                        <!-- 第一行：主要提示，类似菜单标题 -->
-                                        <TextBlock Text="知识库" 
+                                        <TextBlock Text="知识库"
                                                    FontWeight="Bold" />
-                                        <!-- 第二行：次要提示，类似菜单描述 
-                                        <TextBlock Text="文本"
-                                                   FontSize="12" 
-                                                   Foreground="Gray" />-->
                                     </StackPanel>
                                 </ToolTip.Tip>
                                 <TextBlock Text="&#xe7be;"
@@ -109,12 +162,16 @@
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Button>
+                            -->
                             <!-- 工具库（可复用控件 ToolSelectorControl） -->
                             <controls:ToolSelectorControl x:Name="ToolSelector"
                                                           Margin="5"/>
                             <!-- 技能库（可复用控件 SkillSelectorControl） -->
                             <controls:SkillSelectorControl x:Name="SkillSelector"
                                                            Margin="5"/>
+                            <!-- MCP 服务（可复用控件 McpSelectorControl） -->
+                            <controls:McpSelectorControl x:Name="McpSelector"
+                                                         Margin="5"/>
                             <!-- 权限模式（严格/普通/宽松/自由） -->
                             <Button x:Name="PermModeBtn"
                                 Width="28"
@@ -146,6 +203,20 @@
 
             </Border>
 
+            <!-- 工作空间选择：只在工作空间模式下可用。
+                 这里用 Opacity 而不是 IsVisible —— 外层是垂直居中的，控件一旦凭空
+                 出现/消失，整块内容就会跟着上下挪，上面标题、分段、输入框的位置全变。
+                 让这一行始终占位，切换时只是显示与隐藏，其他控件纹丝不动。 -->
+            <StackPanel x:Name="WorkspaceSection"
+                        Spacing="10"
+                        Opacity="0"
+                        IsHitTestVisible="False">
+                <controls:WorkspacePickerControl x:Name="WorkspacePicker"/>
+                <TextBlock Text="选择一个工作空间，开始一段有上下文的对话"
+                           FontSize="12"
+                           Foreground="#9CA3AF"
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
 
         </StackPanel>
         </Grid>

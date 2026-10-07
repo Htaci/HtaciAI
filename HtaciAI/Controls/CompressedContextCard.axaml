@@ -1,0 +1,131 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="40"
+             x:Class="HtaciAI.Controls.CompressedContextCard">
+    <UserControl.Styles>
+        <!-- 内容区专用：极细灰色滚动条（4px，圆角滑块） -->
+        <Style Selector=".thin-scrollbar ScrollBar">
+            <Setter Property="Width" Value="4"/>
+            <Setter Property="MinWidth" Value="4"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Width="4" Background="Transparent">
+                            <Rectangle Fill="Transparent"/>
+                            <!-- Value 必须双向，且必须用 {TemplateBinding} 而不是
+                                 {Binding RelativeSource={RelativeSource TemplatedParent}}：
+                                 TemplateBindingExpression 的优先级是 Template，回写走 SetCurrentValue，
+                                 不会顶掉 ScrollBar 自己那条 Template 优先级的 Offset→Value 绑定。
+                                 少了 Mode=TwoWay，拖滑块时 Track.Value 传不回 ScrollBar.Value ——
+                                 现象就是「滑块能拖，但内容一动不动」。
+                                 其余属性照抄 Avalonia Fluent 的 ScrollBar 模板。 -->
+                            <Track Name="PART_Track"
+                                   Orientation="{TemplateBinding Orientation}"
+                                   IsDirectionReversed="True"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value, Mode=TwoWay}"
+                                   ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.DecreaseButton>
+                                <Track.IncreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.IncreaseButton>
+                                <Track.Thumb>
+                                    <Thumb MinHeight="28" IsTabStop="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="#D8D8DC" CornerRadius="2"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 悬停滑块加深，提示可拖拽 -->
+        <Style Selector=".thin-scrollbar ScrollBar /template/ Thumb:pointerover /template/ Border">
+            <Setter Property="Background" Value="#A6A6AD"/>
+        </Style>
+    </UserControl.Styles>
+
+    <StackPanel>
+        <!-- 分界线：压缩在消息流里的位置标记，点它展开/收起下面的摘要卡。
+             两侧用细线撑满，中间是文字 + 箭头，视觉上就是一条分割线而不是一个块。 -->
+        <Border x:Name="DividerRow"
+                Height="30"
+                Background="Transparent"
+                CornerRadius="6"
+                Cursor="Hand">
+            <Grid ColumnDefinitions="*,Auto,*" Margin="6,0">
+                <Rectangle Height="1" Fill="#E5E7EB" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                    <TextBlock x:Name="DividerText"
+                               Text="已压缩上下文"
+                               FontSize="12"
+                               Foreground="#9CA3AF"
+                               VerticalAlignment="Center"/>
+                    <TextBlock x:Name="Chevron"
+                               Text="&#xE76C;"
+                               FontFamily="Segoe Fluent Icons"
+                               FontSize="10"
+                               Foreground="#C5C5C7"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+                <Rectangle Grid.Column="2" Height="1" Fill="#E5E7EB" VerticalAlignment="Center" Margin="10,0,0,0"/>
+            </Grid>
+        </Border>
+
+        <!-- 摘要卡：MaxHeight/Opacity 过渡实现展开动画，与思考卡、聚合卡同一套做法 -->
+        <Border x:Name="Card"
+                CornerRadius="10"
+                Background="#00F7F8FA"
+                BorderBrush="#ECEEF1"
+                BorderThickness="1"
+                ClipToBounds="True"
+                MaxHeight="0"
+                Opacity="0">
+            <StackPanel Margin="16,12,16,12" Spacing="8">
+                <TextBlock x:Name="InfoText"
+                           FontSize="11.5"
+                           Foreground="#9CA3AF"
+                           TextWrapping="Wrap"/>
+
+                <controls:SmoothScrollViewer x:Name="ContentScroll"
+                                             Classes="thin-scrollbar"
+                                             MaxHeight="300"
+                                             VerticalScrollBarVisibility="Auto">
+                    <TextBlock x:Name="SummaryText"
+                               FontSize="13"
+                               Foreground="#374151"
+                               TextWrapping="Wrap"
+                               LineHeight="20"/>
+                </controls:SmoothScrollViewer>
+
+                <Border x:Name="DeleteBtn"
+                        Background="Transparent"
+                        BorderBrush="#F0D2D2"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10,4"
+                        HorizontalAlignment="Left"
+                        Cursor="Hand">
+                    <TextBlock Text="删除这条压缩记录"
+                               FontSize="12"
+                               Foreground="#DC2626"/>
+                </Border>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

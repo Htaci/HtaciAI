@@ -78,7 +78,7 @@ public sealed class OpenAiExClient : IChatClient
         Action<string>? onThinking,
         CancellationToken ct)
     {
-        var messages = BuildMessages(systemPrompt, history);
+        var messages = BuildMessages(systemPrompt, history, options.SupportsVision);
         var body = BuildBody(messages, options);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint)
@@ -293,8 +293,55 @@ public sealed class OpenAiExClient : IChatClient
                 : requested;
     }
 
+    /// <summary>
+    /// tool 消息的 content。带图片的 view_image 结果在模型支持视觉时展开成 content-part 数组
+    /// （已实测该端点接受 tool 消息里带 image_url）；不支持视觉、或文件已被挪走时退回纯文本，
+    /// 保证换模型 / 删文件之后历史仍然能发出去。
+    ///
+    /// 落库的是路径，这里才读文件编码 —— 同一份字节每次编码结果一致，
+    /// 上下文缓存因此仍然能命中。
+    /// </summary>
+    private static object BuildToolContent(ChatMessage m, bool supportsVision)
+    {
+        var text = m.Content ?? "";
+        if (!supportsVision) return text;
+
+        var imagePath = ToolImageJson.Deserialize(m.Metadata);
+        if (imagePath is null || !File.Exists(imagePath)) return text;
+
+        try
+        {
+            var uri = $"data:{MimeFor(imagePath)};base64,{Convert.ToBase64String(File.ReadAllBytes(imagePath))}";
+            return new List<object>
+            {
+                new Dictionary<string, object?> { ["type"] = "text", ["text"] = text },
+                new Dictionary<string, object?>
+                {
+                    ["type"] = "image_url",
+                    ["image_url"] = new Dictionary<string, object?> { ["url"] = uri },
+                },
+            };
+        }
+        catch
+        {
+            return text;
+        }
+    }
+
+    private static string MimeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".png" => "image/png",
+        ".gif" => "image/gif",
+        ".webp" => "image/webp",
+        ".bmp" => "image/bmp",
+        ".tif" or ".tiff" => "image/tiff",
+        ".ico" => "image/x-icon",
+        ".svg" => "image/svg+xml",
+        _ => "image/jpeg",
+    };
+
     /// <summary>从历史消息重建 OpenAI 格式消息数组（system 独立前置，不进 history）。</summary>
-    private static List<object> BuildMessages(string? systemPrompt, IReadOnlyList<ChatMessage> history)
+    private static List<object> BuildMessages(string? systemPrompt, IReadOnlyList<ChatMessage> history, bool supportsVision)
     {
         var list = new List<object>();
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -340,7 +387,7 @@ public sealed class OpenAiExClient : IChatClient
                     {
                         ["role"] = "tool",
                         ["tool_call_id"] = m.ToolCallId,
-                        ["content"] = m.Content ?? "",
+                        ["content"] = BuildToolContent(m, supportsVision),
                     });
                     break;
             }

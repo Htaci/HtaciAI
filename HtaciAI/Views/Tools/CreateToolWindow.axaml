@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:HtaciAI.Controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="680"
@@ -35,7 +36,7 @@
                    Foreground="#1A1A2E"
                    Margin="24,18,24,6"/>
 
-        <ScrollViewer Grid.Row="1"
+        <controls:SmoothScrollViewer Grid.Row="1"
                       Margin="24,8,24,8"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
@@ -161,7 +162,7 @@
                            Foreground="#DC2626"
                            TextWrapping="Wrap"/>
             </StackPanel>
-        </ScrollViewer>
+        </controls:SmoothScrollViewer>
 
         <!-- 底部按钮 -->
         <Grid Grid.Row="2"

@@ -143,7 +143,7 @@ public partial class SkillSelectorControl : UserControl
             var id = s.Id;
             var mi = new MenuItem
             {
-                Header = s.Name,
+                Header = s.DisplayName,
                 ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = _loaded.Contains(id),
                 Tag = id,
@@ -160,7 +160,7 @@ public partial class SkillSelectorControl : UserControl
             var id = s.Id;
             var mi = new MenuItem
             {
-                Header = s.Name,
+                Header = s.DisplayName,
                 ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = _allowed.Contains(id),
                 Tag = id,
@@ -171,7 +171,13 @@ public partial class SkillSelectorControl : UserControl
         }
     }
 
-    private static MenuItem GroupHeader(string text) => new() { Header = text, IsEnabled = false };
+    /// <summary>分组标题：禁用的菜单项，样式见 App.axaml 的 <c>MenuItem.menu-header</c>。</summary>
+    private static MenuItem GroupHeader(string text) => new()
+    {
+        Header = text,
+        IsEnabled = false,
+        Classes = { "menu-header" },
+    };
 
     private void Toggle(string id, HashSet<string> set)
     {

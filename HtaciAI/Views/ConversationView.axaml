@@ -1,0 +1,231 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="using:HtaciAI.Controls"
+             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+             x:Class="HtaciAI.Views.ConversationView">
+    <UserControl.Styles>
+        <!-- 卡片内容区专用：极细的灰色滚动条（4px，圆角滑块） -->
+        <Style Selector=".thin-scrollbar ScrollBar">
+            <Setter Property="Width" Value="4"/>
+            <Setter Property="MinWidth" Value="4"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Width="4" Background="Transparent">
+                            <Rectangle Fill="Transparent"/>
+                            <!-- Value 必须双向，且必须用 {TemplateBinding} 而不是
+                                 {Binding RelativeSource={RelativeSource TemplatedParent}}：
+                                 TemplateBindingExpression 的优先级是 Template，回写走 SetCurrentValue，
+                                 不会顶掉 ScrollBar 自己那条 Template 优先级的 Offset→Value 绑定。
+                                 少了 Mode=TwoWay，拖滑块时 Track.Value 传不回 ScrollBar.Value ——
+                                 现象就是「滑块能拖，但内容一动不动」。
+                                 其余属性照抄 Avalonia Fluent 的 ScrollBar 模板。 -->
+                            <Track Name="PART_Track"
+                                   Orientation="{TemplateBinding Orientation}"
+                                   IsDirectionReversed="True"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value, Mode=TwoWay}"
+                                   ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.DecreaseButton>
+                                <Track.IncreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.IncreaseButton>
+                                <Track.Thumb>
+                                    <Thumb MinHeight="28" IsTabStop="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="#D8D8DC" CornerRadius="2"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 悬停滑块加深，提示可拖拽 -->
+        <Style Selector=".thin-scrollbar ScrollBar /template/ Thumb:pointerover /template/ Border">
+            <Setter Property="Background" Value="#A6A6AD"/>
+        </Style>
+
+        <!-- ====== 输入框聚焦视觉 ======
+             Fluent 的 TextBox 主题在 :focus 时会给模板内的 Border#PART_BorderElement 直接
+             设上 2px 蓝边 —— 那是打在模板子元素上的样式设置器，文本框自身的
+             BorderThickness="0" 压不住它，必须在这里覆盖掉。本文件的 Styles 在
+             Application.Styles（FluentTheme）之后求值，同优先级下后者胜，所以盖得住。 -->
+        <Style Selector="TextBox#InputBox:focus /template/ Border#PART_BorderElement">
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <!-- 兜底：万一模板里的部件名对不上，整个模板 Border 再来一次（TextBox 模板里只有这一个） -->
+        <Style Selector="TextBox#InputBox:focus /template/ Border">
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+
+        <!-- 聚焦态画在外层 Border 上：边缘阴影。
+             0 0 0 1 是贴着边框的一圈实边（叠上自身 1px 边框共 2px），
+             0 0 7 2 是往外散的柔光，两层叠出「细边 + 光晕」。
+             光晕只能这么画 —— BorderBrush 画在框内，做不出往外的发光。 -->
+        <Style Selector="Border#InputShell:focus-within">
+            <Setter Property="BorderBrush" Value="#7EB3E8"/>
+            <Setter Property="BoxShadow" Value="0 0 0 1 #7EB3E8, 0 0 7 2 #4D7EB3E8"/>
+        </Style>
+    </UserControl.Styles>
+
+    <Grid RowDefinitions="*,Auto" Background="Transparent">
+        <!-- ====== 消息列表 ====== -->
+        <controls:SmoothScrollViewer x:Name="MessagesScroll"
+                      Grid.Row="0"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <!-- 透明背景：消息之间的空白也参与命中测试，保证滚动/悬停行为连续 -->
+            <StackPanel x:Name="MessagesPanel" Spacing="12" Margin="34,20" Background="Transparent"/>
+        </controls:SmoothScrollViewer>
+
+        <!-- ====== 输入区 ====== -->
+        <StackPanel Grid.Row="1" Margin="15" VerticalAlignment="Bottom">
+            <!-- 待发送附件：正文里保留的是路径（模型要读它），这里显示的是给人看的 chip -->
+            <WrapPanel x:Name="AttachmentBar"
+                       Orientation="Horizontal"
+                       IsVisible="False"
+                       Margin="2,0,2,8"/>
+            <Border x:Name="InputShell"
+                    CornerRadius="8"
+                    Background="#FFFFFF"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    MinHeight="100">
+            <Grid>
+                <TextBox x:Name="InputBox"
+                         MinHeight="100"
+                         CornerRadius="8"
+                         MaxHeight="200"
+                         Padding="16,16,16,38"
+                         FontSize="14"
+                         Foreground="#1A1A2E"
+                         PlaceholderText="在这里输入你的问题，Enter 发送，Shift+Enter 换行"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         BorderThickness="0"/>
+
+                <!-- 功能栏 -->
+                <Grid VerticalAlignment="Bottom" Background="Transparent">
+                    <!-- 右半边用 StackPanel 而非各自 Right 定位：某个环隐藏时（IsVisible=false
+                         不占布局）右边的控件要自然补上空档。顺序：模型选择器 → 等待环 → 用量环 → 发送 -->
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Spacing="6"
+                                Margin="0,5,5,5">
+                        <controls:ModelSelectorControl x:Name="ModelSelector" VerticalAlignment="Center"/>
+                        <!-- 已发出请求、还没收到任何输出时的等待指示 -->
+                        <controls:LoadingRing x:Name="LoadingRing" VerticalAlignment="Center"/>
+                        <controls:ContextUsageRing x:Name="UsageRing" VerticalAlignment="Center"/>
+                        <Button x:Name="SendBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="#4A90D9"
+                                Click="OnSendClick">
+                            <Grid>
+                                <TextBlock x:Name="SendGlyph"
+                                           Text="&#xe74a;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           Foreground="White"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                                <!-- 运行中：换成停止方块 -->
+                                <Border x:Name="StopGlyph"
+                                        Width="10"
+                                        Height="10"
+                                        CornerRadius="2.5"
+                                        Background="White"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        IsVisible="False"/>
+                            </Grid>
+                        </Button>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                        <!-- 上传文件：以绝对路径插入正文，由 read / view_image 工具读取 -->
+                        <Button x:Name="AddFileBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                Margin="5"
+                                Click="OnAddFileClick">
+                            <TextBlock Text="&#xe723;"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="14"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Button>
+                        <controls:ToolSelectorControl x:Name="ToolSelector" Margin="5"/>
+                        <controls:SkillSelectorControl x:Name="SkillSelector" Margin="5"/>
+                        <controls:McpSelectorControl x:Name="McpSelector" Margin="5"/>
+                        <!-- 权限模式（严格/普通/宽松/自由） -->
+                        <Button x:Name="PermModeBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                Margin="5">
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuItem Header="严格（所有工具需确认）" Tag="Strict"/>
+                                    <MenuItem Header="普通（安全工具自动）" Tag="Normal"/>
+                                    <MenuItem Header="宽松（安全/风险自动）" Tag="Loose"/>
+                                    <MenuItem Header="自由（所有工具免确认）" Tag="Free"/>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                            <TextBlock x:Name="PermModeIcon"
+                                       Text="&#xea18;"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="14"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Button>
+                        <!-- 更多功能（菜单在代码后置里装配：放在 Flyout 里的 x:Name 不生成字段） -->
+                        <Button x:Name="MoreBtn"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                Margin="5">
+                            <TextBlock Text="&#xe712;"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="14"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Button>
+                        <!-- 压缩期间的进度提示：压缩要发一次模型请求，没有提示会让人以为卡住了 -->
+                        <TextBlock x:Name="CompressHint"
+                                   Text="正在压缩上下文…"
+                                   FontSize="11"
+                                   Foreground="#9CA3AF"
+                                   VerticalAlignment="Center"
+                                   Margin="2,0,0,0"
+                                   IsVisible="False"/>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+            </Border>
+        </StackPanel>
+    </Grid>
+</UserControl>

@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
@@ -11,19 +12,19 @@
                    FontWeight="Bold"
                    Foreground="#1A1A2E"/>
         <TextBlock Grid.Row="1"
-                   Text="脚本工具依赖的运行环境。可自动检测系统 PATH，也可手动指定解释器。"
+                   Text="程序依赖的外部环境（脚本运行时、版本控制）。可自动检测系统 PATH，也可手动指定。"
                    FontSize="12"
                    Foreground="#9CA3AF"
                    Margin="0,6,0,20"
                    TextWrapping="Wrap"/>
 
         <!-- 运行时卡片列表（代码生成，便于未来扩展其他运行时） -->
-        <ScrollViewer Grid.Row="2"
+        <controls:SmoothScrollViewer Grid.Row="2"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="RuntimeList"
                         Spacing="14"/>
-        </ScrollViewer>
+        </controls:SmoothScrollViewer>
 
         <!-- 底部说明 -->
         <Border Grid.Row="3"
@@ -33,7 +34,7 @@
                 Background="#F8FAFC"
                 BorderBrush="#E5E7EB"
                 BorderThickness="1">
-            <TextBlock Text="当前支持：Python（.py）、Node.js（.js / .ts）。本页面可扩展更多运行时。"
+            <TextBlock Text="当前支持：Python（.py）、Node.js（.js / .ts）、Git。本页面可扩展更多环境。"
                        FontSize="12"
                        Foreground="#6B7280"
                        TextWrapping="Wrap"/>

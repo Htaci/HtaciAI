@@ -6,9 +6,21 @@ namespace HtaciAI.Services.Tools;
 /// ChatGateway 会把它收敛为哨兵 invalid 工具，返回一条可执行的错误信息；
 /// 否则为真实工具运行失败，保持原始 tool_call 不变，把 <see cref="Error"/> 作为该工具结果反馈。
 /// </summary>
-public sealed record ToolExecution(bool Success, string Content, string? Error = null, bool IsUnknownTool = false)
+public sealed record ToolExecution(
+    bool Success,
+    string Content,
+    string? Error = null,
+    bool IsUnknownTool = false,
+    string? ImagePath = null)
 {
     public static ToolExecution Ok(string content) => new(true, content, null);
+
+    /// <summary>
+    /// 成功且携带一张图片（view_image）。网关会把路径写进 tool 消息的 metadata，
+    /// 构造下一次请求时再读文件、编码成图片 part —— 落库的是路径，发出去的是字节。
+    /// </summary>
+    public static ToolExecution OkImage(string content, string imagePath)
+        => new(true, content, null, false, imagePath);
 
     public static ToolExecution Fail(string error) => new(false, "", error);
 

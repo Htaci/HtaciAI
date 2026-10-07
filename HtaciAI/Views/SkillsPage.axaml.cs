@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using HtaciAI.Services.Skills;
+using HtaciAI.Views.Skills;
 
 namespace HtaciAI.Views;
 
@@ -20,6 +23,7 @@ public partial class SkillsPage : UserControl
     public SkillsPage()
     {
         InitializeComponent();
+        AddSkillButton.Click += async (_, _) => await OnCreateSkillAsync();
         ReloadSkills();
     }
 
@@ -30,6 +34,25 @@ public partial class SkillsPage : UserControl
         _selected = _skills.Count > 0 ? _skills[0] : null;
         RefreshList();
         ShowDetail();
+    }
+
+    /// <summary>创建新技能：对话框落盘后重载注册表，并选中刚建好的那个。</summary>
+    private async Task OnCreateSkillAsync()
+    {
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        var dialog = new CreateSkillWindow();
+        if (owner is not null)
+            await dialog.ShowDialog(owner);
+        if (dialog.Result is null) return;
+
+        var createdId = dialog.Result.Id;
+        ReloadSkills();
+        if (_skills.FirstOrDefault(s => s.Id == createdId) is { } created)
+        {
+            _selected = created;
+            RefreshList();
+            ShowDetail();
+        }
     }
 
     // ---- 左侧：技能列表 ----
@@ -58,7 +81,7 @@ public partial class SkillsPage : UserControl
         var isActive = ReferenceEquals(s, _selected);
         var nameBlock = new TextBlock
         {
-            Text = s.Name,
+            Text = s.DisplayName,
             FontSize = 13.5,
             FontWeight = FontWeight.SemiBold,
             Foreground = new SolidColorBrush(Color.Parse(isActive ? "#1A1A2E" : "#4B5563")),
@@ -76,8 +99,18 @@ public partial class SkillsPage : UserControl
         {
             Spacing = 2,
             Margin = new Avalonia.Thickness(0, 0, 12, 0),
-            Children = { nameBlock, descBlock }
         };
+        title.Children.Add(nameBlock);
+        // 有备注时补一行原始 id 小字：备注给人看，id 才是 SKILL.md 与 load_skill 用的名字
+        if (!string.IsNullOrWhiteSpace(s.Alias))
+            title.Children.Add(new TextBlock
+            {
+                Text = s.Name,
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(Color.Parse("#B0B7C3")),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+        title.Children.Add(descBlock);
 
         var item = new Border
         {
@@ -119,8 +152,10 @@ public partial class SkillsPage : UserControl
             return;
         }
 
-        DetailTitle.Text = _selected.Name;
-        DetailDesc.Text = _selected.Description;
+        DetailTitle.Text = _selected.DisplayName;
+        DetailDesc.Text = string.IsNullOrWhiteSpace(_selected.Alias)
+            ? _selected.Description
+            : $"{_selected.Name} · {_selected.Description}";
         DetailBody.Text = _selected.Body;
     }
 }

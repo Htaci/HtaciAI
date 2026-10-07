@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -30,6 +30,9 @@ public static class WorkspaceAgentPipeline
     /// <summary>
     /// 计算新建会话的默认配置：工作空间已有的工具/技能/MCP 优先（二次配置），否则回落到 Agent 默认。
     /// 权限档位取工作空间默认值（Agent 本身不持有权限）。
+    ///
+    /// ⚠️ Agent 层已停用（助手概念被技能取代），现有调用方一律传 null，
+    /// 因此「回落到 Agent 默认」这条分支目前不会走到；保留参数是为了不删掉整个 Agent 模块。
     /// </summary>
     public static WorkspaceChatSession CreateSessionDefaults(WorkspaceConfig ws, Agent? agent)
     {
@@ -51,10 +54,10 @@ public static class WorkspaceAgentPipeline
     }
 
     /// <summary>
-    /// 组装请求 system 提示词，顺序：静态身份前缀（含系统环境/模型 id/工作目录）→ Agent → 工作空间 → 会话追加 → 技能 → MCP。
+    /// 组装请求 system 提示词，顺序：静态身份前缀（含系统环境/模型 id/工作目录）→ 工作空间 → 会话追加 → 技能 → MCP。
+    /// 原先还有一层 Agent 提示词，现已移除：那层语义与技能重复，用技能表达更灵活。
     /// </summary>
     public static string BuildSystemPrompt(
-        Agent? agent,
         WorkspaceConfig? workspace,
         WorkspaceChatSession session,
         string modelId,
@@ -71,10 +74,11 @@ public static class WorkspaceAgentPipeline
             "主动程度：只在被要求时主动，不要擅自行动吓到用户，如果不确定用户是否有让开始行动时，则询问用户是否要开始，直到用户明确指示开始。\r\n\r\n" +
             "遇到敏感问题时，统一回复：“我无法回答该问题，请换个问题试试吧。”");
 
-        sb.AppendLine($"当前系统环境：{Environment.OSVersion}，模型id为： {modelId}，当前工作目录：{(string.IsNullOrWhiteSpace(workspaceDir) ? "/" : workspaceDir)}");
+        sb.AppendLine("工具按用户权限模式执行，未自动允许的调用会请求用户批准或拒绝。\r\n" +
+            "工具被拒后应调整，若不明白拒绝原因，用 ask_user_question 询问。\r\n" +
+            "用户消息里出现的文件路径是用户附加的文件：图片用 view_image 查看内容后再回答，其他文件用 read 读取。");
 
-        if (agent is not null && !string.IsNullOrWhiteSpace(agent.SystemPrompt))
-            sb.AppendLine(agent.SystemPrompt);
+        sb.AppendLine($"当前系统环境：{Environment.OSVersion}，模型id为： {modelId}，当前工作目录：{(string.IsNullOrWhiteSpace(workspaceDir) ? "/" : workspaceDir)}");
 
         if (workspace is not null && !string.IsNullOrWhiteSpace(workspace.SystemPrompt))
             sb.AppendLine(workspace.SystemPrompt);
@@ -90,7 +94,7 @@ public static class WorkspaceAgentPipeline
         return sb.ToString();
     }
 
-    // ---- 技能注入（与 ChatView.BuildSystemPrompt 相同的 allowed / loaded 两组） ----
+    // ---- 技能注入（与 StandaloneProfile.BuildSystemPrompt 相同的 allowed / loaded 两组） ----
 
     private static void AppendSkills(StringBuilder sb, List<SessionSkill> enabled)
     {

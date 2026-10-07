@@ -32,6 +32,9 @@ public static class AppSettings
     /// <summary>Node.js 可执行文件路径（如 C:\Program Files\nodejs\node.exe，null = 自动检测）</summary>
     public static string? RuntimeNodePath { get; set; }
 
+    /// <summary>Git 可执行文件路径（如 C:\Program Files\Git\cmd\git.exe，null = 自动检测）</summary>
+    public static string? RuntimeGitPath { get; set; }
+
     // ---- 工具权限审批档位 ----
 
     /// <summary>工具权限审批档位，默认「普通」（安全工具自动通过）。</summary>

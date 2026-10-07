@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="600"
@@ -12,18 +13,39 @@
                 BorderThickness="0,0,1,0">
             <Grid RowDefinitions="Auto,*"
                   Margin="12,16">
-                <TextBlock Grid.Row="0"
-                           Text="技能"
-                           FontSize="15"
-                           FontWeight="SemiBold"
-                           Foreground="#1A1A2E"
-                           Margin="12,0,0,12"/>
-                <ScrollViewer Grid.Row="1"
+                <Grid Grid.Row="0"
+                      ColumnDefinitions="*,Auto"
+                      Margin="12,0,8,12">
+                    <TextBlock Grid.Column="0"
+                               Text="技能"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="#1A1A2E"
+                               VerticalAlignment="Center"/>
+                    <Button x:Name="AddSkillButton"
+                            Grid.Column="1"
+                            Width="28"
+                            Height="28"
+                            Padding="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="8"
+                            Cursor="Hand"
+                            ToolTip.Tip="创建新技能">
+                        <TextBlock Text="&#xe710;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="14"
+                                   Foreground="#4B5563"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Button>
+                </Grid>
+                <controls:SmoothScrollViewer Grid.Row="1"
                               HorizontalScrollBarVisibility="Disabled"
                               VerticalScrollBarVisibility="Auto">
                     <StackPanel x:Name="SkillList"
                                 Spacing="2"/>
-                </ScrollViewer>
+                </controls:SmoothScrollViewer>
             </Grid>
         </Border>
 
@@ -45,7 +67,7 @@
                            TextWrapping="Wrap"
                            Margin="0,4,0,0"/>
             </StackPanel>
-            <ScrollViewer Grid.Row="1"
+            <controls:SmoothScrollViewer Grid.Row="1"
                           HorizontalScrollBarVisibility="Disabled"
                           VerticalScrollBarVisibility="Auto">
                 <Border CornerRadius="12"
@@ -61,7 +83,7 @@
                                LineHeight="22"
                                FontFamily="Consolas"/>
                 </Border>
-            </ScrollViewer>
+            </controls:SmoothScrollViewer>
         </Grid>
     </Grid>
 </UserControl>

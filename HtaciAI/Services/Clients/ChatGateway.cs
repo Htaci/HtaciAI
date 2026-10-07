@@ -17,22 +17,26 @@ namespace HtaciAI.Services;
 /// </summary>
 public sealed class ChatGateway
 {
-    /// <summary>一次用户消息内，工具调用的最大轮数上限。</summary>
-    public int MaxToolRounds { get; init; } = 10;
+    /// <summary>
+    /// 一次用户消息内，工具调用的最大轮数上限。
+    /// 由「常规设置 → 最大工具循环次数」决定，发送前由调用方按当前设置赋值，
+    /// 因此是可变属性而不是 init。不限时调用方传 <see cref="int.MaxValue"/>。
+    /// </summary>
+    public int MaxToolRounds { get; set; } = 100;
 
     /// <summary>
-    /// 按模型 id（UUID 或调用 id）解析客户端；模型不存在/未启用/为空时回退内置默认模型。
-    /// 每次发送前按当前选中模型调用，确保所选模型被真正调用而非固定 DeepSeek。
+    /// 按模型 id（UUID 或调用 id）解析客户端，每次发送前按当前选中模型调用。
+    ///
+    /// <b>解析不到就返回 null，不回退任何内置模型。</b>这里曾经兜底过一个写死地址与密钥的
+    /// DeepSeek，后果是「用户一个模型都没配」时不但不报错，还会拿着别人的 key 发请求。
+    /// 返回 null 而不是抛异常：调用点都在发送前的判断位置，可空返回值能把「漏处理」变成编译错误。
     /// </summary>
-    public async Task<IChatClient> ResolveClientAsync(string? modelId)
+    public async Task<IChatClient?> ResolveClientAsync(string? modelId)
     {
-        if (!string.IsNullOrWhiteSpace(modelId))
-        {
-            var details = await ModelCatalog.ResolveAsync(modelId);
-            if (details is not null)
-                return ModelCatalog.BuildClient(details);
-        }
-        return new OpenAiExClient(ChatConfig.Endpoint, ChatConfig.ApiKey, ChatConfig.Model);
+        if (string.IsNullOrWhiteSpace(modelId)) return null;
+
+        var details = await ModelCatalog.ResolveAsync(modelId);
+        return details is null ? null : ModelCatalog.BuildClient(details);
     }
 
     /// <summary>按模型 id（UUID 或调用 id）解析模型详情，来自服务商+模型两表。</summary>
@@ -54,6 +58,7 @@ public sealed class ChatGateway
         string? systemPrompt,
         IReadOnlyList<ChatMessage> history,
         string userText,
+        IReadOnlyList<ChatAttachment>? attachments,
         ChatRequestOptions options,
         IChatClient client,
         IToolExecutor? tools,
@@ -72,6 +77,8 @@ public sealed class ChatGateway
             SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
             Role = "user",
             Content = userText,
+            // 附件只在 metadata 里记路径与展示信息；正文里保留的路径才是模型读到的
+            Metadata = attachments is { Count: > 0 } ? AttachmentJson.Serialize(attachments) : null,
             Status = "completed",
             ModelName = client.ModelName,
             CreatedAt = now,
@@ -109,6 +116,13 @@ public sealed class ChatGateway
             try
             {
                 result = await client.StreamAsync(messages, systemPrompt, options, sink.OnContent, sink.OnThinking, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // 用户主动停止：不是失败，按 interrupted 落库，不往正文里写错误文案
+                assistantMsg.Status = "interrupted";
+                await persist(assistantMsg);
+                return new ChatTurnResult(userMsg, assistantMsg, false, null);
             }
             catch (Exception ex)
             {
@@ -184,6 +198,8 @@ public sealed class ChatGateway
                     SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
                     Role = "tool",
                     Content = toolContent,
+                    // view_image 的结果：只存路径，构造下一次请求时才读文件编码成图片 part
+                    Metadata = exec.ImagePath is null ? null : ToolImageJson.Serialize(exec.ImagePath),
                     ToolCallId = call.Id,
                     ToolName = toolName,
                     Status = "completed",
@@ -193,6 +209,14 @@ public sealed class ChatGateway
                 await persist(toolMsg);
                 messages.Add(toolMsg);
             }
+        }
+
+        // 本轮耗时写在最后一条 assistant 消息上。用时间戳推不出来 ——
+        // 一轮内所有消息共用同一个 now，单轮消息的 created_at 与 updated_at 相等。
+        if (final is not null)
+        {
+            final.DurationMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - now;
+            await ChatRepository.UpdateMessageAsync(final);
         }
 
         return new ChatTurnResult(userMsg, final, true, null);
@@ -269,22 +293,6 @@ public sealed class ModelDetails
     public bool SupportsArrayContent { get; init; } = true;
     public bool SupportsStreaming { get; init; } = true;
     public long ContextWindow { get; init; } = -1;
-
-    /// <summary>内置兜底模型：DeepSeek V4 Flash（模型管理系统接入前的临时默认）。</summary>
-    public static readonly ModelDetails Default = new()
-    {
-        ModelId = "deepseek-v4-flash",
-        DisplayName = "DeepSeek V4 Flash",
-        ProviderName = "Htaci",
-        Protocol = ModelProtocol.OpenAIEx,
-        Endpoint = ChatConfig.Endpoint,
-        ApiKey = ChatConfig.ApiKey,
-        ModelName = ChatConfig.Model,
-        ThinkingField = ThinkingFieldKind.Think,
-        SupportsThinking = true,
-        ThinkingStrengths = new[] { "low", "high", "max" },
-        Capabilities = new[] { "reasoning", "tools", "completion" },
-    };
 }
 
 /// <summary>tool_calls 与 chat_message.metadata 之间的 JSON 序列化辅助。</summary>

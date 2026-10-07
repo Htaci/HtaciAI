@@ -1,5 +1,6 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Layout;
@@ -103,8 +104,7 @@ public class MarkdownStreamParser
     // 代码块状态
     private StringBuilder _codeBlockContent = new();
     private string _codeBlockLanguage = "";
-    private CustomSelectableTextBlock? _currentCodeBlock;
-    private Border? _currentCodeBorder;
+    private CodeBlockView? _currentCodeBlock;
 
     // 引用块状态
     private StackPanel? _quotePanel;
@@ -120,8 +120,8 @@ public class MarkdownStreamParser
     // 当前行缓冲
     private StringBuilder _lineBuffer = new();
 
-    // 当前段落 - 用于实时更新
-    private StackPanel? _currentParagraph;
+    // 当前段落 - 用于实时更新（单个富文本块，见 CreateInlineBlock）
+    private CustomSelectableTextBlock? _currentParagraph;
     private StringBuilder _currentParagraphText = new();
     private bool _paragraphProcessed = false;
 
@@ -152,7 +152,7 @@ public class MarkdownStreamParser
                         continue;
                     }
                     _codeBlockContent.AppendLine(line);
-                    _currentCodeBlock.Text = _codeBlockContent.ToString().TrimEnd();
+                    _currentCodeBlock.SetCode(_codeBlockContent.ToString().TrimEnd());
                     _lineBuffer.Clear();
                 }
             }
@@ -207,11 +207,8 @@ public class MarkdownStreamParser
         // 创建或更新当前段落
         if (_currentParagraph == null && ! string.IsNullOrWhiteSpace(currentLine))
         {
-            _currentParagraph = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 5, 0, 5)
-            };
+            _currentParagraph = CreateInlineBlock(currentLine);
+            _currentParagraph.Margin = new Thickness(0, 5, 0, 5);
 
             _container.Children.Add(_currentParagraph);
             _currentParagraphText. Clear();
@@ -223,8 +220,8 @@ public class MarkdownStreamParser
             _currentParagraphText. Append(currentLine);
 
             // 清空并重新生成行内元素
-            _currentParagraph.Children.Clear();
-            CreateInlineTextBlocks(_currentParagraph, currentLine);
+            _currentParagraph.Inlines?.Clear();
+            AppendInlineRuns(_currentParagraph, currentLine);
         }
     }
 
@@ -392,46 +389,62 @@ public class MarkdownStreamParser
         };
     }
 
-    // 创建多个 TextBlock 实现行内格式，每个 TextBlock 都可以被选择
-    private void CreateInlineTextBlocks(Panel container, string text)
+    /// <summary>
+    /// 把一段可能含行内标记（粗体 / 斜体 / 行内代码 / 链接）的文本渲染成「单个」富文本块。
+    ///
+    /// 关键：行内格式必须用 Inlines 表达，不能用「横向 StackPanel + 多个 TextBlock」拼接——
+    /// 横向 StackPanel 会以无限宽度测量子元素，子 TextBlock 的 TextWrapping 直接失效，
+    /// 于是段落永不换行、长行溢出容器（超出屏幕右侧）。
+    /// </summary>
+    private CustomSelectableTextBlock CreateInlineBlock(string text, double? fontSize = null, bool bold = false)
     {
-        if (string.IsNullOrEmpty(text))
-            return;
+        var block = new CustomSelectableTextBlock
+        {
+            FontFamily = _defaultFont,
+            TextWrapping = TextWrapping.Wrap
+        };
 
-        var segments = ParseInlineSegments(text);
-        
-        foreach (var segment in segments)
+        if (fontSize.HasValue) block.FontSize = fontSize.Value;
+        if (bold) block.FontWeight = FontWeight.Bold;
+
+        AppendInlineRuns(block, text);
+        return block;
+    }
+
+    /// <summary>把行内片段追加为 Run。流式刷新段落时先清空 Inlines 再调用。</summary>
+    private void AppendInlineRuns(CustomSelectableTextBlock block, string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        var inlines = block.Inlines ??= new InlineCollection();
+
+        foreach (var segment in ParseInlineSegments(text))
         {
             // 跳过空文本
             if (string.IsNullOrEmpty(segment.Text))
                 continue;
 
-            var textBlock = new CustomSelectableTextBlock
-            {
-                Text = segment. Text,
-                FontFamily = segment.IsCode ? _codeFont : _defaultFont,
-                TextWrapping = TextWrapping. Wrap
-            };
+            var run = new Run(segment.Text);
 
-            if (segment. IsBold)
-                textBlock.FontWeight = FontWeight.Bold;
-        
+            if (segment.IsBold)
+                run.FontWeight = FontWeight.Bold;
+
             if (segment.IsItalic)
-                textBlock.FontStyle = FontStyle.Italic;
-        
+                run.FontStyle = FontStyle.Italic;
+
             if (segment.IsCode)
             {
-                textBlock.Foreground = new SolidColorBrush(Color.FromRgb(200, 50, 50));
-                textBlock. Padding = new Thickness(2, 0, 2, 0);
-            }
-        
-            if (segment.IsLink)
-            {
-                textBlock. Foreground = new SolidColorBrush(Colors.Blue);
-                textBlock. TextDecorations = TextDecorations.Underline;
+                run.FontFamily = _codeFont;
+                run.Foreground = new SolidColorBrush(Color.FromRgb(200, 50, 50));
             }
 
-            container.Children.Add(textBlock);
+            if (segment.IsLink)
+            {
+                run.Foreground = new SolidColorBrush(Colors.Blue);
+                run.TextDecorations = TextDecorations.Underline;
+            }
+
+            inlines.Add(run);
         }
     }
 
@@ -582,30 +595,16 @@ public class MarkdownStreamParser
 
     private void StartCodeBlock()
     {
-        _currentCodeBorder = new Border
+        _currentCodeBlock = new CodeBlockView(_codeFont, _codeBlockLanguage)
         {
-            Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
-            CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(10),
-            Margin = new Thickness(0, 5, 0, 5)
+            Margin = new Thickness(0, 6, 0, 6)
         };
-
-        _currentCodeBlock = new CustomSelectableTextBlock
-        {
-            Text = "",
-            FontFamily = _codeFont,
-            Foreground = new SolidColorBrush(Colors.White),
-            TextWrapping = TextWrapping.NoWrap
-        };
-
-        _currentCodeBorder.Child = _currentCodeBlock;
-        _container.Children.Add(_currentCodeBorder);
+        _container.Children.Add(_currentCodeBlock);
     }
 
     private void FinishCodeBlock()
     {
         _currentCodeBlock = null;
-        _currentCodeBorder = null;
         _codeBlockContent.Clear();
         _codeBlockLanguage = "";
     }
@@ -682,15 +681,6 @@ public class MarkdownStreamParser
 
         string content = line.Substring(level).TrimStart();
 
-        var headingPanel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 10, 0, 5)
-        };
-
-        CreateInlineTextBlocks(headingPanel, content);
-
-        // 为所有子 TextBlock 设置字体大小和粗细
         double fontSize = level switch
         {
             1 => 32,
@@ -702,28 +692,16 @@ public class MarkdownStreamParser
             _ => 16
         };
 
-        foreach (var child in headingPanel.Children)
-        {
-            if (child is CustomSelectableTextBlock tb)
-            {
-                tb.FontSize = fontSize;
-                tb.FontWeight = FontWeight.Bold;
-            }
-        }
-
-        _container.Children.Add(headingPanel);
+        var heading = CreateInlineBlock(content, fontSize, bold: true);
+        heading.Margin = new Thickness(0, 10, 0, 5);
+        _container.Children.Add(heading);
     }
 
     private void AddParagraph(string line)
     {
-        var paragraphPanel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 5, 0, 5)
-        };
-
-        CreateInlineTextBlocks(paragraphPanel, line);
-        _container.Children.Add(paragraphPanel);
+        var paragraph = CreateInlineBlock(line);
+        paragraph.Margin = new Thickness(0, 5, 0, 5);
+        _container.Children.Add(paragraph);
     }
 
     private void AddParagraphSpacing()
@@ -768,14 +746,9 @@ public class MarkdownStreamParser
 
     private void AddQuoteLine(string content)
     {
-        var quoteLinePanel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 2, 0, 2)
-        };
-
-        CreateInlineTextBlocks(quoteLinePanel, content);
-        _quotePanel.Children.Add(quoteLinePanel);
+        var quoteLine = CreateInlineBlock(content);
+        quoteLine.Margin = new Thickness(0, 2, 0, 2);
+        _quotePanel.Children.Add(quoteLine);
     }
 
     private void FinishQuote()
@@ -825,9 +798,10 @@ public class MarkdownStreamParser
             currentList = _listStack.Peek();
         }
 
-        var itemPanel = new StackPanel
+        // 用 Grid（Auto + *）而不是横向 StackPanel：正文列才能拿到有限的可用宽度，长条目才会换行
+        var itemPanel = new Grid
         {
-            Orientation = Orientation.Horizontal,
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
             Margin = new Thickness(0, 2, 0, 2)
         };
 
@@ -846,45 +820,14 @@ public class MarkdownStreamParser
             bullet.Text = "•";  // 只有符号，没有空格
         }
 
+        Grid.SetColumn(bullet, 0);
         itemPanel.Children.Add(bullet);
 
-        // 解析内容并添加 TextBlock
-        var segments = ParseInlineSegments(content);
-
-        foreach (var segment in segments)
-        {
-            // 跳过空文本和纯空格文本
-            if (string.IsNullOrEmpty(segment.Text))
-                continue;
-
-            var textBlock = new CustomSelectableTextBlock
-            {
-                Text = segment.Text,
-                FontFamily = segment.IsCode ? _codeFont : _defaultFont,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalAlignment = VerticalAlignment.Top
-            };
-
-            if (segment.IsBold)
-                textBlock.FontWeight = FontWeight.Bold;
-
-            if (segment.IsItalic)
-                textBlock.FontStyle = FontStyle.Italic;
-
-            if (segment.IsCode)
-            {
-                textBlock.Foreground = new SolidColorBrush(Color.FromRgb(200, 50, 50));
-                textBlock.Padding = new Thickness(2, 0, 2, 0);
-            }
-
-            if (segment.IsLink)
-            {
-                textBlock.Foreground = new SolidColorBrush(Colors.Blue);
-                textBlock.TextDecorations = TextDecorations.Underline;
-            }
-
-            itemPanel.Children.Add(textBlock);
-        }
+        // 条目正文：单个富文本块
+        var itemContent = CreateInlineBlock(content);
+        itemContent.VerticalAlignment = VerticalAlignment.Top;
+        Grid.SetColumn(itemContent, 1);
+        itemPanel.Children.Add(itemContent);
 
         currentList.Panel.Children.Add(itemPanel);
     }
@@ -968,27 +911,11 @@ public class MarkdownStreamParser
                     : new SolidColorBrush(Colors.White)
             };
 
-            var cellPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal
-            };
+            // 单元格正文：单个富文本块（才能按列宽换行，横向 StackPanel 会溢出）
+            var cellBlock = CreateInlineBlock(cells[col], bold: isHeader);
+            cellBlock.VerticalAlignment = VerticalAlignment.Center;
 
-            CreateInlineTextBlocks(cellPanel, cells[col]);
-
-            // 设置样式
-            foreach (var child in cellPanel.Children)
-            {
-                if (child is CustomSelectableTextBlock tb)
-                {
-                    tb.VerticalAlignment = VerticalAlignment.Center;
-                    if (isHeader)
-                    {
-                        tb.FontWeight = FontWeight.Bold;
-                    }
-                }
-            }
-
-            cellBorder.Child = cellPanel;
+            cellBorder.Child = cellBlock;
 
             Grid.SetRow(cellBorder, rowIndex);
             Grid.SetColumn(cellBorder, col);

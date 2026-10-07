@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Services.ScriptRuntimes;
+using HtaciAI.Services.Storage;
 
 namespace HtaciAI.Services.Tools;
 
@@ -25,11 +26,15 @@ public sealed class ToolRegistry
 
     private ToolRegistry()
     {
-        RegisterToolset(Toolset.Default);
+        RegisterToolset(Toolset.All);
+        RegisterToolset(Toolset.Builtin);
         RegisterBuiltins();
     }
 
-    /// <summary>从数据库加载工具集与工具到内存（替换当前内容；默认集兜底），再补注册内置工具。</summary>
+    /// <summary>
+    /// 从数据库加载工具集与工具到内存（替换当前内容），再补注册内置工具。
+    /// 「全部」「内置」的语义只存在于代码里（库里至多有同名行），所以加载完必须用代码定义覆盖一次。
+    /// </summary>
     public async Task LoadFromDbAsync()
     {
         _toolsets.Clear();
@@ -39,8 +44,9 @@ public sealed class ToolRegistry
 
         foreach (var ts in await ToolRepository.GetAllToolsetsAsync())
             RegisterToolset(ts);
-        if (!_toolsets.ContainsKey(Toolset.Default.Id))
-            RegisterToolset(Toolset.Default);
+
+        RegisterToolset(Toolset.All);
+        RegisterToolset(Toolset.Builtin);
 
         foreach (var tool in await ToolRepository.GetAllAsync())
             Register(tool);
@@ -59,7 +65,7 @@ public sealed class ToolRegistry
 
     /// <summary>
     /// 写入内置示例脚本并注册为示例工具（幂等：文件已存在不覆盖，工具已注册不重复）。
-    /// 供端到端验证与新手体验；示例脚本位于用户数据目录 tools/examples 下。
+    /// 供端到端验证与新手体验；示例脚本位于 <c>&lt;数据根&gt;/tools</c> 下。
     /// </summary>
     public void SeedExamples()
     {
@@ -68,9 +74,7 @@ public sealed class ToolRegistry
 
         try
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".htaci", "tool_tools");
+            var dir = AppPaths.Tools;
             Directory.CreateDirectory(dir);
 
             var addPy = Path.Combine(dir, "add.py");
@@ -89,7 +93,6 @@ public sealed class ToolRegistry
                     Target = addPy,
                     InputSchemaJson =
                         "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"description\":\"加数\"},\"b\":{\"type\":\"integer\",\"description\":\"加数\"}},\"required\":[\"a\",\"b\"]}",
-                    ToolsetIds = new[] { Toolset.Default.Id },
                 });
 
             if (ResolveById(ExampleUppercaseId) is null)
@@ -103,7 +106,6 @@ public sealed class ToolRegistry
                     Target = upperJs,
                     InputSchemaJson =
                         "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"要转换的文本\"}},\"required\":[\"text\"]}",
-                    ToolsetIds = new[] { Toolset.Default.Id },
                 });
         }
         catch
@@ -143,10 +145,11 @@ public sealed class ToolRegistry
         _toolsetMembers.TryAdd(ts.Id, new HashSet<string>());
     }
 
+    /// <summary>全部集合：自动集合固定在最前（全部 → 内置），其余按名称排。</summary>
     public IReadOnlyList<Toolset> GetToolsets()
         => _toolsets.Values
-            .OrderBy(t => t.IsBuiltin ? 0 : 1)
-            .ThenBy(t => t.Name)
+            .OrderBy(t => t.SortOrder)
+            .ThenBy(t => t.Name, StringComparer.CurrentCulture)
             .ToList();
 
     // ---- 工具 ----
@@ -156,15 +159,28 @@ public sealed class ToolRegistry
         _byId[tool.Id] = tool;
         _byName[tool.Name] = tool;
 
-        foreach (var tsId in tool.EffectiveToolsetIds)
-        {
-            if (!_toolsetMembers.TryGetValue(tsId, out var set))
-            {
-                set = new HashSet<string>();
-                _toolsetMembers[tsId] = set;
-            }
-            set.Add(tool.Id);
-        }
+        // 自动集合的成员是算出来的，不维护成员表
+        foreach (var tsId in tool.ToolsetIds.Where(id => !Toolset.IsAutoId(id)))
+            MemberSet(tsId).Add(tool.Id);
+    }
+
+    /// <summary>把一个已有工具加进某个自建集合（多对多，重复添加无副作用）。</summary>
+    public void AddToolToToolset(string toolId, string toolsetId)
+    {
+        if (Toolset.IsAutoId(toolsetId)) return;
+        if (!_byId.TryGetValue(toolId, out var tool)) return;
+        if (tool.ToolsetIds.Contains(toolsetId)) return;
+
+        tool.ToolsetIds = tool.ToolsetIds.Append(toolsetId).ToList();
+        MemberSet(toolsetId).Add(toolId);
+    }
+
+    private HashSet<string> MemberSet(string toolsetId)
+    {
+        if (_toolsetMembers.TryGetValue(toolsetId, out var set)) return set;
+        set = new HashSet<string>();
+        _toolsetMembers[toolsetId] = set;
+        return set;
     }
 
     public void Unregister(string id)
@@ -202,9 +218,17 @@ public sealed class ToolRegistry
         return result;
     }
 
-    /// <summary>某工具集下的已启用工具（按注册顺序）。</summary>
+    /// <summary>某工具集下的已启用工具。「全部」「内置」按规则算，其余按成员表。</summary>
     public IReadOnlyList<ToolDefinition> GetByToolset(string toolsetId)
     {
+        if (toolsetId == Toolset.AllId)
+            return GetEnabled();
+
+        if (toolsetId == Toolset.BuiltinId)
+            return _byId.Values
+                .Where(t => t.Enabled && !t.IsInternal && t.Source == ToolSource.Builtin)
+                .ToList();
+
         if (!_toolsetMembers.TryGetValue(toolsetId, out var ids))
             return Array.Empty<ToolDefinition>();
         return ids.Where(id => _byId.TryGetValue(id, out var t) && t.Enabled && !t.IsInternal)

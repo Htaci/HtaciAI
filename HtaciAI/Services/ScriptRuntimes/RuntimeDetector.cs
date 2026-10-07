@@ -43,6 +43,7 @@ public static class RuntimeDetector
     {
         ScriptRuntimeKind.Python => AppSettings.RuntimePythonPath ?? "",
         ScriptRuntimeKind.Node => AppSettings.RuntimeNodePath ?? "",
+        ScriptRuntimeKind.Git => AppSettings.RuntimeGitPath ?? "",
         _ => ""
     };
 
@@ -52,6 +53,7 @@ public static class RuntimeDetector
         {
             case ScriptRuntimeKind.Python: AppSettings.RuntimePythonPath = path; break;
             case ScriptRuntimeKind.Node: AppSettings.RuntimeNodePath = path; break;
+            case ScriptRuntimeKind.Git: AppSettings.RuntimeGitPath = path; break;
         }
     }
 
@@ -62,6 +64,7 @@ public static class RuntimeDetector
                 ? new[] { "py", "python", "python3" }
                 : new[] { "python3", "python" },
         ScriptRuntimeKind.Node => new[] { "node" },
+        ScriptRuntimeKind.Git => new[] { "git" },
         _ => Array.Empty<string>()
     };
 
@@ -69,6 +72,7 @@ public static class RuntimeDetector
     {
         ScriptRuntimeKind.Python => "Python",
         ScriptRuntimeKind.Node => "Node.js",
+        ScriptRuntimeKind.Git => "Git",
         _ => kind.ToString()
     };
 
@@ -76,6 +80,7 @@ public static class RuntimeDetector
     {
         ScriptRuntimeKind.Python => "Python 解释器，运行 .py 脚本工具",
         ScriptRuntimeKind.Node => "Node 运行时，运行 .js / .ts 脚本工具",
+        ScriptRuntimeKind.Git => "版本控制，工作空间用它查看改动与提交",
         _ => ""
     };
 
@@ -83,6 +88,7 @@ public static class RuntimeDetector
     {
         ScriptRuntimeKind.Python => ".py",
         ScriptRuntimeKind.Node => ".js / .ts",
+        ScriptRuntimeKind.Git => "git",
         _ => ""
     };
 

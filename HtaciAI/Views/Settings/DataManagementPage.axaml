@@ -1,14 +1,43 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="550"
              x:Class="HtaciAI.Views.Settings.DataManagementPage">
-    <Grid Background="Transparent">
-        <TextBlock Text="这是数据管理页面"
-                   FontSize="14"
+    <Grid Margin="28,24"
+          RowDefinitions="Auto,Auto,*,Auto">
+        <TextBlock Text="数据管理"
+                   FontSize="20"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"/>
+        <TextBlock Grid.Row="1"
+                   Text="选择应用数据（数据库、附件、技能、脚本工具）的存放位置。更改存储模式后需要重启才会生效。"
+                   FontSize="12"
                    Foreground="#9CA3AF"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center"/>
+                   Margin="0,6,0,20"
+                   TextWrapping="Wrap"/>
+
+        <!-- 卡片列表（代码生成） -->
+        <controls:SmoothScrollViewer Grid.Row="2"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="ContentPanel"
+                        Spacing="14"/>
+        </controls:SmoothScrollViewer>
+
+        <!-- 底部说明 -->
+        <Border Grid.Row="3"
+                Margin="0,20,0,0"
+                Padding="16,12"
+                CornerRadius="10"
+                Background="#F8FAFC"
+                BorderBrush="#E5E7EB"
+                BorderThickness="1">
+            <TextBlock x:Name="FooterHint"
+                       FontSize="12"
+                       Foreground="#6B7280"
+                       TextWrapping="Wrap"/>
+        </Border>
     </Grid>
 </UserControl>

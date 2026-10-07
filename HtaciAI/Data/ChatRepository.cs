@@ -17,6 +17,16 @@ public static class ChatRepository
 
     // ---- 会话 ----
 
+    /// <summary>
+    /// 全部未删除会话，按<b>真实对话时间</b>倒序（最近发过消息的在前）。
+    ///
+    /// ⚠️ 排序刻意用 <c>COALESCE(last_message_at, created_at)</c> 而<b>不是</b> <c>updated_at</c>：
+    /// <c>updated_at</c> 会被任何一次写库抬高——改模型/技能/工具/MCP/权限、改名，甚至只是
+    /// <b>打开会话</b>（打开会恢复草稿，草稿列一变就会写一次库）。用它排序的结果是「点开看一眼
+    /// 就会跳到列表最前面」，而用户要的是「只有发了新请求才算最近用过」。
+    /// <c>last_message_at</c> 全仓只在真正发请求时写，正是这个语义；没有消息的会话退回创建时间，
+    /// 于是刚建出来的空会话仍然排在最前（这是对的，它确实是新的）。
+    /// </summary>
     public static async Task<List<ChatSession>> GetAllAsync()
     {
         var list = new List<ChatSession>();
@@ -24,8 +34,9 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode
-            FROM chat_sessions WHERE is_deleted = 0 ORDER BY COALESCE(last_message_at, updated_at) DESC;
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, draft, mcp_servers
+            FROM chat_sessions WHERE is_deleted = 0
+            ORDER BY COALESCE(last_message_at, created_at) DESC;
             """;
         await using var r = await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
@@ -39,12 +50,33 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, draft, mcp_servers
             FROM chat_sessions WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
         await using var r = await cmd.ExecuteReaderAsync();
         return await r.ReadAsync() ? MapSession(r) : null;
+    }
+
+    /// <summary>
+    /// 最近一次用过的模型名与使用时间，供「新会话默认模型 = 上次使用的模型」使用。
+    /// 排序口径与 <see cref="GetAllAsync"/> 一致（只看真实对话时间），否则
+    /// 「上次使用的模型」会被「随手点开某个会话」这种动作污染。
+    /// 没有可用会话时返回 null。
+    /// </summary>
+    public static async Task<(string Model, long At)?> GetLastUsedModelAsync()
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT model, COALESCE(last_message_at, created_at) AS at FROM chat_sessions
+            WHERE is_deleted = 0 AND model IS NOT NULL AND model <> ''
+            ORDER BY at DESC
+            LIMIT 1;
+            """;
+        await using var r = await cmd.ExecuteReaderAsync();
+        return await r.ReadAsync() ? (r.GetString(0), r.GetInt64(1)) : null;
     }
 
     public static async Task CreateAsync(ChatSession s)
@@ -57,8 +89,8 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO chat_sessions (id, title, model, system_prompt, thinking, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode)
-            VALUES ($id, $title, $model, $system_prompt, $thinking, $created_at, $updated_at, $enabled_skills, $enabled_tool_ids, $last_message_at, $permission_mode);
+            INSERT INTO chat_sessions (id, title, model, system_prompt, thinking, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, mcp_servers)
+            VALUES ($id, $title, $model, $system_prompt, $thinking, $created_at, $updated_at, $enabled_skills, $enabled_tool_ids, $last_message_at, $permission_mode, $mcp_servers);
             """;
         cmd.Parameters.AddWithValue("$id", s.Id);
         cmd.Parameters.AddWithValue("$title", s.Title);
@@ -68,9 +100,10 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$created_at", s.CreatedAt);
         cmd.Parameters.AddWithValue("$updated_at", s.UpdatedAt);
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)SerializeSkills(s.EnabledSkills) ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeToolIds(s.EnabledToolIds) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeStringList(s.EnabledToolIds) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$permission_mode", (int)s.ToolPermissionMode);
+        cmd.Parameters.AddWithValue("$mcp_servers", (object?)SerializeStringList(s.McpServers) ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -85,7 +118,8 @@ public static class ChatRepository
             SET title = $title, model = $model, system_prompt = $system_prompt,
                 thinking = $thinking, enabled_skills = $enabled_skills,
                 enabled_tool_ids = $enabled_tool_ids, last_message_at = $last_message_at,
-                permission_mode = $permission_mode, updated_at = $updated_at
+                permission_mode = $permission_mode, mcp_servers = $mcp_servers,
+                updated_at = $updated_at
             WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", s.Id);
@@ -94,10 +128,32 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$system_prompt", (object?)s.SystemPrompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$thinking", s.Thinking);
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)SerializeSkills(s.EnabledSkills) ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeToolIds(s.EnabledToolIds) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeStringList(s.EnabledToolIds) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$permission_mode", (int)s.ToolPermissionMode);
+        cmd.Parameters.AddWithValue("$mcp_servers", (object?)SerializeStringList(s.McpServers) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$updated_at", s.UpdatedAt);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// 只更新草稿列，不碰其余字段（<b>尤其不碰 updated_at</b>）。
+    /// 与 <see cref="UpdateAsync"/> 分开是刻意的：整表更新会把会话对象上的旧 draft 写回去，
+    /// 冲掉「刚敲进去、还没来得及同步到会话对象」的内容。
+    ///
+    /// 为什么不动 updated_at：草稿是「打字过程」而不是「会话活动」。它会随着每次输入落库，
+    /// 而且在<b>打开会话恢复草稿</b>时也会被触发一次——早期版本顺带写了 updated_at，
+    /// 于是「点开看一眼」就改写了会话记录。排序列已经不依赖 updated_at 了（见 <see cref="GetAllAsync"/>），
+    /// 这里再断开一次，免得将来又有人拿 updated_at 当「最近使用」用。
+    /// </summary>
+    public static async Task SaveDraftAsync(string id, string draft)
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE chat_sessions SET draft = $draft WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$draft", draft);
+        cmd.Parameters.AddWithValue("$id", id);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -150,7 +206,7 @@ public static class ChatRepository
         cmd.CommandText = """
             SELECT id, session_id, turn_id, sequence_number, role, content, thinking,
                    tool_call_id, tool_name, status, usage_json, model_name, metadata,
-                   is_deleted, deleted_at, created_at, updated_at
+                   is_deleted, deleted_at, created_at, updated_at, duration_ms
             FROM chat_message
             WHERE session_id = $session_id AND is_deleted = 0
             ORDER BY sequence_number ASC;
@@ -203,10 +259,10 @@ public static class ChatRepository
         cmd.CommandText = """
             INSERT INTO chat_message (id, session_id, turn_id, sequence_number, role, content,
                 thinking, tool_call_id, tool_name, status, usage_json, model_name, metadata,
-                is_deleted, deleted_at, created_at, updated_at)
+                is_deleted, deleted_at, created_at, updated_at, duration_ms)
             VALUES ($id, $session_id, $turn_id, $sequence_number, $role, $content,
                 $thinking, $tool_call_id, $tool_name, $status, $usage_json, $model_name, $metadata,
-                $is_deleted, $deleted_at, $created_at, $updated_at);
+                $is_deleted, $deleted_at, $created_at, $updated_at, $duration_ms);
             """;
         cmd.Parameters.AddWithValue("$id", m.Id);
         cmd.Parameters.AddWithValue("$session_id", m.SessionId);
@@ -225,6 +281,7 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$deleted_at", (object?)m.DeletedAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$created_at", m.CreatedAt);
         cmd.Parameters.AddWithValue("$updated_at", m.UpdatedAt);
+        cmd.Parameters.AddWithValue("$duration_ms", (object?)m.DurationMs ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -241,7 +298,8 @@ public static class ChatRepository
             UPDATE chat_message
             SET content = $content, thinking = $thinking, tool_call_id = $tool_call_id,
                 tool_name = $tool_name, status = $status, usage_json = $usage_json,
-                model_name = $model_name, metadata = $metadata, updated_at = $updated_at
+                model_name = $model_name, metadata = $metadata, duration_ms = $duration_ms,
+                updated_at = $updated_at
             WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", m.Id);
@@ -253,6 +311,7 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$usage_json", (object?)m.UsageJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$model_name", (object?)m.ModelName ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$metadata", (object?)m.Metadata ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$duration_ms", (object?)m.DurationMs ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$updated_at", m.UpdatedAt);
         await cmd.ExecuteNonQueryAsync();
     }
@@ -271,9 +330,11 @@ public static class ChatRepository
         CreatedAt = r.GetInt64(7),
         UpdatedAt = r.GetInt64(8),
         EnabledSkills = r.IsDBNull(9) ? new() : ParseSkills(r.GetString(9)),
-        EnabledToolIds = r.IsDBNull(10) ? new() : ParseToolIds(r.GetString(10)),
+        EnabledToolIds = r.IsDBNull(10) ? new() : ParseStringList(r.GetString(10)),
         LastMessageAt = r.IsDBNull(11) ? null : r.GetInt64(11),
         ToolPermissionMode = (PermissionMode)r.GetInt32(12),
+        Draft = r.IsDBNull(13) ? null : r.GetString(13),
+        McpServers = r.IsDBNull(14) ? new() : ParseStringList(r.GetString(14)),
     };
 
     /// <summary>把会话启用技能序列化为 JSON 数组文本（供 enabled_skills 列存储）。</summary>
@@ -291,15 +352,15 @@ public static class ChatRepository
         catch { return new(); }
     }
 
-    /// <summary>把会话激活的工具 id 集合序列化为 JSON 数组文本。</summary>
-    private static string SerializeToolIds(List<string> ids)
+    /// <summary>把字符串列表序列化为 JSON 数组文本（enabled_tool_ids / mcp_servers 共用）。</summary>
+    private static string SerializeStringList(List<string> values)
     {
-        try { return JsonSerializer.Serialize(ids ?? new()); }
+        try { return JsonSerializer.Serialize(values ?? new()); }
         catch { return "[]"; }
     }
 
-    /// <summary>从 JSON 数组文本解析会话激活的工具 id 集合；空/损坏时返回空列表。</summary>
-    private static List<string> ParseToolIds(string? json)
+    /// <summary>从 JSON 数组文本解析字符串列表；空/损坏时返回空列表。</summary>
+    private static List<string> ParseStringList(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return new();
         try { return JsonSerializer.Deserialize<List<string>>(json) ?? new(); }
@@ -325,5 +386,6 @@ public static class ChatRepository
         DeletedAt = r.IsDBNull(14) ? null : r.GetInt64(14),
         CreatedAt = r.GetInt64(15),
         UpdatedAt = r.GetInt64(16),
+        DurationMs = r.IsDBNull(17) ? null : r.GetInt64(17),
     };
 }
