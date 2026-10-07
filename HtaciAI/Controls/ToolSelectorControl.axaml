@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="28" d:DesignHeight="28"
+             x:Class="HtaciAI.Controls.ToolSelectorControl">
+    <!--
+        工具选择器（可复用控件）：
+        按钮显示扳手图标 + 已选数量角标，点击弹出菜单混合勾选
+        "工具集"（全选/全不选该集下工具）与"单个工具"。
+        工具集/工具由外部注入，选中结果通过 SelectedToolIds（TwoWay）暴露（按 id 去重）。
+    -->
+    <Button x:Name="RootBtn"
+            Width="28"
+            Height="28"
+            Padding="0"
+            CornerRadius="8"
+            Background="Transparent">
+        <Button.Flyout>
+            <MenuFlyout/>
+        </Button.Flyout>
+        <ToolTip.Tip>
+            <TextBlock Text="工具库"/>
+        </ToolTip.Tip>
+        <Grid>
+            <TextBlock x:Name="IconText"
+                       Text="&#xe90f;"
+                       FontFamily="Segoe Fluent Icons"
+                       FontSize="14"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"/>
+            <Border x:Name="Badge"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    MinWidth="14"
+                    Height="14"
+                    CornerRadius="7"
+                    Background="#4A90D9"
+                    IsVisible="False"
+                    Margin="0,2,2,0"
+                    Padding="3,0">
+                <TextBlock x:Name="BadgeText"
+                           Text="0"
+                           FontSize="9"
+                           Foreground="White"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"/>
+            </Border>
+        </Grid>
+    </Button>
+</UserControl>

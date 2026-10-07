@@ -1,0 +1,103 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="330"
+        x:Class="HtaciAI.Views.Tools.CreateToolsetWindow"
+        Icon="/Assets/logo.ico"
+        Title="新建工具集"
+        Width="460" MinWidth="460" MaxWidth="460"
+        Height="330" MinHeight="330"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <Window.Styles>
+        <Style Selector="Window">
+            <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+            <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+            <Setter Property="WindowDecorations" Value="BorderOnly"/>
+            <Setter Property="CanResize" Value="True"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <SolidColorBrush Color="Transparent" Opacity="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Row="0"
+                   Text="新建工具集"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"
+                   Margin="24,18,24,6"/>
+
+        <StackPanel Grid.Row="1"
+                    Spacing="12"
+                    Margin="24,8">
+            <StackPanel Spacing="6">
+                <TextBlock Text="名称"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Foreground="#374151"/>
+                <TextBox x:Name="NameBox"
+                         Height="34"
+                         Padding="10,0"
+                         CornerRadius="6"
+                         PlaceholderText="如：代码检索（给人看的分组名）"/>
+            </StackPanel>
+
+            <StackPanel Spacing="6">
+                <TextBlock Text="描述（可空）"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Foreground="#374151"/>
+                <TextBox x:Name="DescBox"
+                         MinHeight="56"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         Padding="10,8"
+                         CornerRadius="6"
+                         PlaceholderText="这个集合打算放哪些工具"/>
+            </StackPanel>
+
+            <TextBlock Text="工具集只是分组：可以一起开关、一起管理。同一个工具可以属于多个集合，不会重复生效。"
+                       FontSize="11"
+                       Foreground="#9CA3AF"
+                       TextWrapping="Wrap"/>
+
+            <TextBlock x:Name="ErrorText"
+                       FontSize="12"
+                       Foreground="#DC2626"
+                       TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <Grid Grid.Row="2"
+              ColumnDefinitions="*,Auto,Auto"
+              Margin="24,8,24,18">
+            <Button Grid.Column="1"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#E5E7EB"
+                    Foreground="#374151"
+                    Margin="0,0,10,0"
+                    Cursor="Hand"
+                    Click="OnCancelClick">
+                <TextBlock Text="取消" FontSize="13"/>
+            </Button>
+            <Button Grid.Column="2"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#546E7A"
+                    Foreground="White"
+                    Cursor="Hand"
+                    Click="OnSaveClick">
+                <TextBlock Text="创建" FontSize="13"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Window>

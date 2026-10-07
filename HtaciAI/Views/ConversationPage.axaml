@@ -1,0 +1,125 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
+             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+             x:Class="HtaciAI.Views.ConversationPage">
+    <UserControl.Styles>
+        <!-- 导航列表专用：4px 细滚动条，圆角滑块，无上下箭头按钮，不占内容宽度。
+             第一段用 .thin-scrollbar（类选择器）而不是 ScrollViewer.thin-scrollbar，
+             免得依赖 Avalonia 的类型选择器是否匹配子类 —— 容器已换成 SmoothScrollViewer。 -->
+        <Style Selector=".thin-scrollbar ScrollBar">
+            <Setter Property="Width" Value="4"/>
+            <Setter Property="MinWidth" Value="4"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Width="4" Background="Transparent">
+                            <Rectangle Fill="Transparent"/>
+                            <!-- Value 必须双向，且必须用 {TemplateBinding} 而不是
+                                 {Binding RelativeSource={RelativeSource TemplatedParent}}：
+                                 TemplateBindingExpression 的优先级是 Template，回写走 SetCurrentValue，
+                                 不会顶掉 ScrollBar 自己那条 Template 优先级的 Offset→Value 绑定。
+                                 换成普通 Binding 后回写是 SetValue（LocalValue 优先级），拖一次滑块就会
+                                 把那条绑定永久压死 —— 现象是「能拖能滚，但滚轮滚动时滑块不动」。
+                                 其余属性照抄 Avalonia Fluent 的 ScrollBar 模板。 -->
+                            <Track Name="PART_Track"
+                                   Orientation="{TemplateBinding Orientation}"
+                                   IsDirectionReversed="True"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value, Mode=TwoWay}"
+                                   ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.DecreaseButton>
+                                <Track.IncreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.IncreaseButton>
+                                <Track.Thumb>
+                                    <Thumb MinHeight="28" IsTabStop="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="#D8D8DC" CornerRadius="2"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 悬停滑块加深，提示可拖拽 -->
+        <Style Selector=".thin-scrollbar ScrollBar /template/ Thumb:pointerover /template/ Border">
+            <Setter Property="Background" Value="#A6A6AD"/>
+        </Style>
+    </UserControl.Styles>
+
+    <Border BorderBrush="LightGray"
+            BorderThickness="0,1,0,0">
+        <Grid ColumnDefinitions="280,*">
+            <!-- ====== 左侧导航：工作空间（树形）+ 普通对话 ====== -->
+            <Border Grid.Column="0"
+                    Background="#99F9FAFB"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,*"
+                      Margin="12,16">
+
+                    <!-- 创建新对话按钮（胶囊形 + 悬停阴影过渡） -->
+                    <Grid Grid.Row="0">
+                        <Border x:Name="NewChatShadow"
+                                HorizontalAlignment="Stretch"
+                                Height="40"
+                                CornerRadius="20"
+                                Background="Transparent"
+                                IsHitTestVisible="False"
+                                Opacity="0"
+                                BoxShadow="0 8 24 0 #14000000, 0 4 8 0 #0A000000"/>
+                        <Border x:Name="NewChatBtn"
+                                HorizontalAlignment="Stretch"
+                                Height="40"
+                                CornerRadius="20"
+                                Background="#FFFFFF"
+                                Cursor="Hand"
+                                BoxShadow="0 1 3 0 #0A000000, 0 1 2 0 #06000000">
+                            <StackPanel Orientation="Horizontal"
+                                        Spacing="8"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center">
+                                <TextBlock Text="&#xe710;"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="14"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="创建新会话"
+                                           FontSize="14"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- 导航列表（分组标题 / 工作空间树 / 普通对话，全部由 C# 构建） -->
+                    <controls:SmoothScrollViewer Grid.Row="1"
+                                                 Classes="thin-scrollbar"
+                                                 Margin="0,14,0,0"
+                                                 HorizontalScrollBarVisibility="Disabled"
+                                                 VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="NavList" Spacing="2"/>
+                    </controls:SmoothScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- ====== 右侧内容区域 ====== -->
+            <ContentControl x:Name="RightPanel"
+                            Grid.Column="1"
+                            Background="#99FFFFFF"/>
+        </Grid>
+    </Border>
+</UserControl>
