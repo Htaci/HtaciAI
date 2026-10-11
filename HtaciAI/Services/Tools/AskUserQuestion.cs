@@ -162,6 +162,50 @@ public static class AskUserQuestionTool
         return sb.ToString();
     }
 
+    /// <summary>
+    /// 把 <see cref="FormatAnswers"/> 的输出反解析回作答 —— 历史里只剩这段文本，
+    /// 想把它渲染成问答卡片就得先读回来。结果对不上格式（用户取消、工具报错、旧数据）时返回 null。
+    /// </summary>
+    public static List<AskAnswer>? ParseAnswers(List<AskQuestion> questions, string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+
+        var lines = output.Replace("\r\n", "\n").TrimEnd().Split('\n');
+        if (lines.Length < questions.Count + 1 || lines[0].Trim() != "用户已回答：") return null;
+
+        var answers = new List<AskAnswer>();
+        for (var i = 0; i < questions.Count; i++)
+        {
+            var line = lines[i + 1].Trim();
+            var prefix = (i + 1) + ". ";
+            if (!line.StartsWith(prefix, StringComparison.Ordinal)) return null;
+
+            var arrow = line.IndexOf(" → ", prefix.Length, StringComparison.Ordinal);
+            if (arrow < 0) return null;
+            var body = line[(arrow + 3)..].Trim();
+
+            var answer = new AskAnswer { Question = questions[i].Question };
+            if (body != "（未作答）")
+            {
+                // 自定义回答固定排在最后且带 "(自定义) " 前缀，先把它摘出来，剩下的按选项原顺序匹配
+                var customAt = body.IndexOf("(自定义) ", StringComparison.Ordinal);
+                var selectedPart = body;
+                if (customAt >= 0)
+                {
+                    selectedPart = body[..customAt].TrimEnd('；', ' ');
+                    answer.Custom = body[(customAt + 5)..].Trim();
+                }
+                if (selectedPart.Length > 0)
+                    answer.Selected = questions[i].Options
+                        .Where(o => selectedPart.Contains(o.Label, StringComparison.Ordinal))
+                        .Select(o => o.Label)
+                        .ToList();
+            }
+            answers.Add(answer);
+        }
+        return answers;
+    }
+
     // ---- 宽松取值 ----
 
     private static string? String(JsonElement obj, string name)

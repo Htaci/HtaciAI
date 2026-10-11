@@ -38,6 +38,12 @@ public sealed class WorkspaceConfig
     /// <summary>工作空间默认工具审批档位：新建会话时作为默认值。</summary>
     public PermissionMode ToolPermissionMode { get; set; } = PermissionMode.Normal;
 
+    /// <summary>
+    /// 工作空间默认模型 id。空 = 不指定，新建会话时回落到「上次使用的模型」
+    /// （见 <see cref="HtaciAI.Services.AppDefaults.ResolveDefaultModelAsync(string?)"/>）。
+    /// </summary>
+    public string? DefaultModelId { get; set; }
+
     public long CreatedAt { get; set; }
 
     public long UpdatedAt { get; set; }

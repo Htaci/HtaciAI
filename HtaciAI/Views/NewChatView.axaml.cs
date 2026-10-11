@@ -28,6 +28,8 @@ public partial class NewChatView : UserControl
         InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDown, handledEventsToo: true);
 
         WorkspacePicker.CreateRequested += OnCreateWorkspaceRequested;
+        // 换了工作空间：工作空间配了默认模型就跟着切过去
+        WorkspacePicker.SelectionChanged += (_, _) => ApplyWorkspaceDefaultModel();
         // 选中项变了要重算发送按钮能不能点（模型可能被停用后列表重建）
         ModelSelector.SelectedModelChanged += (_, _) => RefreshSendAvailability();
 
@@ -94,6 +96,7 @@ public partial class NewChatView : UserControl
         WorkspaceSection.IsHitTestVisible = workspace;
 
         ApplyModeDefaults();
+        ApplyWorkspaceDefaultModel();
     }
 
     /// <summary>
@@ -123,6 +126,7 @@ public partial class NewChatView : UserControl
             var list = await WorkspaceRepository.GetAllAsync();
             var stats = await WorkspaceSessionRepository.GetStatsAsync();
             WorkspacePicker.SetData(list, stats);
+            ApplyWorkspaceDefaultModel();
 
             if (list.Count == 0)
             {
@@ -152,6 +156,7 @@ public partial class NewChatView : UserControl
 
         await LoadWorkspacesAsync();
         WorkspacePicker.SelectWorkspace(dlg.Result.Id);
+        ApplyWorkspaceDefaultModel();
     }
 
     // ---- 权限模式（输入框盾牌图标） ----
@@ -242,7 +247,24 @@ public partial class NewChatView : UserControl
             // 忽略：保持选择器当前的选中项
         }
 
+        // 工作空间模式下，工作空间的默认模型优先于「上次使用的模型」
+        ApplyWorkspaceDefaultModel();
         RefreshSendAvailability();
+    }
+
+    /// <summary>
+    /// 工作空间配了默认模型就把它设为当前选中项（仅工作空间模式下生效）。
+    /// 没配就保持现状 —— 即 <see cref="LoadModelsAsync"/> 选出的「上次使用的模型」。
+    /// </summary>
+    private void ApplyWorkspaceDefaultModel()
+    {
+        if (!_workspaceMode) return;
+
+        var id = WorkspacePicker.SelectedWorkspace?.DefaultModelId;
+        if (string.IsNullOrWhiteSpace(id)) return;
+
+        var match = ModelSelector.Models.FirstOrDefault(m => m.ModelId == id || m.ModelName == id);
+        if (match is not null) ModelSelector.SelectedModel = match;
     }
 
     /// <summary>

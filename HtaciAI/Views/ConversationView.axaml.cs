@@ -129,6 +129,9 @@ public partial class ConversationView : UserControl
     /// <summary>当前 turn 的选择模式宿主：内容蓝框 + 「显示正文/全部原文」切换。</summary>
     private TurnSelectionHost? _activeTurnHost;
 
+    /// <summary>当前段落在卡外的正文块；一旦后面又出现工具调用，说明它只是过程叙述，就收进聚合卡。</summary>
+    private TurnBodyView? _activeTurnBody;
+
     private int _turnToolCount;
     private int _turnThinkingCount;
 
@@ -348,18 +351,68 @@ public partial class ConversationView : UserControl
                 await PersistSessionAsync();
                 SkillSelector.SelectedSkills = skills;
             },
-            AskUser = async questions =>
-            {
-                var owner = TopLevel.GetTopLevel(this) as Window;
-                return await AskUserDialog.ShowAsync(owner, questions);
-            },
+            AskUser = AskInlineAsync,
         };
-        _toolExecutor.ApprovalGate = async (call, tool) =>
-        {
-            var owner = TopLevel.GetTopLevel(this) as Window;
-            return await ConfirmDialog.ShowToolApprovalAsync(owner, tool, call);
-        };
+        _toolExecutor.ApprovalGate = ApproveInlineAsync;
         _toolExecutor.Mode = _profile.State.PermissionMode;
+    }
+
+    /// <summary>
+    /// 工具审批入口：审批卡片同样插进当前轮次的正文之间，等用户点「允许执行 / 拒绝」。
+    /// </summary>
+    private async Task<bool> ApproveInlineAsync(ChatToolCall call, ToolDefinition tool)
+    {
+        ToolApprovalCard? card = null;
+        ReportActivity(SessionActivity.WaitingConfirm);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            card = new ToolApprovalCard(tool, call);
+            AddInlineCard(card);
+        });
+        if (card is null) return false;
+
+        var allowed = await card.Allowed;
+        await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
+        ReportActivity(SessionActivity.Running);   // 授权只是打断一下，本轮请求还在继续
+        return allowed;
+    }
+
+    /// <summary>
+    /// ask_user_question 的作答入口：把提问卡片插进当前轮次的正文之间
+    /// （没有活动轮次时兜底挂到消息面板末尾），等用户作答后把结果交回工具。
+    /// 答完就把卡片撤掉：重新打开会话本来也不会渲染它，这次询问的记录留在工具卡里。
+    /// </summary>
+    private async Task<List<AskAnswer>?> AskInlineAsync(List<AskQuestion> questions)
+    {
+        AskUserCard? card = null;
+        ReportActivity(SessionActivity.WaitingConfirm);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            card = new AskUserCard(questions);
+            AddInlineCard(card);
+        });
+        if (card is null) return null;
+
+        var answers = await card.Answer;
+        await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
+        ReportActivity(SessionActivity.Running);
+        return answers;
+    }
+
+    /// <summary>把交互卡片挂到当前轮次的正文流末尾；没有活动轮次时挂到消息面板末尾。</summary>
+    private void AddInlineCard(Control card)
+    {
+        if (_activeTurnHost is not null)
+            _activeTurnHost.ContentPanel.Children.Add(card);
+        else
+            MessagesPanel.Children.Add(card);
+        ScrollToEnd();
+    }
+
+    private static void RemoveInlineCard(Control card)
+    {
+        if (card.Parent is Panel parent)
+            parent.Children.Remove(card);
     }
 
     private async Task PersistSessionAsync()
@@ -518,6 +571,21 @@ public partial class ConversationView : UserControl
 
     /// <summary>外部触发：会话标题/时间变化后由宿主页面刷新导航列表（仅供通知）。</summary>
     public event Action? Updated;
+
+    /// <summary>本会话的活动状态变化：列表里据此显示转圈 / 等待确认 / 未读绿点。</summary>
+    public event Action<SessionActivity>? ActivityChanged;
+
+    /// <summary>本视图对应的会话 id（宿主页面按它把状态落到左侧列表）。</summary>
+    public string SessionId => _profile.State.SessionId;
+
+    private void ReportActivity(SessionActivity activity)
+    {
+        if (ActivityChanged is not { } handler) return;
+
+        // 工具回调可能不在 UI 线程上（提问 / 授权都由工具执行链路触发），先回到 UI 线程再通知
+        if (Dispatcher.UIThread.CheckAccess()) handler(activity);
+        else Dispatcher.UIThread.Post(() => handler(activity));
+    }
 
     // ============================================================
     // 上下文压缩
@@ -800,6 +868,7 @@ public partial class ConversationView : UserControl
         }
 
         SetRunningVisual(true);
+        ReportActivity(SessionActivity.Running);
         InputBox.Text = "";
 
         var isFirstTurn = _messages.Count == 0;
@@ -886,6 +955,7 @@ public partial class ConversationView : UserControl
         RefreshContextUsage();
         _busy = false;
         SetRunningVisual(false);
+        ReportActivity(SessionActivity.Done);
         Updated?.Invoke();
 
         // 自动话题命名只跑首轮一次：首轮之后 _messages 非空，isFirstTurn 恒为假。
@@ -1040,6 +1110,7 @@ public partial class ConversationView : UserControl
         _activeTurnRoot = null;
         _activeTurnHost = null;
         _activeTurnCard = null;
+        _activeTurnBody = null;
 
         // 首屏这批渲染完，ScrollToEnd 还没落到布局上；先关掉「滚到顶部」的自动补齐，
         // 等布局帧跑完（此时 Offset 才真正到底部）再开放，否则会把历史一次全补回来。
@@ -1254,8 +1325,16 @@ public partial class ConversationView : UserControl
         TurnActivityCard? card = null;
         var toolCount = 0;
         var thinkingCount = 0;
-        foreach (var m in msgs)
+
+        // 整轮只有最后那段正文是结论（留在卡外），更早的正文都只是过程叙述，收进聚合卡里
+        var lastContentIndex = -1;
+        for (var i = 0; i < msgs.Count; i++)
+            if (msgs[i].Role == "assistant" && !string.IsNullOrWhiteSpace(msgs[i].Content))
+                lastContentIndex = i;
+
+        for (var i = 0; i < msgs.Count; i++)
         {
+            var m = msgs[i];
             if (m.Role == "assistant")
             {
                 if (!string.IsNullOrWhiteSpace(m.Thinking))
@@ -1272,13 +1351,19 @@ public partial class ConversationView : UserControl
                 }
                 if (!string.IsNullOrWhiteSpace(m.Content))
                 {
-                    // 正文一律留在聚合卡外，按顺序排列
                     using (PerfTrace.Measure("     正文块 TurnBodyView"))
                     {
                         var body = new TurnBodyView();
                         body.AppendText(m.Content);
                         body.Complete();
-                        host.AddBody(body);
+
+                        if (i == lastContentIndex)
+                            host.AddBody(body);
+                        else
+                        {
+                            card ??= AttachActivityCard(host, expand: false);
+                            host.AddNarration(body);
+                        }
                     }
                 }
             }
@@ -1326,6 +1411,7 @@ public partial class ConversationView : UserControl
     {
         _activeTurnCard?.SetFinished(_turnToolCount, _turnThinkingCount, TurnElapsed());
         _activeTurnCard?.Collapse();
+        _activeTurnBody = null;   // 这就是最后那段正文，留在卡外
         _turnStartedAt = 0;
     }
 
@@ -1406,10 +1492,24 @@ public partial class ConversationView : UserControl
         }
 
         _activeTurnCard ??= AttachActivityCard(_activeTurnHost);
+        // 卡外那段正文后面又来了工具调用，说明它只是过程叙述：先把它收进卡里，顺序正好在这次调用之前
+        MoveActiveBodyToCard();
         _activeTurnCard.Steps.Children.Add(card.Root);
         RefreshActivityHeader();
         _activeTurnCard.ScrollContentToEnd();
         ScrollToEnd();
+    }
+
+    /// <summary>
+    /// 把卡外那段正文收进聚合卡。整轮只有最后一段正文是结论，留在卡外 ——
+    /// 所以只在「后面确实又出现了工具调用 / 新一轮」时调用它。
+    /// </summary>
+    private void MoveActiveBodyToCard()
+    {
+        if (_activeTurnBody is null || _activeTurnHost is null) return;
+        _activeTurnCard ??= AttachActivityCard(_activeTurnHost);
+        _activeTurnHost.MoveBodyIntoCard(_activeTurnBody);
+        _activeTurnBody = null;
     }
 
     /// <summary>按 tool_call_id 反查输入参数（来自对应 assistant 消息的 metadata 里的 tool_calls）。</summary>
@@ -1655,6 +1755,7 @@ public partial class ConversationView : UserControl
         _activeTurnRoot = null;
         _activeTurnHost = null;
         _activeTurnCard = null;
+        _activeTurnBody = null;
         RenderHistory();
         ScrollToEnd();
     }
@@ -1684,15 +1785,18 @@ public partial class ConversationView : UserControl
             _activeTurnRoot = root;
             _activeTurnHost = host;
             _activeTurnCard = null;
+            _activeTurnBody = null;
             _turnToolCount = 0;
             _turnThinkingCount = 0;
             // 计时从请求发出算起（此刻紧接着就是本轮第一次 StreamAsync）
             _turnStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
 
-        // 每条 assistant 消息一个正文块；正文一律排在聚合卡外。聚合卡直到首个思考/工具调用才创建
+        // 每条 assistant 消息一个正文块；整轮只把最后那段留在卡外，更早的等下一次工具调用出现时收进卡里
+        MoveActiveBodyToCard();
         var body = new TurnBodyView();
         _activeTurnHost!.AddBody(body);
+        _activeTurnBody = body;
 
         ThinkingCard? thinkCard = null;
         var turnHost = _activeTurnHost!;
@@ -2432,7 +2536,17 @@ public partial class ConversationView : UserControl
         private readonly TextBlock _titleBlock;
         private readonly TextBlock _inputBlock;
         private readonly TextBlock _outputBlock;
+        private readonly StackPanel _rawStack;
+        private readonly StackPanel _swapRow;
+        private readonly TextBlock _swapLabel;
+        private readonly Grid _viewLayers;
         private bool _expanded;
+
+        /// <summary>问答卡片视图（仅 ask_user_question 有）。</summary>
+        private Control? _answerView;
+
+        /// <summary>展开内容是否显示问答卡片（否则显示入参/出参原文）。</summary>
+        private bool _cardMode = true;
 
         /// <summary>
         /// 工具入参原文，等首次展开时才美化成缩进 JSON。
@@ -2543,16 +2657,39 @@ public partial class ConversationView : UserControl
             var contentStack = new StackPanel
             {
                 Spacing = 4,
-                Margin = new Thickness(5, 14, 5, 14),
             };
             contentStack.Children.Add(MakeLabel("输入"));
             contentStack.Children.Add(_inputBlock);
             contentStack.Children.Add(MakeLabel("输出"));
             contentStack.Children.Add(_outputBlock);
+            _rawStack = contentStack;
+
+            // ask_user_question 专用：默认显示问答卡片，右上角的切换按钮回到入参/出参原文
+            _swapLabel = new TextBlock
+            {
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            _swapRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                IsVisible = false,
+                Children = { CreateSwapButton(_swapLabel, () => SetCardMode(!_cardMode)) },
+            };
+
+            _viewLayers = new Grid();
+            _viewLayers.Children.Add(contentStack);
 
             _contentHost = new SmoothScrollViewer()
             {
-                Content = contentStack,
+                Content = new StackPanel
+                {
+                    Spacing = 8,
+                    Margin = new Thickness(5, 14, 5, 14),
+                    Children = { _swapRow, _viewLayers },
+                },
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 MaxHeight = 0,
@@ -2612,12 +2749,45 @@ public partial class ConversationView : UserControl
                 EnsureInputFormatted();
             else
                 _inputBlock.Text = "";
+
+            if (toolName == BuiltinTools.AskUserName)
+                AttachAnswerView(inputJson, output);
+        }
+
+        /// <summary>
+        /// ask_user_question：把入参（问题）与出参（作答）还原成问答卡片，默认就显示它。
+        /// 还原不了（用户取消、工具报错、格式对不上）就保持原文视图。
+        /// </summary>
+        private void AttachAnswerView(string inputJson, string output)
+        {
+            var questions = AskUserQuestionTool.Parse(inputJson, out _);
+            if (questions is null) return;
+            var answers = AskUserQuestionTool.ParseAnswers(questions, output);
+            if (answers is null) return;
+            if (AskAnswerView.Build(questions, answers) is not { } view) return;
+
+            _answerView = view;
+            _viewLayers.Children.Add(view);
+            _swapRow.IsVisible = true;
+            SetCardMode(true);
+        }
+
+        /// <summary>切换展开内容的两种视图；重新展开不会重置用户的选择。</summary>
+        private void SetCardMode(bool card)
+        {
+            if (_answerView is null) return;
+            _cardMode = card;
+            _answerView.IsVisible = card;
+            _rawStack.IsVisible = !card;
+            if (!card) EnsureInputFormatted();
+            _swapLabel.Text = card ? "查看原始输入/输出" : "查看卡片";
         }
 
         public void Toggle()
         {
             _expanded = !_expanded;
-            if (_expanded) EnsureInputFormatted();
+            // 卡片模式下没人看原文，那份 JSON 也就没必要排版
+            if (_expanded && !_cardMode) EnsureInputFormatted();
 
             // 同 ThinkingCard：先恢复可见，再让 MaxHeight 从 0 动画展开
             _contentHost.IsVisible = _expanded;
@@ -2632,6 +2802,29 @@ public partial class ConversationView : UserControl
             if (_inputFormatted) return;
             _inputFormatted = true;
             _inputBlock.Text = FormatJson(_rawInputJson);
+        }
+
+        private static Button CreateSwapButton(TextBlock label, Action onClick)
+        {
+            var btn = new Button
+            {
+                Content = label,
+                Height = 24,
+                Padding = new Thickness(8, 0),
+                CornerRadius = new CornerRadius(4),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            btn.PointerEntered += (_, _) => btn.Background = new SolidColorBrush(Color.Parse("#66F0F0F0"));
+            btn.PointerExited += (_, _) => btn.Background = Brushes.Transparent;
+            btn.Click += (_, e) =>
+            {
+                // 卡片在可折叠头之外，别让点击冒泡上去把卡片收起来
+                e.Handled = true;
+                onClick();
+            };
+            return btn;
         }
 
         private static TextBlock MakeLabel(string text) => new()

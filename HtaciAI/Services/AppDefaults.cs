@@ -68,6 +68,19 @@ public static class AppDefaults
         return string.IsNullOrWhiteSpace(lastName) ? null : await ModelCatalog.ResolveAsync(lastName);
     }
 
+    /// <summary>
+    /// 带首选模型的版本（工作空间默认模型）。<paramref name="preferredId"/> 解析得出来就用它，
+    /// 否则（未设置 / 已被停用或删除）回落到无参重载的通用规则。
+    /// </summary>
+    public static async Task<ModelDetails?> ResolveDefaultModelAsync(string? preferredId)
+    {
+        if (!string.IsNullOrWhiteSpace(preferredId) &&
+            await ModelCatalog.ResolveAsync(preferredId) is { } preferred)
+            return preferred;
+
+        return await ResolveDefaultModelAsync();
+    }
+
     private static async Task<string?> GetLastUsedModelNameAsync()
     {
         var plain = await ChatRepository.GetLastUsedModelAsync();

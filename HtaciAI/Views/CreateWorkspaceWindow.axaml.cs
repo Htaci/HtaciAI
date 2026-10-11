@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Input;
@@ -8,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using HtaciAI.Models;
+using HtaciAI.Services;
 using HtaciAI.Services.Skills;
 using HtaciAI.Services.Tools;
 
@@ -20,6 +22,9 @@ namespace HtaciAI.Views;
 public partial class CreateWorkspaceWindow : Window
 {
     private sealed record PermOption(string Label, PermissionMode Mode);
+
+    /// <summary>默认模型下拉项；<see cref="Id"/> 为 null 表示不指定。</summary>
+    private sealed record ModelOption(string Label, string? Id);
 
     private static readonly PermOption[] PermissionModes =
     {
@@ -72,6 +77,33 @@ public partial class CreateWorkspaceWindow : Window
             Prefill(existing);
         else
             ApplyNewWorkspaceDefaults();
+
+        _ = LoadModelOptionsAsync();
+    }
+
+    /// <summary>
+    /// 拉取已启用模型填「默认模型」下拉框，首项是「不指定」。
+    /// 构造函数的同步路径拿不到异步结果，因此这里同时负责按 <see cref="_editing"/> 回填选中项。
+    /// </summary>
+    private async Task LoadModelOptionsAsync()
+    {
+        var options = new List<ModelOption> { new("不指定（用上次使用的模型）", null) };
+        try
+        {
+            foreach (var m in await ModelCatalog.ListEnabledAsync())
+                options.Add(new ModelOption($"{m.ProviderName} · {m.DisplayName}", m.ModelId));
+        }
+        catch
+        {
+            // 数据库未就绪时只留「不指定」
+        }
+
+        ModelCombo.ItemsSource = options;
+        ModelCombo.DisplayMemberBinding = new Binding(nameof(ModelOption.Label));
+
+        var wanted = _editing?.DefaultModelId;
+        var idx = string.IsNullOrWhiteSpace(wanted) ? -1 : options.FindIndex(o => o.Id == wanted);
+        ModelCombo.SelectedIndex = idx < 0 ? 0 : idx;   // 模型已被删除时退回「不指定」
     }
 
     /// <summary>
@@ -182,6 +214,7 @@ public partial class CreateWorkspaceWindow : Window
             .Where(s => s.Length > 0)
             .ToList() ?? new();
         ws.ToolPermissionMode = (PermissionCombo.SelectedItem as PermOption)?.Mode ?? PermissionMode.Normal;
+        ws.DefaultModelId = (ModelCombo.SelectedItem as ModelOption)?.Id;
 
         Result = ws;
         Close();

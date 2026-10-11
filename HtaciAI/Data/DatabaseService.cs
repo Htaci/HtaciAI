@@ -179,6 +179,13 @@ public static class DatabaseService
             version = 17;
             SetVersion(conn, version);
         }
+
+        if (version < 18)
+        {
+            RunMigrationV18(conn);
+            version = 18;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -655,6 +662,17 @@ public static class DatabaseService
             transaction.Rollback();
             throw;
         }
+    }
+
+    /// <summary>
+    /// 工作空间默认模型：workspaces 增加 default_model_id（存模型 id，空表示不指定）。
+    /// 指定后该工作空间新建的会话用这个模型，否则回落到「上次使用的模型」。
+    /// </summary>
+    private static void RunMigrationV18(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "ALTER TABLE workspaces ADD COLUMN default_model_id TEXT;";
+        cmd.ExecuteNonQuery();
     }
 
     private static int CountMessages(SqliteConnection conn, SqliteTransaction? transaction)

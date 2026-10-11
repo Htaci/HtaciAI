@@ -30,8 +30,8 @@ public sealed class BuiltinToolContext
     public Func<List<SessionSkill>, Task>? SaveSessionSkills { get; set; }
 
     /// <summary>
-    /// 向用户提问并等待作答（由会话视图弹窗实现）。为 null 时 ask_user_question 工具不可用。
-    /// 返回 null 表示用户取消/关闭了对话框，未作答。
+    /// 向用户提问并等待作答（由会话视图在当前轮次里插一张提问卡片实现）。为 null 时 ask_user_question 工具不可用。
+    /// 返回 null 表示用户关掉了这次询问，未作答。
     /// </summary>
     public Func<List<AskQuestion>, Task<List<AskAnswer>?>>? AskUser { get; set; }
 

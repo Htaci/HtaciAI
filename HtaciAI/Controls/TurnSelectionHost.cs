@@ -101,6 +101,26 @@ public sealed class TurnSelectionHost
         ContentPanel.Children.Insert(0, card);
     }
 
+    /// <summary>
+    /// 登记一个正文块并直接放进聚合卡：它只是过程叙述（后面还有工具调用或正文），
+    /// 整轮只把最后那段正文留在卡外。
+    /// </summary>
+    public void AddNarration(TurnBodyView body)
+    {
+        _bodies.Add(body);
+        _card?.Steps.Children.Add(body);
+    }
+
+    /// <summary>
+    /// 把已经排在正文流里的正文块挪进聚合卡 —— 后面又出现了工具调用，
+    /// 说明它只是过程叙述。挪的时机就是「下一张卡出现之前」，顺序自然是对的。
+    /// </summary>
+    public void MoveBodyIntoCard(TurnBodyView body)
+    {
+        ContentPanel.Children.Remove(body);
+        _card?.Steps.Children.Add(body);
+    }
+
     /// <summary>操作栏里的两个模式按钮（放蓝框外）。</summary>
     public Control CreateModeButtons()
         => new StackPanel

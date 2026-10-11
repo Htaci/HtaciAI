@@ -12,6 +12,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using HtaciAI.Controls;
 using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services;
@@ -53,6 +54,12 @@ public partial class ConversationPage : UserControl
 
     private bool _reloading;
 
+    /// <summary>
+    /// 已渲染会话行的状态标记：会话 id → 更新动作。
+    /// 状态变化时只动这一行，不重建整个导航 —— 重建会打断正在进行的行内重命名。
+    /// </summary>
+    private readonly Dictionary<string, Action<SessionActivity>> _statusRows = new();
+
     /// <summary>两个分组是否各自收起（分组标题上的箭头点击切换）。</summary>
     private bool _workspacesCollapsed;
     private bool _plainSessionsCollapsed;
@@ -76,6 +83,7 @@ public partial class ConversationPage : UserControl
         SetupNewChatButton();
         StartCacheSweeper();
         ShowNewChatView();
+        SessionActivityStore.Changed += OnSessionActivityChanged;
         _ = ReloadAsync();
     }
 
@@ -150,6 +158,8 @@ public partial class ConversationPage : UserControl
                 var created = new ConversationView(createProfile());
                 configure?.Invoke(created);
                 created.Updated += OnConversationUpdated;
+                var createdView = created;
+                created.ActivityChanged += a => OnSessionActivity(createdView.SessionId, a);
                 return created;
             }, DateTime.UtcNow);
         }
@@ -157,6 +167,9 @@ public partial class ConversationPage : UserControl
         {
             _viewCache.Touch(key, DateTime.UtcNow);
         }
+
+        // 打开会话就算已读：绿点只在「用户没在看这个会话」的时候才有意义
+        ClearUnread(view!.SessionId);
 
         _cacheKey = key;
         RightPanel.Content = view;
@@ -246,6 +259,7 @@ public partial class ConversationPage : UserControl
 
     private void RebuildNav()
     {
+        ResetStatusRows();
         NavList.Children.Clear();
 
         // —— 工作空间分组 ——
@@ -577,14 +591,16 @@ public partial class ConversationPage : UserControl
         // 吃掉按下事件，避免冒泡到会话项触发「打开」
         moreBtn.PointerPressed += (_, e) => e.Handled = true;
 
-        // 时间（约 15px）与按钮（24px）互换可见性，容器锁死 24px，
+        // 时间（约 15px）、状态标记与按钮（24px）互换可见性，容器锁死 24px，
         // 否则整行会在 36↔42 之间跳，鼠标扫过时整列都在动。
         var rightHost = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto"),
             Height = 24,
         };
+        var status = new SessionStatusBadge();
         rightHost.Children.Add(time);
+        rightHost.Children.Add(status);
         rightHost.Children.Add(moreBtn);
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
@@ -608,11 +624,32 @@ public partial class ConversationPage : UserControl
 
         Flyout? menu = null;
 
+        // 这一格三种内容（时间 / 状态标记 / 「···」按钮）互换可见性：
+        // 悬停时归按钮用，其余时候有活动状态就显示状态，否则显示时间。
+        void ApplyStatus(SessionActivity activity)
+        {
+            status.Set(activity);
+            rightHost.IsVisible = true;
+
+            if (item.IsPointerOver)
+            {
+                // 悬停中状态变化（后台那一轮正好跑完）也只更新状态本身，别把按钮顶掉
+                time.IsVisible = false;
+                status.IsVisible = false;
+                moreBtn.IsVisible = true;
+                return;
+            }
+
+            time.IsVisible = activity == SessionActivity.Idle;
+            moreBtn.IsVisible = false;
+        }
+        _statusRows[session.Id] = ApplyStatus;
+        ApplyStatus(SessionActivityStore.Get(session.Id));   // 建行时就定好：有时间、有状态，还是给按钮
+
         void BeginRename()
         {
-            time.IsVisible = true;
-            moreBtn.IsVisible = false;
-            rightHost.IsVisible = false;
+            ApplyStatus(SessionActivityStore.Get(session.Id));
+            rightHost.IsVisible = false;   // 重命名时整格让位给输入框
             item.Background = Brushes.Transparent;
             renameBox.Text = session.Title;
             renameBox.IsVisible = true;
@@ -627,8 +664,8 @@ public partial class ConversationPage : UserControl
             if (!renameBox.IsVisible) return;
             renameBox.IsVisible = false;
             title.IsVisible = true;
-            rightHost.IsVisible = true;
             item.Background = itemBg;
+            ApplyStatus(SessionActivityStore.Get(session.Id));   // 顺带把 rightHost 恢复可见
 
             if (!save) return;
             var newTitle = (renameBox.Text ?? "").Trim();
@@ -661,6 +698,7 @@ public partial class ConversationPage : UserControl
         {
             if (!isActive && !renameBox.IsVisible) item.Background = HoverBg;
             time.IsVisible = false;
+            status.IsVisible = false;
             moreBtn.IsVisible = true;
         };
         item.PointerExited += (_, _) =>
@@ -668,15 +706,13 @@ public partial class ConversationPage : UserControl
             // 菜单开着时不收起悬停态：指针是移向菜单，会话项同样会收到 PointerExited
             if (menu?.IsOpen == true) return;
             if (!isActive && !renameBox.IsVisible) item.Background = Brushes.Transparent;
-            time.IsVisible = true;
-            moreBtn.IsVisible = false;
+            ApplyStatus(SessionActivityStore.Get(session.Id));
         };
         menu.Closed += (_, _) =>
         {
             if (item.IsPointerOver) return;
             if (!isActive && !renameBox.IsVisible) item.Background = Brushes.Transparent;
-            time.IsVisible = true;
-            moreBtn.IsVisible = false;
+            ApplyStatus(SessionActivityStore.Get(session.Id));
         };
         item.PointerPressed += (_, e) =>
         {
@@ -687,6 +723,35 @@ public partial class ConversationPage : UserControl
 
         return item;
     }
+
+    /// <summary>
+    /// 会话活动状态落地。<see cref="SessionActivity.Done"/> 只有「用户没在看这个会话」时才算未读，
+    /// 否则当场就是已读 —— 不然自己盯着屏幕等来的回复也会挂个绿点。
+    /// </summary>
+    private void OnSessionActivity(string sessionId, SessionActivity activity)
+    {
+        if (activity == SessionActivity.Done && sessionId == _activeSessionId && IsEffectivelyVisible)
+            activity = SessionActivity.Idle;
+
+        SessionActivityStore.Set(sessionId, activity);
+    }
+
+    /// <summary>打开会话 = 已读：清掉回答完留下的绿点；运行中 / 等待确认的状态保留。</summary>
+    private static void ClearUnread(string sessionId)
+    {
+        if (SessionActivityStore.Get(sessionId) == SessionActivity.Done)
+            SessionActivityStore.Set(sessionId, SessionActivity.Idle);
+    }
+
+    /// <summary>状态变化：只刷新对应那一行（找不到就等下次导航重建时自然带上）。</summary>
+    private void OnSessionActivityChanged(string sessionId)
+    {
+        if (!_statusRows.TryGetValue(sessionId, out var apply)) return;
+        apply(SessionActivityStore.Get(sessionId));
+    }
+
+    /// <summary>导航重建：旧的更新动作随控件一起作废。</summary>
+    private void ResetStatusRows() => _statusRows.Clear();
 
     /// <summary>
     /// 自绘的菜单行。内边距与 hover 底色与 Fluent 的 MenuItem 对齐
@@ -983,6 +1048,9 @@ public partial class ConversationPage : UserControl
     {
         // 工作空间会话是「立即创建」，与普通对话的「首条消息才创建」不同
         var session = WorkspaceAgentPipeline.CreateSessionDefaults(ws, null);
+        // 工作空间指定了默认模型就用它，否则用「上次使用的模型」；都不成立时留空，
+        // 会话窗口会停在「未配置模型」并拦住发送，不再默默落到列表里的第一个模型
+        session.Model = (await AppDefaults.ResolveDefaultModelAsync(ws.DefaultModelId))?.ModelName ?? "";
         await WorkspaceSessionRepository.CreateAsync(session);
 
         _expandedWorkspaceId = ws.Id;

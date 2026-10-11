@@ -10,6 +10,9 @@ public static class BuiltinTools
 {
     public const string InvalidId = "builtin-invalid";
 
+    /// <summary>ask_user_question 的工具名。会话视图要按它把工具卡渲染成问答卡片。</summary>
+    public const string AskUserName = "ask_user_question";
+
     private const string IdBash = "builtin-bash";
     private const string IdRead = "builtin-read";
     private const string IdEdit = "builtin-edit";
@@ -127,13 +130,13 @@ public static class BuiltinTools
         new ToolDefinition
         {
             Id = IdAskUser,
-            Name = "ask_user_question",
+            Name = AskUserName,
             Description = "向用户提问并等待回答：可一次问多个问题，每题可单选或多选，用户也能用自定义文本作答。意图含糊、信息不足或需要用户在多个方案间拍板时使用。安全：只读，无副作用。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
             SkipApproval = true,
             InputSchemaJson = """
-                {"type":"object","properties":{"questions":{"type":"array","description":"要询问的问题列表（1-4 个）","items":{"type":"object","properties":{"question":{"type":"string","description":"问题本身，要具体、聚焦决策，不要问「我该怎么做」这类空泛问题"},"header":{"type":"string","description":"极短标签，不超过 12 字"},"multiSelect":{"type":"boolean","description":"是否多选，默认 false（单选）"},"options":{"type":"array","description":"候选项（1-6 个）。用户始终可以改用自定义输入作答，因此不必把「其他」写成选项。","items":{"type":"object","properties":{"label":{"type":"string","description":"选项文字"},"description":{"type":"string","description":"该选项意味着什么"}},"required":["label"]}}},"required":["question","options"]}}},"required":["questions"]}
+                {"type":"object","properties":{"questions":{"type":"array","description":"要询问的问题列表（1-4 个）","items":{"type":"object","properties":{"question":{"type":"string","description":"问题本身，要具体、聚焦决策，不要问「我该怎么做」这类空泛问题；也不要写「（可多选）」之类的提示，单选还是多选由界面标注"},"header":{"type":"string","description":"极短标签，不超过 12 字"},"multiSelect":{"type":"boolean","description":"是否多选，默认 false（单选）。界面会在题干旁自动标注「单选 / 多选」；多选时用户可勾多个选项并同时补充自定义回答"},"options":{"type":"array","description":"候选项（1-6 个）。用户始终可以改用自定义输入作答，因此不必把「其他」写成选项。","items":{"type":"object","properties":{"label":{"type":"string","description":"选项文字"},"description":{"type":"string","description":"该选项意味着什么"}},"required":["label"]}}},"required":["question","options"]}}},"required":["questions"]}
                 """,
         },
         new ToolDefinition
