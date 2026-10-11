@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
+using HtaciAI.Services.Notifications;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Updates;
 
@@ -24,6 +25,8 @@ public partial class MainWindow : Window
         DataContext = this;
 
         AddTab("智能对话", new ConversationPage());
+
+        SetupSessionNotices();
 
         // 最大化按钮的图标要随窗口状态变化（最大化后变成「还原」）。
         // 用属性监听而不是只在自己点击时改，这样双击标题栏、系统快捷键等
@@ -46,6 +49,45 @@ public partial class MainWindow : Window
         MaximizeGlyph.Text = WindowState == WindowState.Maximized
             ? "\uE923"
             : "\uE922";
+    }
+
+    // ============================================================
+    // 系统消息提醒
+    // ============================================================
+
+    /// <summary>
+    /// 把「要不要打扰」和「点了跳到哪」接到本窗口上。
+    ///
+    /// 判定只认窗口是否聚焦：用户人坐在这个软件前面时，侧栏的未读绿点已经够提示了，
+    /// 不必再叠一层系统提醒；他去看别的程序（或最小化）时才值得弹。
+    /// </summary>
+    private void SetupSessionNotices()
+    {
+        SessionNotifier.IsAppActive = () => IsActive;
+        SessionNotifier.OpenSession = sessionId => _ = JumpToSessionAsync(sessionId);
+        SessionNotifier.Raised += NotificationToast.Show;
+    }
+
+    /// <summary>跳到某个会话：切到（没有就先用已有的）智能对话标签页，把窗口叫到前台，再打开会话。</summary>
+    private async Task JumpToSessionAsync(string sessionId)
+    {
+        var index = _tabContents.FindIndex(c => c is ConversationPage);
+        if (index < 0) return;
+
+        SelectTab(index);
+        BringToFront();
+
+        if (_tabContents[index] is ConversationPage page)
+            await page.OpenSessionAsync(sessionId);
+    }
+
+    /// <summary>把主窗口从最小化 / 后台叫到前面（点提醒时用）。</summary>
+    private void BringToFront()
+    {
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
+        Show();
+        Activate();
     }
 
     // ============================================================

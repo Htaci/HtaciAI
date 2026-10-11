@@ -21,6 +21,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using HtaciAI.Controls;
 using HtaciAI.Data;
 using HtaciAI.Models;
@@ -29,6 +30,7 @@ using HtaciAI.Services.Attachments;
 using HtaciAI.Services.Conversations;
 using HtaciAI.Services.Diagnostics;
 using HtaciAI.Services.Mcp;
+using HtaciAI.Services.Notifications;
 using HtaciAI.Services.Skills;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Tools;
@@ -126,8 +128,17 @@ public partial class ConversationView : UserControl
     /// <summary>当前 turn 的聚合卡（收纳思考卡 / 工具卡）；首次出现思考或工具调用时才创建。</summary>
     private TurnActivityCard? _activeTurnCard;
 
-    /// <summary>当前 turn 的选择模式宿主：内容蓝框 + 「显示正文/全部原文」切换。</summary>
+    /// <summary>当前 turn 的选择模式宿主：内容蓝框 + 「显示全部原文」切换。</summary>
     private TurnSelectionHost? _activeTurnHost;
+
+    /// <summary>
+    /// 重新生成时新一轮控件要插进消息面板的下标（null = 追加到末尾，即普通发送）。
+    /// 流式期间先落在原位置，生成结束后整体重排一次。
+    /// </summary>
+    private int? _streamInsertIndex;
+
+    /// <summary>本轮是不是用户主动点「停止」结束的（那种情况不发出错提醒）。</summary>
+    private bool _stoppedByUser;
 
     /// <summary>当前段落在卡外的正文块；一旦后面又出现工具调用，说明它只是过程叙述，就收进聚合卡。</summary>
     private TurnBodyView? _activeTurnBody;
@@ -168,6 +179,10 @@ public partial class ConversationView : UserControl
 
         // 滚到接近顶部时补齐更早的历史（长会话首屏只渲染最后一批，见 RenderHistory）
         MessagesScroll.ScrollChanged += OnMessagesScrollChanged;
+        SetupAutoScroll();
+
+        // 消息区里按下选字不该把视口拽来拽去（原因见 SmoothScrollViewer.DisableFocusBringIntoView）
+        SmoothScrollViewer.DisableFocusBringIntoView(MessagesScroll);
 
         SetupMoreMenu();
     }
@@ -371,6 +386,20 @@ public partial class ConversationView : UserControl
         });
         if (card is null) return false;
 
+        // 提醒上带三个按钮，可以直接作答，不必先跳到这个会话。
+        // 「全部同意」顺带把本会话权限改成自由 —— 之后的工具都不再询问。
+        var approvalCard = card;
+        SessionNotifier.Notify(SessionNoticeKind.Approval, _profile.State.SessionId, _profile.State.Title,
+            $"工具（{tool.Name}）待审批",
+            workspaceName: _profile.WorkspaceName,
+            onAction: async action =>
+            {
+                if (action == NoticeAction.AllowAll)
+                    await SetPermissionModeAsync(PermissionMode.Free);
+
+                approvalCard.Respond(action != NoticeAction.Deny);
+            });
+
         var allowed = await card.Allowed;
         await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
         ReportActivity(SessionActivity.Running);   // 授权只是打断一下，本轮请求还在继续
@@ -392,6 +421,10 @@ public partial class ConversationView : UserControl
             AddInlineCard(card);
         });
         if (card is null) return null;
+
+        SessionNotifier.Notify(SessionNoticeKind.Question, _profile.State.SessionId, _profile.State.Title,
+            "需要你的协助，请完成问题回答。",
+            workspaceName: _profile.WorkspaceName);
 
         var answers = await card.Answer;
         await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
@@ -526,6 +559,8 @@ public partial class ConversationView : UserControl
     private async Task LoadMessagesAsync()
     {
         _messages.Clear();
+        // 窗口实例会被缓存复用，切回会话时恢复「跟着最新内容走」
+        _autoScroll = true;
         PerfTrace.Begin($"会话 {_profile.State.SessionId}");
         try
         {
@@ -871,7 +906,8 @@ public partial class ConversationView : UserControl
         ReportActivity(SessionActivity.Running);
         InputBox.Text = "";
 
-        var isFirstTurn = _messages.Count == 0;
+        // 用户主动发消息：无论刚才在看哪一段，都跟着这一轮走
+        _autoScroll = true;
 
         // 标题还是占位说明此前没定过名：按设置补一个（配了命名模型时先留占位，等首轮回复再生成）
         if (ConversationTitle.IsPlaceholder(_profile.State.Title))
@@ -879,6 +915,48 @@ public partial class ConversationView : UserControl
         _profile.State.Model = selected.ModelName;
         _profile.State.Thinking = (int)ModelSelector.ThinkingMode;
         _profile.State.EnabledToolIds = ToolSelector.SelectedToolIds.ToList();
+
+        var isFirstTurn = _messages.Count == 0;
+
+        // 历史传全量：有压缩记录时由网关路径上的 BuildWireHistory 摘成「最后一条压缩记录 + 之后」
+        var turn = await RunTurnAsync(selected, client, text, _messages.ToList(), attachments: _pending,
+            requestPreview: text);
+
+        // 自动话题命名只跑首轮一次：首轮之后 _messages 非空，isFirstTurn 恒为假。
+        if (isFirstTurn) _ = ApplyAutoTitleAsync(turn, text);
+    }
+
+    /// <summary>
+    /// 一次请求的公共执行路径（普通发送与重新生成共用）：
+    /// 定位/落库会话状态 → 组装请求 → 流式 → 收尾（聚合卡、操作栏、用量环）。
+    ///
+    /// <paramref name="userText"/> 为 null 表示<b>重新生成</b>：不新建用户消息，
+    /// 新回复按 <paramref name="insertAfterSequence"/> 给出的位置插回历史中间（普通发送传 null，追加到末尾）。
+    /// 调用方负责置位/清掉 <see cref="_busy"/>。
+    /// </summary>
+    /// <param name="attachments">
+    /// 随这一轮发出的附件，只用于<b>新建</b>用户消息时写进它的 metadata。
+    /// 重新生成时传 null：那一次不新建用户消息，附件路径本来就在历史消息的正文里（模型照常读到）。
+    /// </param>
+    /// <param name="requestPreview">
+    /// 这一轮「用户请求」的原文，仅用于任务完成时那条提醒的文案。
+    /// 与 <paramref name="userText"/> 分开传：重新生成时没有 userText，但请求文字要从上下文里取。
+    /// </param>
+    private async Task<ChatTurnResult?> RunTurnAsync(
+        ModelDetails selected,
+        IChatClient client,
+        string? userText,
+        List<ChatMessage> history,
+        IReadOnlyList<DraftAttachment>? attachments,
+        int? insertAfterSequence = null,
+        string? requestPreview = null)
+    {
+        // 没显式给就从上下文里取最后一条用户消息（重新生成走的就是这条路）
+        var preview = requestPreview ?? history.LastOrDefault(m => m.Role == "user")?.Content ?? "";
+
+        // 本轮是不是用户自己按「停止」结束的：那种情况不发出错提醒
+        _stoppedByUser = false;
+
         _profile.State.LastMessageAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await PersistSessionAsync();
 
@@ -907,6 +985,7 @@ public partial class ConversationView : UserControl
         // 放在后面建的话，压缩阶段那颗按钮是「停止」却没有任何东西可取消。
         _sendCts = new CancellationTokenSource();
         ChatTurnResult? turn = null;
+        var persisted = new List<string>();
         try
         {
             // 上下文超阈值时先自动压缩一次（受设置控制，失败或不满足条件都安静跳过）
@@ -916,41 +995,64 @@ public partial class ConversationView : UserControl
                 _profile.State.SessionId,
                 system,
                 // 有压缩记录时只发「最后一条压缩记录 + 它之后的消息」，更早的历史被摘要在语义上替代
-                ContextCompression.BuildWireHistory(_messages),
-                ExpandAttachments(text),   // 发给模型的是真实路径，不是 @图片1
-                _pending.Count > 0 ? _pending.Select(d => d.Info).ToList() : null,
+                ContextCompression.BuildWireHistory(history),
+                userText is null ? null : ExpandAttachments(userText),   // 发给模型的是真实路径，不是 @图片1
+                attachments is { Count: > 0 } ? attachments.Select(d => d.Info).ToList() : null,
                 options,
                 client,
                 _toolExecutor,
-                PersistMessage,
+                async m => { persisted.Add(m.Id); await PersistMessage(m); },
                 BeginAssistantRound,
                 _sendCts.Token);
         }
         catch (OperationCanceledException)
         {
             // 用户点了「停止」：内容已由网关按 interrupted 落库，这里只做收尾
+            _stoppedByUser = true;
         }
         finally
         {
             _sendCts.Dispose();
             _sendCts = null;
+            // 请求已返回（成功 / 停止 / 失败），逐秒计时到此为止。
+            // 放在 finally 里而不是只放在 FinishActivityCard 里：请求异常直接抛出去时那条路径
+            // 不会走到收尾逻辑，定时器会一直跑下去（运行中的 DispatcherTimer 会吊住页面）。
+            StopTurnTimer();
         }
 
-        // 附件已经随这一轮发出去了
-        _pending.Clear();
-        RefreshAttachmentBar();
+        // 重新生成：新消息落库时拿到的序列号在会话末尾（当下只能拿到「最大值 + 1」），
+        // 这里把它们挪回原位置，否则重生成的回复会跑到最后一轮后面。
+        if (insertAfterSequence is { } after)
+        {
+            try { await ChatRepository.InsertMessagesAtAsync(_profile.State.SessionId, after, persisted); }
+            catch { /* 忽略：位置不对总好过整轮回复丢掉 */ }
+        }
+
+        // 附件已经随这一轮发出去了（重新生成不带附件，也就不能顺手动用户输入框里的待发附件）
+        if (userText is not null)
+        {
+            _pending.Clear();
+            RefreshAttachmentBar();
+        }
 
         if (_activeTurnId is not null && _activeTurnRoot is not null && _activeTurnHost is not null)
         {
-            // 回复结束：聚合卡翻为用时统计并折叠；操作栏（含原文模式按钮）追加到蓝框外
+            // 回复结束：聚合卡翻为用时统计并折叠；操作栏（含原文按钮）追加到蓝框外
             FinishActivityCard();
 
             var turnAssistants = _messages
                 .Where(m => m.Role == "assistant" && m.TurnId == _activeTurnId)
                 .ToList();
             _activeTurnRoot.Children.Add(CreateAiReplyOps(_activeTurnId, turnAssistants, _activeTurnHost));
-            ScrollToEnd();
         }
+
+        _streamInsertIndex = null;
+
+        // 重新生成时新回复是插在中间的，流式期间先落在目标位置、生成完统一重排一次
+        if (insertAfterSequence is not null)
+            await ReloadMessagesAsync();
+        else
+            ScrollToEnd();
 
         RefreshContextUsage();
         _busy = false;
@@ -958,8 +1060,188 @@ public partial class ConversationView : UserControl
         ReportActivity(SessionActivity.Done);
         Updated?.Invoke();
 
-        // 自动话题命名只跑首轮一次：首轮之后 _messages 非空，isFirstTurn 恒为假。
-        if (isFirstTurn) _ = ApplyAutoTitleAsync(turn, text);
+        // 收尾提醒：跑完和出错都报，措辞避开「失败」，用「出错」。
+        // 用户主动点「停止」不报 —— 那是他自己按的，不需要事后被告知。
+        if (turn is { Success: true })
+            SessionNotifier.Notify(SessionNoticeKind.Done, _profile.State.SessionId, _profile.State.Title,
+                $"任务“{PreviewText(preview)}”已完成",
+                workspaceName: _profile.WorkspaceName);
+        else if (turn is not null && !_stoppedByUser)
+            SessionNotifier.Notify(SessionNoticeKind.Failed, _profile.State.SessionId, _profile.State.Title,
+                $"任务“{PreviewText(preview)}”出错",
+                workspaceName: _profile.WorkspaceName);
+
+        return turn;
+    }
+
+    /// <summary>把用户请求压成一行短文案：取前 10 个字，超出部分用省略号（换行也折成空格）。</summary>
+    private static string PreviewText(string? text)
+    {
+        const int max = 10;
+        var flat = (text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+        if (flat.Length == 0) return "本轮请求";
+        return flat.Length <= max ? flat : flat[..max] + "...";
+    }
+
+    /// <summary>
+    /// 编辑用户消息。两个出口：
+    /// <list type="bullet">
+    ///   <item><b>保存</b>：只写库，不重发 —— 用户常常只是想订正措辞，是否重生成由他自己决定；</item>
+    ///   <item><b>发送</b>：写库后走重发链路，用改后的内容重新生成那一轮的回复。</item>
+    /// </list>
+    /// </summary>
+    private async Task EditUserMessageAsync(ChatMessage msg)
+    {
+        if (_busy)
+        {
+            ShowCompressHint("正在生成回复，先点「停止」再编辑", HintInfo, autoHide: true);
+            return;
+        }
+
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        var (result, text) = await MessageEditDialog.ShowAsync(owner, "编辑消息", msg.Content ?? "");
+        if (result == MessageEditResult.Cancel) return;
+
+        var content = text.Trim();
+        if (content.Length == 0)
+        {
+            ShowCompressHint("消息内容不能为空", HintFail, autoHide: true);
+            return;
+        }
+
+        if (content != msg.Content)
+        {
+            try
+            {
+                await ChatRepository.UpdateMessageContentAsync(msg.Id, content);
+                msg.Content = content;
+            }
+            catch
+            {
+                ShowCompressHint("保存失败，消息未改动", HintFail, autoHide: true);
+                return;
+            }
+        }
+
+        if (result == MessageEditResult.Save)
+        {
+            await ReloadMessagesAsync();   // 让气泡显示改后的文本
+            return;
+        }
+
+        await RegenerateAsync(msg);
+    }
+
+    /// <summary>
+    /// 重新生成一轮 AI 回复。点用户消息或点 AI 消息都走这里，两者语义等价：
+    /// 上下文取「触发点及以上」—— 点 AI 消息 → 这条 AI 消息之前；点用户消息 → 含这条用户消息。
+    /// 于是「用户1 / AI2」这轮里，点用户1 或点 AI2 都是重新生成 AI2。
+    /// 已经被删掉的 AI 轮次没有可点的 AI 消息，从它前面那条用户消息点即可补生成。
+    /// </summary>
+    private async Task RegenerateAsync(ChatMessage trigger)
+    {
+        if (_busy)
+        {
+            ShowCompressHint("正在生成回复，先点「停止」再重新生成", HintInfo, autoHide: true);
+            return;
+        }
+
+        // 历史没读完不能重生成：上下文会缺一段
+        if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
+        {
+            ShowCompressHint("正在加载历史记录，完成后自动重新生成…", HintInfo, autoHide: false);
+            await loadTcs.Task;
+            HideCompressHint();
+        }
+
+        var selected = ModelSelector.SelectedModel;
+        if (selected is null)
+        {
+            ShowCompressHint("尚未配置模型：请到「设置 → 模型服务」添加并启用服务商与模型", HintFail, autoHide: false);
+            return;
+        }
+
+        var triggerIndex = _messages.FindIndex(m => m.Id == trigger.Id);
+        if (triggerIndex < 0) return;
+
+        // 上下文末尾：点用户消息含自己；点 AI 消息则退到这个 AI 轮的第一条消息之前
+        var contextEnd = trigger.Role == "user"
+            ? triggerIndex + 1
+            : IndexOfTurnStart(trigger.TurnId, triggerIndex);
+
+        var context = _messages.Take(contextEnd).ToList();
+        if (context.Count == 0) return;
+
+        // 要被替换掉的旧 AI 轮：上下文之后、下一条用户/压缩消息之前，且同一个 turn_id
+        var replaced = new List<ChatMessage>();
+        var replacedTurnId = contextEnd < _messages.Count && _messages[contextEnd].Role is "assistant" or "tool"
+            ? _messages[contextEnd].TurnId
+            : null;
+        if (replacedTurnId is not null)
+            for (var i = contextEnd; i < _messages.Count && _messages[i].TurnId == replacedTurnId; i++)
+                replaced.Add(_messages[i]);
+
+        _busy = true;
+        var client = await ResolveSendClientAsync(selected);
+        if (client is null)
+        {
+            _busy = false;
+            return;
+        }
+
+        SetRunningVisual(true);
+        ReportActivity(SessionActivity.Running);
+
+        // 用户主动发消息：无论刚才在看哪一段，都跟着这一轮走
+        _autoScroll = true;
+
+        var insertAfter = context[^1].SequenceNumber;
+
+        // 让旧回复先消失：直接改内存 + 重渲染，比原地找控件删更简单，也顺带把插入位置算出来
+        if (replaced.Count > 0)
+        {
+            try { await ChatRepository.SoftDeleteTurnAsync(_profile.State.SessionId, replacedTurnId!); } catch { /* 忽略 */ }
+            var ids = replaced.Select(m => m.Id).ToHashSet();
+            _messages.RemoveAll(m => ids.Contains(m.Id));
+        }
+
+        // 至少渲染到「上下文末尾那条消息」所在的分组：被点在很旧的轮次上时，
+        // 不能因为「首屏只渲染最后一批」而把它所在的区域整个丢掉。
+        RenderHistory(keepRendered: context[^1].Id);
+        _streamInsertIndex = ComputeInsertIndex(insertAfter);
+
+        await RunTurnAsync(selected, client, null, context, attachments: null, insertAfter);
+    }
+
+    /// <summary>AI 轮的第一条消息在 <c>_messages</c> 里的下标（找不到就退回 <paramref name="fallback"/>）。</summary>
+    private int IndexOfTurnStart(string? turnId, int fallback)
+    {
+        for (var i = 0; i <= fallback && i < _messages.Count; i++)
+            if (_messages[i].TurnId == turnId && _messages[i].Role is "assistant" or "tool")
+                return i;
+        return fallback;
+    }
+
+    /// <summary>包含指定消息的分组下标；找不到返回 -1。</summary>
+    private int FindGroupIndex(string messageId)
+    {
+        for (var i = 0; i < _turnGroups.Count; i++)
+            if (_turnGroups[i].Msgs.Any(m => m.Id == messageId))
+                return i;
+        return -1;
+    }
+
+    /// <summary>
+    /// 新回复要插进消息面板的下标：上下文末尾那组之后。
+    /// 那一组没被渲染时返回面板末尾（生成结束后会整体重排，位置最终是对的）。
+    /// </summary>
+    private int ComputeInsertIndex(int afterSequence)
+    {
+        var group = FindGroupIndex(_messages.FirstOrDefault(m => m.SequenceNumber == afterSequence)?.Id ?? "");
+        if (group < 0) return MessagesPanel.Children.Count;
+
+        var index = group + 1 - _firstRenderedGroup;
+        return Math.Clamp(index, 0, MessagesPanel.Children.Count);
     }
 
     /// <summary>
@@ -1008,7 +1290,7 @@ public partial class ConversationView : UserControl
             "你是会话标题生成器。根据用户的第一条消息和助手的回复，给出一个简短的会话标题。" +
             "要求：不超过 12 个字，只输出标题本身，不要引号、标点、序号或任何解释。";
 
-        var body = $"用户：{turn.User.Content}\n助手：{ConversationTitle.Truncate(turn.FinalAssistant?.Content, 500)}";
+        var body = $"用户：{turn.User?.Content}\n助手：{ConversationTitle.Truncate(turn.FinalAssistant?.Content, 500)}";
         var history = new List<ChatMessage> { new() { Role = "user", Content = body } };
 
         var options = new ChatRequestOptions
@@ -1085,7 +1367,11 @@ public partial class ConversationView : UserControl
 
     // ---- 历史渲染 ----
 
-    private void RenderHistory()
+    /// <param name="keepRendered">
+    /// 至少渲染到包含这条消息的分组（含）。重新生成用：被点中的轮次可能在「最后一批」之外，
+    /// 不能因为首屏只渲染最后 N 轮就把它所在的区域整个丢掉。
+    /// </param>
+    private void RenderHistory(string? keepRendered = null)
     {
         MessagesPanel.Children.Clear();
 
@@ -1101,6 +1387,11 @@ public partial class ConversationView : UserControl
         // 用户能看到最新内容、能马上开始输入，更早的轮次等滚到顶部再加载。
         _historyBatchTurns = AppDefaults.ResolveHistoryBatchTurns();
         _firstRenderedGroup = Math.Max(0, _turnGroups.Count - _historyBatchTurns);
+        if (keepRendered is not null)
+        {
+            var keep = FindGroupIndex(keepRendered);
+            if (keep >= 0) _firstRenderedGroup = Math.Min(_firstRenderedGroup, keep);
+        }
         PerfTrace.Info($"分组 {_turnGroups.Count} 轮，首屏渲染 {_turnGroups.Count - _firstRenderedGroup} 轮");
 
         using (PerfTrace.Measure("   首屏建控件"))
@@ -1281,11 +1572,73 @@ public partial class ConversationView : UserControl
 
     private void OnMessagesScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
+        UpdateAutoScroll();
+
         // 首屏还没定位到底部，此时的 Offset=0 不代表用户在看顶部
         if (_suppressEarlierLoad) return;
         // 只在还有更早历史时才关心滚动位置
         if (_firstRenderedGroup <= 0) return;
         if (IsNearTop()) LoadEarlierHistory();
+    }
+
+    // ---- 自动跟随最新内容 ----
+
+    /// <summary>
+    /// 是否让新内容把视图拽到底部。默认开；用户一往上滚就关（他正在回看历史），
+    /// 滚回底部或主动发消息时再打开。
+    /// </summary>
+    private bool _autoScroll = true;
+
+    /// <summary>正在拖滚动条。用来区分「用户滚走了」与「内容自己长高了」。</summary>
+    private bool _scrollbarGesture;
+
+    /// <summary>
+    /// 只认「用户操作」与「是否贴底」两个信号，不去比对偏移量。
+    ///
+    /// 为什么不能靠偏移量判断：内容一追加，<c>Extent</c> 就变高，此时 Offset 一动没动却已经
+    /// 「不贴底」了 —— 拿这个去关闭自动跟随，等于每次流式输出都会自己把自己关掉。
+    /// 所以：滚轮向上 / 拖滚动条离开底部 → 关；任何时候贴底 → 开。
+    /// </summary>
+    private void SetupAutoScroll()
+    {
+        // handledEventsToo: SmoothScrollViewer 自己也会在隧道阶段截滚轮做缓动并标记 handled，
+        // 不打开这个开关，事件在被它吃掉之后我们就再也看不到了。
+        MessagesScroll.AddHandler(
+            PointerWheelChangedEvent,
+            OnMessagesWheel,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        MessagesScroll.AddHandler(
+            PointerPressedEvent,
+            OnMessagesPointerPressed,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        MessagesScroll.PointerReleased += (_, _) => _scrollbarGesture = false;
+    }
+
+    private void OnMessagesWheel(object? sender, PointerWheelEventArgs e)
+    {
+        // 向上滚 = 我要回看历史，别再把我拽下去。
+        // 反方向（滚回底部就恢复跟随）不在这里处理：滚轮的位移要好几帧缓动才落定，
+        // 此刻测到的位置还不是最终位置；交给 ScrollChanged 里的「贴底即恢复」一条规则管。
+        if (e.Delta.Y > 0) _autoScroll = false;
+    }
+
+    private void OnMessagesPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        // 拖滚动条也是一种「我要自己控制位置」，和滚轮同等对待
+        for (var v = e.Source as Visual; v is not null && !ReferenceEquals(v, MessagesScroll); v = v.GetVisualParent())
+            if (v is ScrollBar or Thumb)
+            {
+                _scrollbarGesture = true;
+                return;
+            }
+    }
+
+    private void UpdateAutoScroll()
+    {
+        if (IsAtBottom()) _autoScroll = true;
+        else if (_scrollbarGesture) _autoScroll = false;
     }
 
     /// <summary>把一个分组渲染成控件。分组只有两种形态：压缩分割线、或一个完整的轮次块。</summary>
@@ -1393,22 +1746,49 @@ public partial class ConversationView : UserControl
     /// 创建并挂上一轮的空聚合卡（首次出现思考或工具调用时调用）。
     /// 实时轮出生即展开（<paramref name="expand"/> 默认 true），历史轮保持折叠。
     /// </summary>
-    private static TurnActivityCard AttachActivityCard(TurnSelectionHost host, bool expand = true)
+    private TurnActivityCard AttachActivityCard(TurnSelectionHost host, bool expand = true)
     {
         var card = new TurnActivityCard();
-        card.SetProcessing(0, 0);
+        // 历史轮（没有在计时）显示「处理中」；实时轮直接带上当前耗时，避免先闪一下「处理中」
+        card.SetProcessing(0, 0, ElapsedSinceTurnStart());
         if (expand) card.Expand();
         host.SetCard(card);
         return card;
     }
 
-    /// <summary>流式过程中刷新聚合卡头部（计数随思考/工具调用递增）。</summary>
+    /// <summary>流式过程中刷新聚合卡头部（已耗时 + 计数）。</summary>
     private void RefreshActivityHeader()
-        => _activeTurnCard?.SetProcessing(_turnToolCount, _turnThinkingCount);
+        => _activeTurnCard?.SetProcessing(_turnToolCount, _turnThinkingCount, ElapsedSinceTurnStart());
+
+    /// <summary>
+    /// 本轮运行期间的逐秒计时器。计数只在思考/工具到达时才变，光靠那些事件刷新的话
+    /// 头部的时间会冻在最后一次事件的时刻，所以另开一个定时器让它自己走。
+    /// </summary>
+    private DispatcherTimer? _turnTimer;
+
+    private void StartTurnTimer()
+    {
+        StopTurnTimer();
+        _turnTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _turnTimer.Tick += OnTurnTimerTick;
+        _turnTimer.Start();
+    }
+
+    private void OnTurnTimerTick(object? sender, EventArgs e) => RefreshActivityHeader();
+
+    /// <summary>停止逐秒计时。运行中的 DispatcherTimer 会吊住整个页面，收尾必须显式停。</summary>
+    private void StopTurnTimer()
+    {
+        if (_turnTimer is null) return;
+        _turnTimer.Stop();
+        _turnTimer.Tick -= OnTurnTimerTick;
+        _turnTimer = null;
+    }
 
     /// <summary>回复结束：聚合卡翻为用时统计并折叠。</summary>
     private void FinishActivityCard()
     {
+        StopTurnTimer();
         _activeTurnCard?.SetFinished(_turnToolCount, _turnThinkingCount, TurnElapsed());
         _activeTurnCard?.Collapse();
         _activeTurnBody = null;   // 这就是最后那段正文，留在卡外
@@ -1537,7 +1917,18 @@ public partial class ConversationView : UserControl
         }
     }
 
-    // ---- 消息操作（复制 / 编辑 / 删除）与 Tokens 汇总 ----
+    // ---- 消息操作（复制 / 编辑 / 重新生成 / 删除）与 Tokens 汇总 ----
+
+    /// <summary>「重新生成」按钮的字形（Segoe Fluent Icons：Sync）。</summary>
+    private const string RegenerateIcon = "\uE895";
+
+    /// <summary>
+    /// 「重新生成」按钮：用户消息与 AI 消息共用同一个入口，
+    /// 点哪一条都重新生成「那一轮」的 AI 回复（见 <see cref="RegenerateAsync"/>）。
+    /// </summary>
+    private Button RegenerateButton(Func<ChatMessage?> resolveTarget)
+        => CreateGlyphButton(RegenerateIcon, "重新生成",
+            () => { if (resolveTarget() is { } t) _ = RegenerateAsync(t); });
 
     private static (long Input, long Cache, long Output) ParseUsage(ChatMessage m)
     {
@@ -1605,14 +1996,14 @@ public partial class ConversationView : UserControl
         var total = input + output;
 
         var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(copyText.ToString()));
-        var editBtn = CreateGlyphButton("", "编辑", () => { /* TODO: 编辑 */ });
         var delBtn = CreateGlyphButton("", "删除", async () => await DeleteTurnAsync(turnId), hoverColor: "#DC2626");
 
         var left = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 2,
-            Children = { copyBtn, editBtn, delBtn, host.CreateModeButtons() },
+            Children = { copyBtn, RegenerateButton(() => _messages.FirstOrDefault(
+                m => m.TurnId == turnId && m.Role is "assistant" or "tool")), host.CreateModeButtons(), delBtn },
         };
         var tokens = new TextBlock
         {
@@ -1633,11 +2024,12 @@ public partial class ConversationView : UserControl
         return grid;
     }
 
-    private Control CreateUserOps(string messageId, string text)
+    private Control CreateUserOps(ChatMessage msg)
     {
+        var text = msg.Content ?? "";
         var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(text));
-        var editBtn = CreateGlyphButton("", "编辑", () => { /* TODO: 编辑 */ });
-        var delBtn = CreateGlyphButton("", "删除", async () => await DeleteMessageAsync(messageId), hoverColor: "#DC2626");
+        var editBtn = CreateGlyphButton("", "编辑", () => _ = EditUserMessageAsync(msg));
+        var delBtn = CreateGlyphButton("", "删除", async () => await DeleteMessageAsync(msg.Id), hoverColor: "#DC2626");
 
         return new StackPanel
         {
@@ -1645,7 +2037,7 @@ public partial class ConversationView : UserControl
             Spacing = 2,
             HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(0, 2, 20, 8),
-            Children = { copyBtn, editBtn, delBtn },
+            Children = { copyBtn, editBtn, RegenerateButton(() => msg), delBtn },
         };
     }
 
@@ -1659,7 +2051,7 @@ public partial class ConversationView : UserControl
         var (bubble, block) = CreateUserElement();
         SetUserBubbleContent(block, msg);
         stack.Children.Add(bubble);
-        stack.Children.Add(CreateUserOps(msg.Id, msg.Content ?? ""));
+        stack.Children.Add(CreateUserOps(msg));
         return stack;
     }
 
@@ -1779,7 +2171,16 @@ public partial class ConversationView : UserControl
             var host = new TurnSelectionHost { BuildFullRawText = () => BuildFullRawText(turnId) };
             root.Children.Add(host.Border);
 
-            MessagesPanel.Children.Add(root);
+            // 重新生成时插回原位置（_streamInsertIndex，用完即清），普通发送追加到末尾
+            if (_streamInsertIndex is { } at && at >= 0 && at <= MessagesPanel.Children.Count)
+            {
+                MessagesPanel.Children.Insert(at, root);
+                _streamInsertIndex = null;
+            }
+            else
+            {
+                MessagesPanel.Children.Add(root);
+            }
             ScrollToEnd();
             _activeTurnId = assistantMsg.TurnId;
             _activeTurnRoot = root;
@@ -1790,6 +2191,7 @@ public partial class ConversationView : UserControl
             _turnThinkingCount = 0;
             // 计时从请求发出算起（此刻紧接着就是本轮第一次 StreamAsync）
             _turnStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            StartTurnTimer();
         }
 
         // 每条 assistant 消息一个正文块；整轮只把最后那段留在卡外，更早的等下一次工具调用出现时收进卡里
@@ -1967,6 +2369,9 @@ public partial class ConversationView : UserControl
 
     private void ScrollToEnd()
     {
+        // 用户正在往上回看：别把视图拽回底部（见 _autoScroll）
+        if (!_autoScroll) return;
+
         MessagesScroll.ScrollToEnd();
 
         // 刚建出来的控件还没测量，此时 Extent 是旧的，ScrollToEnd 只能落在「当时以为的底部」。
@@ -2452,6 +2857,8 @@ public partial class ConversationView : UserControl
                 // 给内容的约束在滚动方向上是无限大，里面的文本照样每次布局都被测一遍。
                 IsVisible = false,
             };
+            // 卡片里按下选字不该把卡片内容滚滚（原因见 DisableFocusBringIntoView）
+            SmoothScrollViewer.DisableFocusBringIntoView(_contentHost);
             _contentHost.Transitions = new Transitions
             {
                 new DoubleTransition
@@ -2468,8 +2875,7 @@ public partial class ConversationView : UserControl
                 },
             };
 
-            // 用 SelectionModeHost：原文模式下自动展开（折叠时内部文本无从选中），退出时回收
-            var root = new SelectionModeHost
+            var root = new Border
             {
                 CornerRadius = new CornerRadius(10),
                 Background = new SolidColorBrush(Color.Parse("#00F7F8FA")),
@@ -2481,9 +2887,6 @@ public partial class ConversationView : UserControl
                     Children = { _header, _contentHost },
                 },
             };
-            root.GetExpanded = () => _expanded;
-            root.Expand = () => { if (!_expanded) Toggle(); };
-            root.Collapse = () => { if (_expanded) Toggle(); };
             Root = root;
         }
 
@@ -2700,6 +3103,8 @@ public partial class ConversationView : UserControl
                 // 工具输出常常很长，这里是长会话布局开销的大头。
                 IsVisible = false,
             };
+            // 同 ThinkingCard：卡片里按下选字不该把卡片内容滚滚
+            SmoothScrollViewer.DisableFocusBringIntoView(_contentHost);
             _contentHost.Transitions = new Transitions
             {
                 new DoubleTransition
@@ -2716,8 +3121,7 @@ public partial class ConversationView : UserControl
                 },
             };
 
-            // 同 ThinkingCard：原文模式下自动展开，退出时回收
-            var root = new SelectionModeHost
+            var root = new Border
             {
                 CornerRadius = new CornerRadius(10),
                 Background = new SolidColorBrush(Color.Parse("#00F7F8FA")),
@@ -2729,9 +3133,6 @@ public partial class ConversationView : UserControl
                     Children = { _header, _contentHost },
                 },
             };
-            root.GetExpanded = () => _expanded;
-            root.Expand = () => { if (!_expanded) Toggle(); };
-            root.Collapse = () => { if (_expanded) Toggle(); };
             Root = root;
         }
 

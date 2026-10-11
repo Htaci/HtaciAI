@@ -159,6 +159,8 @@ public sealed class CodeBlockView : Border
         // 这里只需要横向滚动条。纵向滚轮必须继续冒泡给外层消息列表，
         // 否则鼠标停在代码块上就滚不动整个对话了。
         ScrollViewer.SetIsScrollChainingEnabled(scroll, true);
+        // 代码块在消息里，按下选字不该把它横向滚一下（原因见 DisableFocusBringIntoView）
+        SmoothScrollViewer.DisableFocusBringIntoView(scroll);
 
         var bodyGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
         Grid.SetColumn(_gutter, 0);

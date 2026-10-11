@@ -3,8 +3,17 @@
              xmlns:local="using:HtaciAI"
              xmlns:controls="using:HtaciAI.Controls"
              x:Class="HtaciAI.App"
-             RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             RequestedThemeVariant="Light">
+             <!-- 暂时钉死亮色，先别改回 Default。
+                  本应用配色是硬编码的一套亮色（全仓没有一处 DynamicResource），
+                  而 FluentTheme 的控件默认色会跟着系统变：系统一开深色模式，
+                  输入框、滚动条、菜单这些控件就切成深色底，跟硬编码的浅色背景打架 ——
+                  表现就是「灰底 + 白字」看不清（TextBox 的占位符与正文都这样）。
+
+                  RequestedThemeVariant 是唯一开关：只要它不是 Default，Avalonia 就直接采用、
+                  不再去问系统（见 ThemeVariant.UpdateActualThemeVariant）。Application 是主题根，
+                  窗口与控件都继承它的 ActualThemeVariant，所以这一行管全局。
+                  以后做深色适配时，改回 Default 或让它跟随用户的设置项。 -->
 
     <!-- Styles 必须写在 Resources 之前：下面的 ControlTheme 用 StaticResource 引用
          Fluent 里的 {x:Type ScrollViewer}，要靠它先挂在 Application.Styles 上才找得到。 -->

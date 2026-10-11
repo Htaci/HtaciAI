@@ -57,6 +57,25 @@ public class SmoothScrollViewer : ScrollViewer
             RoutingStrategies.Tunnel);
     }
 
+    /// <summary>
+    /// 关掉「焦点变化时把焦点控件滚入视野」。
+    ///
+    /// 为什么要关：按下滑鼠时 Avalonia 的 <c>FocusManager</c> 会在<b>隧道阶段</b>（早于任何业务处理器）
+    /// 从按下元素向上找第一个可聚焦控件并给它焦点；而文本块默认可聚焦（
+    /// <see cref="Avalonia.Controls.SelectableTextBlock"/> 的静态构造里把 <c>Focusable</c> 置了 true）。
+    /// 紧接着 <see cref="ScrollViewer.OnGotFocus"/> 会对这个控件 <c>BringIntoView()</c>，
+    /// 而 <c>BringIntoViewOnFocusChange</c> 默认是 true —— 结果就是「按下去准备选字」这个动作
+    /// 会把视口往上或往下拽一下（取决于该块露出多少、在视口的哪一侧）。
+    ///
+    /// 消息区的滚动位置由我们自己决定（跟随最新内容 / 用户手动滚），不需要这个行为。
+    /// 表单页（设置、创建窗口）里的滚动容器<b>不要</b>调它：那里按下输入框把它滚入视野是有用的。
+    ///
+    /// ⚠️ <b>链路上每一个 ScrollViewer 都要关</b>：任何一个还开着，它引发的 BringIntoView
+    /// 都会先被最内层的 <c>ScrollContentPresenter</c> 处理掉，照样会跳。
+    /// </summary>
+    public static void DisableFocusBringIntoView(ScrollViewer viewer)
+        => SetBringIntoViewOnFocusChange(viewer, false);
+
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);

@@ -39,6 +39,9 @@ public partial class CompressedContextCard : UserControl
     {
         InitializeComponent();
 
+        // 卡片在消息流里，按下选字不该把内容滚滚（原因见 DisableFocusBringIntoView）
+        if (ContentScroll is not null) SmoothScrollViewer.DisableFocusBringIntoView(ContentScroll);
+
         _chevron = new RotateTransform();
         Chevron!.RenderTransform = _chevron;
         Chevron.RenderTransformOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative);

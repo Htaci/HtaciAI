@@ -9,6 +9,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using HtaciAI.Services;
 using HtaciAI.Services.Tools;
+using Avalonia.Threading;
 
 namespace HtaciAI.Controls;
 
@@ -29,6 +30,18 @@ public sealed class ToolApprovalCard : UserControl
 
     /// <summary>用户是否放行这次调用。作答之前一直处于等待状态。</summary>
     public Task<bool> Allowed => _done.Task;
+
+    /// <summary>
+    /// 从卡片外部作答（目前只有系统提醒上的「拒绝 / 同意 / 全部同意」按钮用）。
+    /// 已经答过就什么都不做：按钮与卡片是两条并行的作答入口，谁先点谁算数。
+    /// </summary>
+    public void Respond(bool allowed)
+    {
+        if (_done.Task.IsCompleted) return;
+
+        if (Dispatcher.UIThread.CheckAccess()) Finish(allowed);
+        else Dispatcher.UIThread.Post(() => Finish(allowed));
+    }
 
     public ToolApprovalCard(ToolDefinition tool, ChatToolCall call)
     {

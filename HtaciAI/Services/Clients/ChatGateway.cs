@@ -52,12 +52,15 @@ public sealed class ChatGateway
     /// 用户消息占一个 turn；整个 AI 回复（含多轮工具调用/结果/续写）共享另一个 turn。
     /// 循环直到 AI 不再请求工具或达到轮数上限。
     /// persist：每条新消息（user / tool / assistant）落库；beginRound：新一轮 assistant 开始时创建 UI 并返回流式回调。
+    ///
+    /// <paramref name="userText"/> 为 null 表示<b>重新生成</b>：不新建用户消息，
+    /// <paramref name="history"/> 自身就是完整上下文（结尾是那条用户消息），只产生新的 AI 回复。
     /// </summary>
     public async Task<ChatTurnResult> ChatAsync(
         string sessionId,
         string? systemPrompt,
         IReadOnlyList<ChatMessage> history,
-        string userText,
+        string? userText,
         IReadOnlyList<ChatAttachment>? attachments,
         ChatRequestOptions options,
         IChatClient client,
@@ -68,25 +71,30 @@ public sealed class ChatGateway
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        // —— 用户轮次 ——
-        var userMsg = new ChatMessage
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            SessionId = sessionId,
-            TurnId = await ChatRepository.GetNextTurnIdAsync(sessionId),
-            SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
-            Role = "user",
-            Content = userText,
-            // 附件只在 metadata 里记路径与展示信息；正文里保留的路径才是模型读到的
-            Metadata = attachments is { Count: > 0 } ? AttachmentJson.Serialize(attachments) : null,
-            Status = "completed",
-            ModelName = client.ModelName,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        await persist(userMsg);
+        // —— 用户轮次（重新生成时没有这一步） ——
+        ChatMessage? userMsg = null;
+        var messages = new List<ChatMessage>(history);
 
-        var messages = new List<ChatMessage>(history) { userMsg };
+        if (userText is not null)
+        {
+            userMsg = new ChatMessage
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                SessionId = sessionId,
+                TurnId = await ChatRepository.GetNextTurnIdAsync(sessionId),
+                SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
+                Role = "user",
+                Content = userText,
+                // 附件只在 metadata 里记路径与展示信息；正文里保留的路径才是模型读到的
+                Metadata = attachments is { Count: > 0 } ? AttachmentJson.Serialize(attachments) : null,
+                Status = "completed",
+                ModelName = client.ModelName,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            await persist(userMsg);
+            messages.Add(userMsg);
+        }
 
         // —— AI 轮次（多轮工具调用共享同一 turn_id） ——
         var aiTurnId = await ChatRepository.GetNextTurnIdAsync(sessionId);
@@ -266,9 +274,9 @@ public sealed class ChatRoundSink
     public Action<string> OnFailed { get; set; } = _ => { };
 }
 
-/// <summary>一次 ChatAsync 的结果。</summary>
+/// <summary>一次 ChatAsync 的结果。<see cref="User"/> 在重新生成时为 null（那一次没有新建用户消息）。</summary>
 public sealed record ChatTurnResult(
-    ChatMessage User,
+    ChatMessage? User,
     ChatMessage? FinalAssistant,
     bool Success,
     string? Error);

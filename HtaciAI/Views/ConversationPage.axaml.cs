@@ -204,6 +204,41 @@ public partial class ConversationPage : UserControl
     // 数据加载
     // ============================================================
 
+    /// <summary>当前显示在右侧的会话 id；null 表示停在「新建会话」页。供系统提醒判定「用户是否正看着它」。</summary>
+    public string? ActiveSessionId => _activeSessionId;
+
+    /// <summary>
+    /// 打开指定会话（普通对话 / 工作空间会话都支持）。系统提醒被点击时用它跳转。
+    ///
+    /// 三种情况都要能开：列表里已有（最快）、列表还没加载完（刚建的标签页）、
+    /// 属于一个从没展开过的工作空间（内存里根本没有它的记录）。所以列表找不到就按 id 查库。
+    /// </summary>
+    public async Task OpenSessionAsync(string sessionId)
+    {
+        if (string.IsNullOrEmpty(sessionId)) return;
+
+        if (_plainSessions.FirstOrDefault(s => s.Id == sessionId) is not null
+            || await ChatRepository.GetAsync(sessionId) is not null)
+        {
+            _activeSessionId = sessionId;
+            _activeWorkspaceId = null;
+            await ShowSessionViewAsync(
+                SessionViewCache.KeyForSession(sessionId),
+                () => new StandaloneProfile(sessionId));
+            return;
+        }
+
+        if (await WorkspaceSessionRepository.GetAsync(sessionId) is not { } session) return;
+
+        var ws = _workspaces.FirstOrDefault(w => w.Id == session.WorkspaceId)
+                 ?? await WorkspaceRepository.GetAsync(session.WorkspaceId);
+        if (ws is null) return;
+
+        _expandedWorkspaceId = ws.Id;
+        await LoadWorkspaceSessionsAsync(ws.Id);
+        await OpenWorkspaceSessionAsync(ws, session);
+    }
+
     private async Task ReloadAsync()
     {
         if (_reloading) return;

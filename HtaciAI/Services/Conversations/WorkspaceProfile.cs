@@ -29,6 +29,9 @@ public sealed class WorkspaceProfile : IConversationProfile
 
     public ConversationState State { get; }
 
+    /// <summary>工作空间名（系统提醒会在会话名前拼上它，区分不同工作空间里的同名会话）。</summary>
+    public string? WorkspaceName => string.IsNullOrWhiteSpace(_workspace.Name) ? null : _workspace.Name;
+
     /// <summary>工具基准目录 = 工作空间根目录；未配置时回退进程当前目录（与改造前一致）。</summary>
     public string BaseDirectory
         => string.IsNullOrWhiteSpace(_workspace.Path) ? Environment.CurrentDirectory : _workspace.Path;

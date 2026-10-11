@@ -197,6 +197,23 @@ public static class ChatRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>
+    /// 只改用户消息的正文（编辑用户消息用）。
+    /// 单独开一个方法而不是复用 <see cref="UpdateMessageAsync"/>：后者会连 thinking / 用量 / 状态
+    /// 一起写，那些字段对一条已完成的用户消息没有意义，写回去只会扩大出错面。
+    /// </summary>
+    public static async Task UpdateMessageContentAsync(string messageId, string content)
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE chat_message SET content = $content, updated_at = $now WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$content", content);
+        cmd.Parameters.AddWithValue("$now", Now());
+        cmd.Parameters.AddWithValue("$id", messageId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     public static async Task<List<ChatMessage>> GetBySessionAsync(string sessionId)
     {
         var list = new List<ChatMessage>();
@@ -245,6 +262,65 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$session_id", sessionId);
         var result = await cmd.ExecuteScalarAsync();
         return Convert.ToInt64(result).ToString();
+    }
+
+    /// <summary>
+    /// 把 <paramref name="orderedIds"/> 按给定顺序插到第 <paramref name="afterExclusive"/> 条之后
+    /// （即 sequence_number &gt; afterExclusive 的最前面），其余消息整体后移，相对顺序不变。
+    ///
+    /// 重新生成中间某一轮时必须用它：新回复是边流式边落库的，落库时只能拿到「当前最大值 + 1」，
+    /// 也就是会话末尾；不挪回来的话，重生成的回复会跑到最后一轮后面去。
+    ///
+    /// 腾位置分三步，先把这一段整体挪进<b>负数区间</b>：直接原地 +N 会撞上
+    /// <c>UNIQUE(session_id, sequence_number)</c> —— SQLite 按 rowid 顺序逐行更新，
+    /// 前一行加完就压到还没移动的行上，立刻冲突（UPDATE 也不支持 ORDER BY 来倒着走）。
+    /// 挪到负数区与此前状态（全部为正）不重叠，最后再统一移回。整个过程在一个事务里。
+    /// </summary>
+    public static async Task InsertMessagesAtAsync(string sessionId, int afterExclusive, IReadOnlyList<string> orderedIds)
+    {
+        if (orderedIds.Count == 0) return;
+
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var tx = conn.BeginTransaction();
+
+        void Exec(string sql, Action<SqliteCommand>? bind = null)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = sql;
+            bind?.Invoke(cmd);
+            cmd.ExecuteNonQuery();
+        }
+
+        Exec(
+            "UPDATE chat_message SET sequence_number = -sequence_number WHERE session_id = $sid AND sequence_number > $after;",
+            c =>
+            {
+                c.Parameters.AddWithValue("$sid", sessionId);
+                c.Parameters.AddWithValue("$after", afterExclusive);
+            });
+
+        for (var i = 0; i < orderedIds.Count; i++)
+        {
+            Exec(
+                "UPDATE chat_message SET sequence_number = $seq WHERE id = $id;",
+                c =>
+                {
+                    c.Parameters.AddWithValue("$seq", afterExclusive + 1 + i);
+                    c.Parameters.AddWithValue("$id", orderedIds[i]);
+                });
+        }
+
+        Exec(
+            "UPDATE chat_message SET sequence_number = -sequence_number + $count WHERE session_id = $sid AND sequence_number < 0;",
+            c =>
+            {
+                c.Parameters.AddWithValue("$count", orderedIds.Count);
+                c.Parameters.AddWithValue("$sid", sessionId);
+            });
+
+        tx.Commit();
     }
 
     public static async Task InsertAsync(ChatMessage m)

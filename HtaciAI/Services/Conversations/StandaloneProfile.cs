@@ -29,6 +29,9 @@ public sealed class StandaloneProfile : IConversationProfile
 
     public ConversationState State { get; }
 
+    /// <summary>普通对话不属于任何工作空间。</summary>
+    public string? WorkspaceName => null;
+
     /// <summary>普通对话没有工作目录，工具相对路径基于进程当前目录（与改造前 ChatView 一致）。</summary>
     public string BaseDirectory => Environment.CurrentDirectory;
 

@@ -9,7 +9,6 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.VisualTree;
 
 namespace HtaciAI.Controls;
 
@@ -25,7 +24,6 @@ public partial class TurnActivityCard : UserControl
 
     private readonly RotateTransform _chevron;
     private bool _expanded;
-    private bool _autoExpandedForSelection;
 
     /// <summary>步骤序列宿主（视图向其追加思考卡 / 工具卡 / 正文块）。</summary>
     public StackPanel Steps => ContentPanel!;
@@ -46,6 +44,9 @@ public partial class TurnActivityCard : UserControl
                 Easing = new CubicEaseInOut(),
             },
         };
+
+        // 卡片里按下选字不该把卡片内容滚滚（原因见 SmoothScrollViewer.DisableFocusBringIntoView）
+        SmoothScrollViewer.DisableFocusBringIntoView(ContentScroll!);
 
         ContentScroll!.Transitions = new Transitions
         {
@@ -76,9 +77,13 @@ public partial class TurnActivityCard : UserControl
     public void SetSummary(int tools, int thinkings, int messages)
         => HeaderText!.Text = $"{tools} 个工具调用   |   {thinkings} 次思考   |   {messages} 条消息";
 
-    /// <summary>流式中：形如「处理中  3次思考  2次工具调用」。</summary>
-    public void SetProcessing(int tools, int thinkings)
-        => HeaderText!.Text = Join("处理中", thinkings, tools);
+    /// <summary>
+    /// 流式中：形如「12秒  3次思考  2次工具调用」—— 头部显示的是<b>已耗时</b>，随计时器逐秒刷新。
+    /// <paramref name="elapsed"/> 为 null（拿不到开始时刻等异常情况）才退回「处理中」，
+    /// 保证这一格任何时候都不为空。
+    /// </summary>
+    public void SetProcessing(int tools, int thinkings, TimeSpan? elapsed)
+        => HeaderText!.Text = Join(elapsed is { } e ? FormatDuration(e) : "处理中", thinkings, tools);
 
     /// <summary>
     /// 回复结束：形如「用时 15秒  1次思考」「用时 17分22秒  32次思考  45次工具调用」。
@@ -119,44 +124,6 @@ public partial class TurnActivityCard : UserControl
     /// <summary>内容区滚动到底（流式追加步骤时保持最新可见）。</summary>
     public void ScrollContentToEnd() => ContentScroll?.ScrollToEnd();
 
-    /// <summary>
-    /// 原文模式开关：进入时自动展开（折叠状态下内部文本不可见、无从选中），
-    /// 退出时仅回收本次因选择模式而展开的卡片，用户手动展开的不动。
-    /// 随后递归把开关下发到内部的折叠容器与文本控件。
-    /// </summary>
-    public void SetSelectionMode(bool on)
-    {
-        if (on)
-        {
-            if (!_expanded)
-            {
-                _autoExpandedForSelection = true;
-                Toggle();
-            }
-        }
-        else if (_autoExpandedForSelection)
-        {
-            _autoExpandedForSelection = false;
-            if (_expanded) Toggle();
-        }
-
-        ApplySelectionModeDeep(this, on);
-    }
-
-    /// <summary>递归下发原文模式：折叠容器转展开、文本控件转原生可选。</summary>
-    public static void ApplySelectionModeDeep(Control root, bool on)
-    {
-        foreach (var child in root.GetVisualChildren())
-        {
-            if (child is SelectionModeHost host)
-                host.SetSelectionMode(on);
-            else if (child is CustomSelectableTextBlock block)
-                block.NativeSelectionEnabled = on;
-
-            if (child is Control c)
-                ApplySelectionModeDeep(c, on);
-        }
-    }
 
     public void Toggle()
     {

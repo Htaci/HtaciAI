@@ -29,6 +29,12 @@ public interface IConversationProfile
     /// <summary>视图读写的会话状态。</summary>
     ConversationState State { get; }
 
+    /// <summary>
+    /// 会话所属工作空间名；普通对话为 null。
+    /// 仅供需要「这个会话归谁」的地方使用（目前是系统提醒的标题前缀）。
+    /// </summary>
+    string? WorkspaceName { get; }
+
     /// <summary>工具执行器的基准目录（bash / read / write / glob / grep 的相对路径都基于它）。</summary>
     string BaseDirectory { get; }
 
