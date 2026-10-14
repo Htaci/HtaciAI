@@ -59,27 +59,9 @@
             <Setter Property="Background" Value="#A6A6AD"/>
         </Style>
 
-        <!-- ====== 输入框聚焦视觉 ======
-             Fluent 的 TextBox 主题在 :focus 时会给模板内的 Border#PART_BorderElement 直接
-             设上 2px 蓝边 —— 那是打在模板子元素上的样式设置器，文本框自身的
-             BorderThickness="0" 压不住它，必须在这里覆盖掉。本文件的 Styles 在
-             Application.Styles（FluentTheme）之后求值，同优先级下后者胜，所以盖得住。 -->
-        <Style Selector="TextBox#InputBox:focus /template/ Border#PART_BorderElement">
-            <Setter Property="BorderThickness" Value="0"/>
-        </Style>
-        <!-- 兜底：万一模板里的部件名对不上，整个模板 Border 再来一次（TextBox 模板里只有这一个） -->
-        <Style Selector="TextBox#InputBox:focus /template/ Border">
-            <Setter Property="BorderThickness" Value="0"/>
-        </Style>
-
-        <!-- 聚焦态画在外层 Border 上：边缘阴影。
-             0 0 0 1 是贴着边框的一圈实边（叠上自身 1px 边框共 2px），
-             0 0 7 2 是往外散的柔光，两层叠出「细边 + 光晕」。
-             光晕只能这么画 —— BorderBrush 画在框内，做不出往外的发光。 -->
-        <Style Selector="Border#InputShell:focus-within">
-            <Setter Property="BorderBrush" Value="#7EB3E8"/>
-            <Setter Property="BoxShadow" Value="0 0 0 1 #7EB3E8, 0 0 7 2 #4D7EB3E8"/>
-        </Style>
+        <!-- 输入框的聚焦视觉（盖掉 Fluent 模板里的 2px 蓝边、外层描边发光）
+             已随输入区一起搬进 Controls/ChatInputControl.axaml，
+             在那里改才对 —— 本文件已经不再拥有输入框。 -->
     </UserControl.Styles>
 
     <Grid RowDefinitions="*,Auto" Background="Transparent">
@@ -92,140 +74,14 @@
             <StackPanel x:Name="MessagesPanel" Spacing="12" Margin="34,20" Background="Transparent"/>
         </controls:SmoothScrollViewer>
 
-        <!-- ====== 输入区 ====== -->
-        <StackPanel Grid.Row="1" Margin="15" VerticalAlignment="Bottom">
-            <!-- 待发送附件：正文里保留的是路径（模型要读它），这里显示的是给人看的 chip -->
-            <WrapPanel x:Name="AttachmentBar"
-                       Orientation="Horizontal"
-                       IsVisible="False"
-                       Margin="2,0,2,8"/>
-            <Border x:Name="InputShell"
-                    CornerRadius="8"
-                    Background="#FFFFFF"
-                    BorderBrush="#E5E7EB"
-                    BorderThickness="1"
-                    MinHeight="100">
-            <Grid>
-                <TextBox x:Name="InputBox"
-                         MinHeight="100"
-                         CornerRadius="8"
-                         MaxHeight="200"
-                         Padding="16,16,16,38"
-                         FontSize="14"
-                         Foreground="#1A1A2E"
-                         PlaceholderText="在这里输入你的问题，Enter 发送，Shift+Enter 换行"
-                         AcceptsReturn="True"
-                         TextWrapping="Wrap"
-                         BorderThickness="0"/>
-
-                <!-- 功能栏 -->
-                <Grid VerticalAlignment="Bottom" Background="Transparent">
-                    <!-- 右半边用 StackPanel 而非各自 Right 定位：某个环隐藏时（IsVisible=false
-                         不占布局）右边的控件要自然补上空档。顺序：模型选择器 → 等待环 → 用量环 → 发送 -->
-                    <StackPanel Orientation="Horizontal"
-                                HorizontalAlignment="Right"
-                                VerticalAlignment="Center"
-                                Spacing="6"
-                                Margin="0,5,5,5">
-                        <controls:ModelSelectorControl x:Name="ModelSelector" VerticalAlignment="Center"/>
-                        <!-- 已发出请求、还没收到任何输出时的等待指示 -->
-                        <controls:LoadingRing x:Name="LoadingRing" VerticalAlignment="Center"/>
-                        <controls:ContextUsageRing x:Name="UsageRing" VerticalAlignment="Center"/>
-                        <Button x:Name="SendBtn"
-                                Width="28"
-                                Height="28"
-                                Padding="0"
-                                CornerRadius="8"
-                                Background="#4A90D9"
-                                Click="OnSendClick">
-                            <Grid>
-                                <TextBlock x:Name="SendGlyph"
-                                           Text="&#xF19C;"
-                                           FontFamily="{StaticResource IconFont}"
-                                           FontSize="14"
-                                           Foreground="White"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"/>
-                                <!-- 运行中：换成停止方块 -->
-                                <Border x:Name="StopGlyph"
-                                        Width="10"
-                                        Height="10"
-                                        CornerRadius="2.5"
-                                        Background="White"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Center"
-                                        IsVisible="False"/>
-                            </Grid>
-                        </Button>
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                        <!-- 上传文件：以绝对路径插入正文，由 read / view_image 工具读取 -->
-                        <Button x:Name="AddFileBtn"
-                                Width="28"
-                                Height="28"
-                                Padding="0"
-                                CornerRadius="8"
-                                Background="Transparent"
-                                Margin="5"
-                                Click="OnAddFileClick">
-                            <TextBlock Text="&#xF1AA;"
-                                       FontFamily="{StaticResource IconFont}"
-                                       FontSize="14"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"/>
-                        </Button>
-                        <controls:ToolSelectorControl x:Name="ToolSelector" Margin="5"/>
-                        <controls:SkillSelectorControl x:Name="SkillSelector" Margin="5"/>
-                        <controls:McpSelectorControl x:Name="McpSelector" Margin="5"/>
-                        <!-- 权限模式（严格/普通/宽松/自由） -->
-                        <Button x:Name="PermModeBtn"
-                                Width="28"
-                                Height="28"
-                                Padding="0"
-                                CornerRadius="8"
-                                Background="Transparent"
-                                Margin="5">
-                            <Button.Flyout>
-                                <MenuFlyout>
-                                    <MenuItem Header="严格（所有工具需确认）" Tag="Strict"/>
-                                    <MenuItem Header="普通（安全工具自动）" Tag="Normal"/>
-                                    <MenuItem Header="宽松（安全/风险自动）" Tag="Loose"/>
-                                    <MenuItem Header="自由（所有工具免确认）" Tag="Free"/>
-                                </MenuFlyout>
-                            </Button.Flyout>
-                            <TextBlock x:Name="PermModeIcon"
-                                       Text="&#xF6BF;"
-                                       FontFamily="{StaticResource IconFont}"
-                                       FontSize="14"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"/>
-                        </Button>
-                        <!-- 更多功能（菜单在代码后置里装配：放在 Flyout 里的 x:Name 不生成字段） -->
-                        <Button x:Name="MoreBtn"
-                                Width="28"
-                                Height="28"
-                                Padding="0"
-                                CornerRadius="8"
-                                Background="Transparent"
-                                Margin="5">
-                            <TextBlock Text="&#xE825;"
-                                       FontFamily="{StaticResource IconFont}"
-                                       FontSize="14"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"/>
-                        </Button>
-                        <!-- 压缩期间的进度提示：压缩要发一次模型请求，没有提示会让人以为卡住了 -->
-                        <TextBlock x:Name="CompressHint"
-                                   Text="正在压缩上下文…"
-                                   FontSize="11"
-                                   Foreground="#9CA3AF"
-                                   VerticalAlignment="Center"
-                                   Margin="2,0,0,0"
-                                   IsVisible="False"/>
-                    </StackPanel>
-                </Grid>
-            </Grid>
-            </Border>
-        </StackPanel>
+        <!-- ====== 输入区 ======
+             附件栏 / 输入框 / 工具栏 / 提示行都在 Controls/ChatInputControl 里，
+             与「新建会话」页共用同一份实现。会话相关的差异由代码后置注入：
+             DraftStore（草稿落库）、SetRunning（运行态）、SetContextUsage（用量环）、
+             AddMoreItem（压缩上下文）—— 控件本身不知道自己在哪个页面。 -->
+        <controls:ChatInputControl x:Name="Input"
+                                   Grid.Row="1"
+                                   Margin="15"
+                                   VerticalAlignment="Bottom"/>
     </Grid>
 </UserControl>

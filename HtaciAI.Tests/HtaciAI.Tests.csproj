@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    测试项目。
+
+    目前的重点是**输入框附件的草稿逻辑**（Services/Attachments/AttachmentDraft.cs）：
+    token 碰撞、光标处整体删除、手改正文后的孤儿清理、路径展开、草稿序列化。
+    这些是最容易出细微错误、又最难通过界面点出来的部分。
+
+    引入 Avalonia.Headless.XUnit 是为了让控件的 UI 级测试（构造、附件 chip 栏、按钮接线）
+    也能跑在命令行里。版本与主项目的 Avalonia 严格一致，见根目录 Directory.Packages.props 的说明。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>HtaciAI.Tests</AssemblyName>
+    <RootNamespace>HtaciAI.Tests</RootNamespace>
+    <!-- xunit v3 的测试项目是自带宿主程序的可执行文件，必须显式声明 OutputType。 -->
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Avalonia.Headless.XUnit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HtaciAI\HtaciAI.csproj" />
+  </ItemGroup>
+
+</Project>

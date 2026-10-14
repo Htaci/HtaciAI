@@ -53,15 +53,9 @@ public partial class ConversationView : UserControl
     private bool _busy;
     private bool _skillEventsHooked;
     private bool _toolEventsHooked;
-    /// <summary>草稿写入是否在进行中；<see cref="_draftPending"/> 表示期间又有新输入，写完要补一轮。</summary>
-    private bool _draftSaving;
-    private bool _draftPending;
 
-    /// <summary>
-    /// 上一次已知的草稿原文（打开会话时读到的值，之后是每次成功落盘的内容）。
-    /// 内容没变就不再写库 —— 见 <see cref="SaveDraftAsync"/>。
-    /// </summary>
-    private string? _lastSavedDraft;
+    // 草稿的「上次落盘内容」与串行化标志已随草稿逻辑搬进 ChatInputControl
+    // （那边有 _lastSavedDraft / _draftSaving / _draftPending 同一套）。
 
     /// <summary>当前发送的取消源：运行中点发送按钮即取消（按钮此时是「停止」）。</summary>
     private CancellationTokenSource? _sendCts;
@@ -156,26 +150,24 @@ public partial class ConversationView : UserControl
 
         // 只做不依赖会话内容的一次性 UI 装配；依赖会话状态的初始化统一放到 InitializeAsync
         // （普通对话要等 LoadAsync 查库回来才有内容，工作空间会话则由页面先行加载）
-        LoadTools();
-        // 回车发送 / Shift+Enter 换行（TextBox 内部处理 Enter 时事件已 handled）
-        InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDown, handledEventsToo: true);
-        InputBox.TextChanged += (_, _) =>
-        {
-            PruneAttachments();
-            _ = SaveDraftAsync();
-        };
+        // 工具集/工具的装载由 ChatInputControl 自己在构造时完成 —— 它要能独立成立，
+        // 新建页那边同样依赖这一点。这里不再重复调用。
 
-        // Ctrl+V 走隧道阶段：必须早于 TextBox 自己的粘贴，否则文件/位图已经被当成文本处理掉了
-        InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDownTunnel, RoutingStrategies.Tunnel);
-        DragDrop.SetAllowDrop(InputBox, true);
-        InputBox.AddHandler(DragDrop.DropEvent, (EventHandler<DragEventArgs>)OnInputDrop);
+        // 输入区（附件、粘贴、拖放、回车发送、光标处整体删占位符）全部由 ChatInputControl 自己处理，
+        // 这里只接它抛出来的几件事。原因：新建页与对话页原先各有一份实现，于是附件只加在了后者身上。
+        Input.SendRequested += (_, submit) => _ = SendMessageAsync(submit.Text, submit.Attachments);
+        Input.StopRequested += (_, _) => _sendCts?.Cancel();
 
         // 换模型 = 换上下文上限，占用读数要按新上限重算（用量本身取自历史，不变）
-        ModelSelector.SelectedModelChanged += (_, _) => RefreshContextUsage();
+        Input.ModelSelector.SelectedModelChanged += (_, _) => RefreshContextUsage();
 
         // 每次打开模型菜单都重拉一次列表：服务商/模型改了名、新增了模型都能立刻看到，
         // 不再只依赖会话创建时那一次注入。
-        ModelSelector.RefreshRequested += async (_, _) => await RefreshModelsAsync();
+        Input.ModelSelector.RefreshRequested += async (_, _) => await RefreshModelsAsync();
+
+        // 压缩要在「这一轮发出去之前」定下上下文，所以入口放在输入区的更多菜单里。
+        // 运行中控件会自己把注入的项禁用掉（中途插一条压缩会让本轮上下文前后不一致）。
+        Input.AddMoreItem("压缩上下文", () => _ = CompressContextAsync(manual: true));
 
         // 滚到接近顶部时补齐更早的历史（长会话首屏只渲染最后一批，见 RenderHistory）
         MessagesScroll.ScrollChanged += OnMessagesScrollChanged;
@@ -183,32 +175,10 @@ public partial class ConversationView : UserControl
 
         // 消息区里按下选字不该把视口拽来拽去（原因见 SmoothScrollViewer.DisableFocusBringIntoView）
         SmoothScrollViewer.DisableFocusBringIntoView(MessagesScroll);
-
-        SetupMoreMenu();
     }
-
-    // ---- 更多功能菜单 ----
-
-    private MenuItem? _compressMenuItem;
 
     /// <summary>压缩是否在进行中。防重入：自动压缩与手动点击可能撞上。</summary>
     private bool _compressing;
-
-    /// <summary>
-    /// 「更多功能」菜单。刻意在这里装配而不是写进 XAML：Flyout 内部的元素不在本控件的命名域里，
-    /// 给它 x:Name 拿不到字段（工具/技能选择器控件里也是这么绕开的）。
-    /// </summary>
-    private void SetupMoreMenu()
-    {
-        _compressMenuItem = new MenuItem { Header = "压缩上下文" };
-        _compressMenuItem.Click += (_, _) => _ = CompressContextAsync(manual: true);
-
-        var menu = new MenuFlyout();
-        menu.Items.Add(_compressMenuItem);
-
-        MoreBtn.Flyout = menu;
-        ToolTip.SetTip(MoreBtn, "更多功能");
-    }
 
     private bool _initialized;
 
@@ -224,11 +194,13 @@ public partial class ConversationView : UserControl
         await _profile.LoadAsync();
 
         ConfigureToolExecutor();
-        InitPermissionMode();
         LoadSkills();
         LoadToolsSelection();
         await LoadMcpSelectionAsync();
-        RestoreDraft();
+
+        // 草稿落库交给控件；这里把存档交过去（为 null 时不落库，控件那边自然处理）
+        Input.DraftStore = _profile.Draft;
+        Input.RestoreDraft();
 
         // 先立好完成信号：LoadMessagesAsync 读完库会 TrySetResult 放行等待中的发送
         _historyLoadTcs = new TaskCompletionSource();
@@ -240,8 +212,8 @@ public partial class ConversationView : UserControl
     /// <summary>当前思考模式：透传模型选择器。</summary>
     public ThinkingMode ThinkingMode
     {
-        get => ModelSelector.ThinkingMode;
-        set => ModelSelector.ThinkingMode = value;
+        get => Input.ModelSelector.ThinkingMode;
+        set => Input.ModelSelector.ThinkingMode = value;
     }
 
     /// <summary>
@@ -250,46 +222,39 @@ public partial class ConversationView : UserControl
     /// </summary>
     public IReadOnlyList<string> SelectedToolIds
     {
-        get => ToolSelector.SelectedToolIds;
-        set => ToolSelector.SelectedToolIds = value;
+        get => Input.ToolSelector.SelectedToolIds;
+        set => Input.ToolSelector.SelectedToolIds = value;
     }
 
     // ---- 工具 / 技能选择器 ----
 
-    private void LoadTools()
-    {
-        var registry = ToolRegistry.Instance;
-        ToolSelector.Toolsets = registry.GetToolsets();
-        ToolSelector.Tools = registry.GetEnabled();
-    }
-
     private void LoadSkills()
     {
-        SkillSelector.Skills = SkillRegistry.Instance.GetEnabled();
-        SkillSelector.SelectedSkills = _profile.State.EnabledSkills;
+        Input.SkillSelector.Skills = SkillRegistry.Instance.GetEnabled();
+        Input.SkillSelector.SelectedSkills = _profile.State.EnabledSkills;
         if (_skillEventsHooked) return;
         _skillEventsHooked = true;
-        SkillSelector.SelectionChanged += async (_, _) => await SyncSkillsToSessionAsync();
+        Input.SkillSelector.SelectionChanged += async (_, _) => await SyncSkillsToSessionAsync();
     }
 
     private async Task SyncSkillsToSessionAsync()
     {
-        _profile.State.EnabledSkills = SkillSelector.SelectedSkills.ToList();
+        _profile.State.EnabledSkills = Input.SkillSelector.SelectedSkills.ToList();
         await PersistSessionAsync();
     }
 
     private void LoadToolsSelection()
     {
         // 无条件回填：空集合也是有意义的状态（「默认工具」里可以选择一个都不开）
-        ToolSelector.SelectedToolIds = _profile.State.EnabledToolIds;
+        Input.ToolSelector.SelectedToolIds = _profile.State.EnabledToolIds;
         if (_toolEventsHooked) return;
         _toolEventsHooked = true;
-        ToolSelector.SelectionChanged += async (_, _) => await SyncToolsToSessionAsync();
+        Input.ToolSelector.SelectionChanged += async (_, _) => await SyncToolsToSessionAsync();
     }
 
     private async Task SyncToolsToSessionAsync()
     {
-        _profile.State.EnabledToolIds = ToolSelector.SelectedToolIds.ToList();
+        _profile.State.EnabledToolIds = Input.ToolSelector.SelectedToolIds.ToList();
         await PersistSessionAsync();
     }
 
@@ -305,23 +270,23 @@ public partial class ConversationView : UserControl
     {
         try
         {
-            McpSelector.Servers = await McpServerRepository.GetAllAsync();
+            Input.McpSelector.Servers = await McpServerRepository.GetAllAsync();
         }
         catch
         {
             // 忽略：保持空列表
         }
 
-        McpSelector.SelectedServerIds = _profile.State.McpServers;
+        Input.McpSelector.SelectedServerIds = _profile.State.McpServers;
 
         if (_mcpEventsHooked) return;
         _mcpEventsHooked = true;
-        McpSelector.SelectionChanged += async (_, _) => await SyncMcpToSessionAsync();
+        Input.McpSelector.SelectionChanged += async (_, _) => await SyncMcpToSessionAsync();
     }
 
     private async Task SyncMcpToSessionAsync()
     {
-        _profile.State.McpServers = McpSelector.SelectedServerIds.ToList();
+        _profile.State.McpServers = Input.McpSelector.SelectedServerIds.ToList();
         await PersistSessionAsync();
     }
 
@@ -334,8 +299,8 @@ public partial class ConversationView : UserControl
     {
         var tools = new List<ToolDefinition>();
 
-        if (ToolSelector.SelectedToolIds.Count > 0)
-            tools.AddRange(ToolRegistry.Instance.ResolveByIds(ToolSelector.SelectedToolIds));
+        if (Input.ToolSelector.SelectedToolIds.Count > 0)
+            tools.AddRange(ToolRegistry.Instance.ResolveByIds(Input.ToolSelector.SelectedToolIds));
 
         foreach (var serverId in _profile.State.McpServers)
         {
@@ -364,12 +329,18 @@ public partial class ConversationView : UserControl
             {
                 _profile.State.EnabledSkills = skills;
                 await PersistSessionAsync();
-                SkillSelector.SelectedSkills = skills;
+                Input.SkillSelector.SelectedSkills = skills;
             },
             AskUser = AskInlineAsync,
         };
         _toolExecutor.ApprovalGate = ApproveInlineAsync;
         _toolExecutor.Mode = _profile.State.PermissionMode;
+
+        // 权限菜单归输入控件，这里只把「会话存档里的档位」回填进去，
+        // 并订阅它的选择结果落库。刷新提醒里点「全部允许」那条路走 SetPermissionModeAsync，
+        // 它会反过来同步控件显示。
+        Input.PermissionMode = _profile.State.PermissionMode;
+        Input.PermissionModeChanged += (_, mode) => _ = SetPermissionModeAsync(mode);
     }
 
     /// <summary>
@@ -454,68 +425,39 @@ public partial class ConversationView : UserControl
     }
 
     // ---- 权限模式（会话级盾牌图标） ----
-
-    private MenuFlyout? PermMenu => PermModeBtn.Flyout as MenuFlyout;
-
-    private void InitPermissionMode()
-    {
-        if (PermMenu is not { } menu) return;
-        foreach (var item in menu.Items)
-        {
-            if (item is not MenuItem mi || mi.Tag is not string tag) continue;
-            mi.ToggleType = MenuItemToggleType.CheckBox;
-            mi.Click += (_, _) => _ = SetPermissionModeAsync(ParseMode(tag));
-        }
-        ApplyPermissionMode();
-    }
+    //
+    // 菜单本身、图标配色、四种档位的文案都在 ChatInputControl 里（两个页面完全一样）。
+    // 这里只负责把「选了什么」落到会话状态与工具执行器上。
 
     private async Task SetPermissionModeAsync(PermissionMode mode)
     {
         _profile.State.PermissionMode = mode;
         _toolExecutor.Mode = mode;
-        ApplyPermissionMode();
+
+        // 控件的菜单是唯一入口，所以从这里改（比如提醒里点了「全部允许」）要把它的显示同步过去，
+        // 否则盾牌图标会停在旧档位上。
+        if (Input.PermissionMode != mode) Input.PermissionMode = mode;
+
         await PersistSessionAsync();
     }
 
-    private void ApplyPermissionMode()
+
+
+
+    /// <summary>模型是否支持视觉。历史里可能留着 view_image 产生的图片结果。</summary>
+    private static bool SupportsVision(ModelDetails? model)
+        => model?.Capabilities.Contains("vision") == true;
+
+    /// <summary>网关回调：把一条新消息落库并加入内存列表（assistant 的 UI 已在 BeginAssistantRound 中渲染）。</summary>
+    private async Task PersistMessage(ChatMessage m)
     {
-        var mode = _profile.State.PermissionMode;
-        _toolExecutor.Mode = mode;
-
-        if (PermMenu is { } menu)
-            foreach (var item in menu.Items)
-                if (item is MenuItem mi && mi.Tag is string tag)
-                    mi.IsChecked = ParseMode(tag) == mode;
-
-        var color = mode switch
-        {
-            PermissionMode.Strict => "#DC2626", // 红
-            PermissionMode.Normal => "#4A90D9", // 蓝
-            PermissionMode.Loose => "#D97706",  // 橙
-            PermissionMode.Free => "#16A34A",   // 绿
-            _ => "#9CA3AF",
-        };
-        PermModeIcon.Foreground = new SolidColorBrush(Color.Parse(color));
-        ToolTip.SetTip(PermModeBtn, ModeTip(mode));
+        await ChatRepository.InsertAsync(m);
+        _messages.Add(m);
+        if (m.Role == "user")
+            AddMessage(m);
+        else if (m.Role == "tool")
+            AddToolCallCard(m);
     }
-
-    private static string ModeTip(PermissionMode mode) => mode switch
-    {
-        PermissionMode.Strict => "权限模式：严格（所有工具需确认）",
-        PermissionMode.Normal => "权限模式：普通（安全工具自动通过）",
-        PermissionMode.Loose => "权限模式：宽松（安全/风险工具自动通过）",
-        PermissionMode.Free => "权限模式：自由（所有工具免确认）",
-        _ => "",
-    };
-
-    private static PermissionMode ParseMode(string tag) => tag switch
-    {
-        "Strict" => PermissionMode.Strict,
-        "Normal" => PermissionMode.Normal,
-        "Loose" => PermissionMode.Loose,
-        "Free" => PermissionMode.Free,
-        _ => PermissionMode.Normal,
-    };
 
     // ---- 加载模型与消息 ----
 
@@ -523,12 +465,12 @@ public partial class ConversationView : UserControl
     {
         try
         {
-            ModelSelector.Models = await ModelCatalog.ListEnabledAsync();
+            Input.ModelSelector.Models = await ModelCatalog.ListEnabledAsync();
             if (!string.IsNullOrEmpty(_profile.State.Model))
             {
-                var saved = ModelSelector.Models.FirstOrDefault(m => m.ModelName == _profile.State.Model);
+                var saved = Input.ModelSelector.Models.FirstOrDefault(m => m.ModelName == _profile.State.Model);
                 if (saved is not null)
-                    ModelSelector.SelectedModel = saved;
+                    Input.ModelSelector.SelectedModel = saved;
             }
         }
         catch
@@ -536,7 +478,7 @@ public partial class ConversationView : UserControl
             // 数据库未就绪时选择器保持空（显示「未配置模型」），发送侧会拦下并提示
         }
         // 恢复会话保存的思考模式
-        ModelSelector.ThinkingMode = (ThinkingMode)_profile.State.Thinking;
+        Input.ModelSelector.ThinkingMode = (ThinkingMode)_profile.State.Thinking;
     }
 
     /// <summary>
@@ -548,7 +490,7 @@ public partial class ConversationView : UserControl
     {
         try
         {
-            ModelSelector.Models = await ModelCatalog.ListEnabledAsync();
+            Input.ModelSelector.Models = await ModelCatalog.ListEnabledAsync();
         }
         catch
         {
@@ -594,14 +536,15 @@ public partial class ConversationView : UserControl
     /// </summary>
     private void RefreshContextUsage()
     {
-        var model = ModelSelector.SelectedModel;
+        var model = Input.ModelSelector.SelectedModel;
         if (model is null || !TryGetContextUsage(out var used, out var total))
         {
-            UsageRing.Clear();
+            // 传 null = 隐藏用量环。新建页没有历史可算，走的就是这条路。
+            Input.SetContextUsage(null, null, "");
             return;
         }
 
-        UsageRing.SetUsage(used, total, model.DisplayName ?? "");
+        Input.SetContextUsage(used, total, model.DisplayName ?? "");
     }
 
     /// <summary>外部触发：会话标题/时间变化后由宿主页面刷新导航列表（仅供通知）。</summary>
@@ -626,7 +569,6 @@ public partial class ConversationView : UserControl
     // 上下文压缩
     // ============================================================
 
-    private DispatcherTimer? _compressHintTimer;
 
     /// <summary>
     /// 压缩上下文：让模型把「当前分界线之后」的全部内容压成一段摘要，作为一条
@@ -648,7 +590,7 @@ public partial class ConversationView : UserControl
 
         if (!ContextCompression.HasCompressibleContent(_messages))
         {
-            if (manual) ShowCompressHint("还没有可压缩的内容", HintInfo, autoHide: true);
+            if (manual) Input.ShowHint("还没有可压缩的内容", InputHintKind.Info, autoHide: true);
             return false;
         }
 
@@ -656,14 +598,13 @@ public partial class ConversationView : UserControl
         if (slice.Count == 0) return false;
 
         _compressing = true;
-        if (_compressMenuItem is not null) _compressMenuItem.IsEnabled = false;
-        ShowCompressHint("正在压缩上下文…", HintInfo, autoHide: false);
+        Input.ShowHint("正在压缩上下文…", InputHintKind.Info, autoHide: false);
 
         try
         {
             // 摘要用当前会话选中的模型：不额外引入设置项，质量也是这里最好的。
             // 没有可用模型就没法压缩：手动触发要说明原因，自动触发（发请求前的那次）安静跳过。
-            var client = await _gateway.ResolveClientAsync(ModelSelector.SelectedModel?.ModelId);
+            var client = await _gateway.ResolveClientAsync(Input.ModelSelector.SelectedModel?.ModelId);
             if (client is null)
                 return FailCompress(manual, "尚未配置可用的模型，请到「设置 → 模型服务」添加并启用服务商与模型");
 
@@ -708,14 +649,14 @@ public partial class ConversationView : UserControl
             });
 
             await ReloadMessagesAsync();
-            ShowCompressHint($"已压缩 {slice.Count} 条消息，此前的历史不再进入上下文", HintOk, autoHide: true);
+            Input.ShowHint($"已压缩 {slice.Count} 条消息，此前的历史不再进入上下文", InputHintKind.Ok, autoHide: true);
             return true;
         }
         catch (OperationCanceledException)
         {
             // 用户点了「停止」。这里必须放出去：调用方（SendMessageAsync）要据此放弃这一轮的发送，
             // 而不是吞掉异常后继续把消息发出去。
-            CompressHint.IsVisible = false;
+            Input.HideHint();
             throw;
         }
         catch (Exception ex)
@@ -724,15 +665,15 @@ public partial class ConversationView : UserControl
         }
         finally
         {
+            // 菜单项的启用状态不用在这里恢复：控件按运行态统一管（见 SetRunning）。
             _compressing = false;
-            if (_compressMenuItem is not null) _compressMenuItem.IsEnabled = !_busy;
         }
     }
 
     private bool FailCompress(bool manual, string reason)
     {
-        if (manual) ShowCompressHint($"压缩失败：{reason}", HintFail, autoHide: true);
-        else CompressHint.IsVisible = false;
+        if (manual) Input.ShowHint($"压缩失败：{reason}", InputHintKind.Fail, autoHide: true);
+        else Input.HideHint();
 
         return false;
     }
@@ -756,38 +697,11 @@ public partial class ConversationView : UserControl
         await CompressContextAsync(manual: false, ct);
     }
 
-    private static readonly IBrush HintInfo = new SolidColorBrush(Color.Parse("#9CA3AF"));
-    private static readonly IBrush HintOk = new SolidColorBrush(Color.Parse("#16A34A"));
-    private static readonly IBrush HintFail = new SolidColorBrush(Color.Parse("#DC2626"));
 
     /// <summary>工具栏上的压缩提示。自动消失定时器会自己停（运行中的 DispatcherTimer 会吊住整个页面）。</summary>
-    private void ShowCompressHint(string text, IBrush color, bool autoHide)
-    {
-        CompressHint.Text = text;
-        CompressHint.Foreground = color;
-        CompressHint.IsVisible = true;
 
-        _compressHintTimer?.Stop();
-        if (!autoHide) return;
-
-        _compressHintTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
-        _compressHintTimer.Tick -= OnCompressHintTick;
-        _compressHintTimer.Tick += OnCompressHintTick;
-        _compressHintTimer.Start();
-    }
-
-    private void OnCompressHintTick(object? sender, EventArgs e)
-    {
-        _compressHintTimer?.Stop();
-        CompressHint.IsVisible = false;
-    }
 
     /// <summary>手动收起提示（如「正在加载历史」结束后立刻清掉，不必等定时器）。</summary>
-    private void HideCompressHint()
-    {
-        _compressHintTimer?.Stop();
-        CompressHint.IsVisible = false;
-    }
 
     /// <summary>
     /// 当前上下文占用的 token 数与窗口上限。无上限（模型未声明）或历史里没有任何 usage 时返回 false。
@@ -796,7 +710,7 @@ public partial class ConversationView : UserControl
     private bool TryGetContextUsage(out long used, out long total)
     {
         used = 0;
-        total = ModelSelector.SelectedModel?.ContextWindow ?? -1;
+        total = Input.ModelSelector.SelectedModel?.ContextWindow ?? -1;
         if (total <= 0) return false;
 
         for (var i = _messages.Count - 1; i >= 0; i--)
@@ -840,7 +754,7 @@ public partial class ConversationView : UserControl
         catch { /* 忽略 */ }
 
         await ReloadMessagesAsync();
-        ShowCompressHint("已删除压缩记录，这段历史重新进入上下文", HintOk, autoHide: true);
+        Input.ShowHint("已删除压缩记录，这段历史重新进入上下文", InputHintKind.Ok, autoHide: true);
     }
 
     // ---- 发送 ----
@@ -859,17 +773,17 @@ public partial class ConversationView : UserControl
             var client = await _gateway.ResolveClientAsync(selected.ModelId);
             if (client is not null) return client;
 
-            ShowCompressHint("所选模型已停用或被删除，请到「设置 → 模型服务」重新启用", HintFail, autoHide: false);
+            Input.ShowHint("所选模型已停用或被删除，请到「设置 → 模型服务」重新启用", InputHintKind.Fail, autoHide: false);
             return null;
         }
         catch (Exception ex)
         {
-            ShowCompressHint($"读取模型配置失败：{ex.Message}", HintFail, autoHide: false);
+            Input.ShowHint($"读取模型配置失败：{ex.Message}", InputHintKind.Fail, autoHide: false);
             return null;
         }
     }
 
-    public async Task SendMessageAsync(string text)
+    public async Task SendMessageAsync(string text, IReadOnlyList<ChatAttachment>? attachments = null)
     {
         if (_busy || string.IsNullOrWhiteSpace(text)) return;
 
@@ -878,17 +792,17 @@ public partial class ConversationView : UserControl
         // 正常情况这里早就完成了，await 直接过；只有「刚打开窗口就抢着发」才会真的等。
         if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
         {
-            ShowCompressHint("正在加载历史记录，完成后自动发送…", HintInfo, autoHide: false);
+            Input.ShowHint("正在加载历史记录，完成后自动发送…", InputHintKind.Info, autoHide: false);
             await loadTcs.Task;
-            HideCompressHint();
+            Input.HideHint();
         }
 
         // 没有可用模型就挡在这里，输入内容原样保留 —— 用户去配好模型回来还能接着发。
         // 这一步必须在清空输入框之前：失败一次就要人重打一遍，那是很糟的体验。
-        var selected = ModelSelector.SelectedModel;
+        var selected = Input.ModelSelector.SelectedModel;
         if (selected is null)
         {
-            ShowCompressHint("尚未配置模型：请到「设置 → 模型服务」添加并启用服务商与模型", HintFail, autoHide: false);
+            Input.ShowHint("尚未配置模型：请到「设置 → 模型服务」添加并启用服务商与模型", InputHintKind.Fail, autoHide: false);
             return;
         }
 
@@ -902,9 +816,9 @@ public partial class ConversationView : UserControl
             return;
         }
 
-        SetRunningVisual(true);
+        Input.SetRunning(true);
         ReportActivity(SessionActivity.Running);
-        InputBox.Text = "";
+        Input.Text = "";
 
         // 用户主动发消息：无论刚才在看哪一段，都跟着这一轮走
         _autoScroll = true;
@@ -913,13 +827,13 @@ public partial class ConversationView : UserControl
         if (ConversationTitle.IsPlaceholder(_profile.State.Title))
             _profile.State.Title = ConversationTitle.InitialTitle(text);
         _profile.State.Model = selected.ModelName;
-        _profile.State.Thinking = (int)ModelSelector.ThinkingMode;
-        _profile.State.EnabledToolIds = ToolSelector.SelectedToolIds.ToList();
+        _profile.State.Thinking = (int)Input.ModelSelector.ThinkingMode;
+        _profile.State.EnabledToolIds = Input.ToolSelector.SelectedToolIds.ToList();
 
         var isFirstTurn = _messages.Count == 0;
 
         // 历史传全量：有压缩记录时由网关路径上的 BuildWireHistory 摘成「最后一条压缩记录 + 之后」
-        var turn = await RunTurnAsync(selected, client, text, _messages.ToList(), attachments: _pending,
+        var turn = await RunTurnAsync(selected, client, text, _messages.ToList(), attachments: attachments,
             requestPreview: text);
 
         // 自动话题命名只跑首轮一次：首轮之后 _messages 非空，isFirstTurn 恒为假。
@@ -947,7 +861,7 @@ public partial class ConversationView : UserControl
         IChatClient client,
         string? userText,
         List<ChatMessage> history,
-        IReadOnlyList<DraftAttachment>? attachments,
+        IReadOnlyList<ChatAttachment>? attachments,
         int? insertAfterSequence = null,
         string? requestPreview = null)
     {
@@ -970,7 +884,7 @@ public partial class ConversationView : UserControl
 
         var options = new ChatRequestOptions
         {
-            Thinking = ModelSelector.ThinkingMode,
+            Thinking = Input.ModelSelector.ThinkingMode,
             Tools = ResolveActiveTools(),
             SupportsVision = vision,
         };
@@ -996,8 +910,10 @@ public partial class ConversationView : UserControl
                 system,
                 // 有压缩记录时只发「最后一条压缩记录 + 它之后的消息」，更早的历史被摘要在语义上替代
                 ContextCompression.BuildWireHistory(history),
-                userText is null ? null : ExpandAttachments(userText),   // 发给模型的是真实路径，不是 @图片1
-                attachments is { Count: > 0 } ? attachments.Select(d => d.Info).ToList() : null,
+                // 正文里的占位符（@图片1）已由输入控件在提交时展开成真实路径，
+                // 这里拿到的就是发给模型的内容，不需要再处理一次。
+                userText,
+                attachments,
                 options,
                 client,
                 _toolExecutor,
@@ -1028,12 +944,10 @@ public partial class ConversationView : UserControl
             catch { /* 忽略：位置不对总好过整轮回复丢掉 */ }
         }
 
-        // 附件已经随这一轮发出去了（重新生成不带附件，也就不能顺手动用户输入框里的待发附件）
+        // 发送成功后清空输入区（正文 + 附件一起）。空附件栏由控件自己收起。
+        // 重新生成时 userText 为 null，那种情况不能动用户正在写的输入框内容。
         if (userText is not null)
-        {
-            _pending.Clear();
-            RefreshAttachmentBar();
-        }
+            Input.Clear();
 
         if (_activeTurnId is not null && _activeTurnRoot is not null && _activeTurnHost is not null)
         {
@@ -1056,7 +970,7 @@ public partial class ConversationView : UserControl
 
         RefreshContextUsage();
         _busy = false;
-        SetRunningVisual(false);
+        Input.SetRunning(false);
         ReportActivity(SessionActivity.Done);
         Updated?.Invoke();
 
@@ -1094,7 +1008,7 @@ public partial class ConversationView : UserControl
     {
         if (_busy)
         {
-            ShowCompressHint("正在生成回复，先点「停止」再编辑", HintInfo, autoHide: true);
+            Input.ShowHint("正在生成回复，先点「停止」再编辑", InputHintKind.Info, autoHide: true);
             return;
         }
 
@@ -1105,7 +1019,7 @@ public partial class ConversationView : UserControl
         var content = text.Trim();
         if (content.Length == 0)
         {
-            ShowCompressHint("消息内容不能为空", HintFail, autoHide: true);
+            Input.ShowHint("消息内容不能为空", InputHintKind.Fail, autoHide: true);
             return;
         }
 
@@ -1118,7 +1032,7 @@ public partial class ConversationView : UserControl
             }
             catch
             {
-                ShowCompressHint("保存失败，消息未改动", HintFail, autoHide: true);
+                Input.ShowHint("保存失败，消息未改动", InputHintKind.Fail, autoHide: true);
                 return;
             }
         }
@@ -1142,22 +1056,22 @@ public partial class ConversationView : UserControl
     {
         if (_busy)
         {
-            ShowCompressHint("正在生成回复，先点「停止」再重新生成", HintInfo, autoHide: true);
+            Input.ShowHint("正在生成回复，先点「停止」再重新生成", InputHintKind.Info, autoHide: true);
             return;
         }
 
         // 历史没读完不能重生成：上下文会缺一段
         if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
         {
-            ShowCompressHint("正在加载历史记录，完成后自动重新生成…", HintInfo, autoHide: false);
+            Input.ShowHint("正在加载历史记录，完成后自动重新生成…", InputHintKind.Info, autoHide: false);
             await loadTcs.Task;
-            HideCompressHint();
+            Input.HideHint();
         }
 
-        var selected = ModelSelector.SelectedModel;
+        var selected = Input.ModelSelector.SelectedModel;
         if (selected is null)
         {
-            ShowCompressHint("尚未配置模型：请到「设置 → 模型服务」添加并启用服务商与模型", HintFail, autoHide: false);
+            Input.ShowHint("尚未配置模型：请到「设置 → 模型服务」添加并启用服务商与模型", InputHintKind.Fail, autoHide: false);
             return;
         }
 
@@ -1189,7 +1103,7 @@ public partial class ConversationView : UserControl
             return;
         }
 
-        SetRunningVisual(true);
+        Input.SetRunning(true);
         ReportActivity(SessionActivity.Running);
 
         // 用户主动发消息：无论刚才在看哪一段，都跟着这一轮走
@@ -1306,64 +1220,8 @@ public partial class ConversationView : UserControl
         return builder.ToString().Trim().Trim('"', '\'', '“', '”', '。', '，', '、', '\r', '\n', ' ');
     }
 
-    /// <summary>
-    /// 运行态视觉：发送按钮在「发送（蓝底箭头）」与「停止（红底圆角方块）」之间切换，
-    /// 并显示请求等待环。按钮始终保持可点 —— 运行中点它就是停止。
-    /// </summary>
-    private void SetRunningVisual(bool running)
-    {
-        SendGlyph.IsVisible = !running;
-        StopGlyph.IsVisible = running;
-        var brush = new SolidColorBrush(Color.Parse(running ? "#DC2626" : "#4A90D9"));
-        SendBtn.Background = brush;
-        SendBtn.BorderBrush = brush;
-        LoadingRing.IsVisible = running;
-
-        // 生成中不许再压缩：压缩要在「这一轮发出去之前」定下上下文，中途插一条只会让本轮上下文
-        // 前后不一致（请求已经带着旧历史发出去了，压缩记录却已经落库）。
-        if (_compressMenuItem is not null) _compressMenuItem.IsEnabled = !running;
-    }
-
-    /// <summary>首个正文 / 思考分片到达：请求已进入输出阶段，收起等待指示。</summary>
-    private void MarkFirstOutput() => LoadingRing.IsVisible = false;
-
-    /// <summary>网关回调：把一条新消息落库并加入内存列表（assistant 的 UI 已在 BeginAssistantRound 中渲染）。</summary>
-    private async Task PersistMessage(ChatMessage m)
-    {
-        await ChatRepository.InsertAsync(m);
-        _messages.Add(m);
-        if (m.Role == "user")
-            AddMessage(m);
-        else if (m.Role == "tool")
-            AddToolCallCard(m);
-    }
-
-    private void OnSendClick(object? sender, RoutedEventArgs e)
-    {
-        // 运行中这颗按钮是「停止」
-        if (_busy)
-        {
-            _sendCts?.Cancel();
-            return;
-        }
-        _ = SendFromInputAsync();
-    }
-
-    private void OnInputKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-        {
-            e.Handled = true;
-            _ = SendFromInputAsync();
-        }
-    }
-
-    private async Task SendFromInputAsync()
-    {
-        var text = InputBox.Text?.Trim();
-        if (!string.IsNullOrEmpty(text))
-            await SendMessageAsync(text);
-    }
+    // 说明：发送按钮 / 回车 / 停止按钮的处理、以及运行态视觉，都在 ChatInputControl 里。
+    // 视图这边通过 Input.SendRequested / Input.StopRequested 事件接入（见构造函数）。
 
     // ---- 历史渲染 ----
 
@@ -2207,13 +2065,13 @@ public partial class ConversationView : UserControl
         {
             OnContent = delta =>
             {
-                MarkFirstOutput();
+                Input.MarkFirstOutput();
                 body.AppendText(delta);
                 ScrollToEnd();
             },
             OnThinking = delta =>
             {
-                MarkFirstOutput();
+                Input.MarkFirstOutput();
                 // 首个思考分片到达时才建卡（此前不显示任何卡片），之后持续累积文本
                 if (thinkCard is null)
                 {
@@ -2339,7 +2197,7 @@ public partial class ConversationView : UserControl
     private (string DisplayName, string ProviderName) ModelInfo(string callId)
     {
         if (string.IsNullOrEmpty(callId)) return ("未知模型", "");
-        var m = ModelSelector.Models.FirstOrDefault(x => x.ModelName == callId);
+        var m = Input.ModelSelector.Models.FirstOrDefault(x => x.ModelName == callId);
         return m is not null
             ? (m.DisplayName, m.ProviderName)
             : (callId, "未知服务商");
@@ -2389,363 +2247,15 @@ public partial class ConversationView : UserControl
             DispatcherPriority.Loaded);
     }
 
-    // ---- 附件（粘贴 / 上传） ----
-
-    /// <summary>输入框里的一条待发送附件：占位符 token ↔ 真实文件。</summary>
-    private sealed record DraftAttachment(string Token, ChatAttachment Info);
-
-    /// <summary>待发送附件。输入框里放的是 <see cref="DraftAttachment.Token"/>，发出去时才展开成真实路径。</summary>
-    private readonly List<DraftAttachment> _pending = new();
-
-    /// <summary>token 序号，只增不减，保证同一份草稿里不会出现两个同名 token。</summary>
-    private int _tokenSeq;
-
-    private static bool SupportsVision(ModelDetails? model)
-        => model?.Capabilities.Contains("vision") == true;
-
-    /// <summary>生成 <c>@图片1</c> 这样的占位符，重名时往后顺延。</summary>
-    private string NextToken(string label)
-    {
-        var text = InputBox.Text ?? "";
-        while (true)
-        {
-            _tokenSeq++;
-            var token = $"@{label}{_tokenSeq}";
-            if (!text.Contains(token, StringComparison.Ordinal) &&
-                _pending.All(d => d.Token != token))
-                return token;
-        }
-    }
-
-    /// <summary>把 token 插到光标处。输入框里存的是它，不是那串绝对路径。</summary>
-    private void InsertToken(string token)
-    {
-        var text = InputBox.Text ?? "";
-        var caret = Math.Clamp(InputBox.CaretIndex, 0, text.Length);
-        var lead = caret > 0 && !char.IsWhiteSpace(text[caret - 1]) ? " " : "";
-        var insertion = lead + token + " ";
-        InputBox.Text = text.Insert(caret, insertion);
-        InputBox.CaretIndex = caret + insertion.Length;
-    }
-
-    private void AddAttachments(IEnumerable<ChatAttachment?> items)
-    {
-        var added = false;
-        foreach (var item in items)
-        {
-            if (item is null) continue;
-            if (_pending.Any(d => string.Equals(d.Info.Path, item.Path, StringComparison.OrdinalIgnoreCase)))
-                continue;
-
-            // 先落文本再登记：Text = ... 会同步触发 TextChanged 里的孤儿清理，
-            // 顺序反过来的话这条刚登记的会被自己清掉
-            var token = NextToken(item.Label);
-            InsertToken(token);
-            _pending.Add(new DraftAttachment(token, item));
-            added = true;
-        }
-        if (added) RefreshAttachmentBar();
-    }
-
-    private void RefreshAttachmentBar()
-    {
-        AttachmentBar.Children.Clear();
-        foreach (var item in _pending)
-        {
-            var captured = item;
-            AttachmentBar.Children.Add(new AttachmentChip(captured.Info, () => RemoveAttachment(captured)));
-        }
-        AttachmentBar.IsVisible = _pending.Count > 0;
-    }
-
-    /// <summary>移除附件：正文里的 token 与 chip 一起消失。</summary>
-    private void RemoveAttachment(DraftAttachment item)
-    {
-        _pending.Remove(item);
-        RemoveTokenFromInput(item.Token);
-        RefreshAttachmentBar();
-    }
-
-    private void RemoveTokenFromInput(string token)
-    {
-        var text = InputBox.Text ?? "";
-        var idx = text.IndexOf(token, StringComparison.Ordinal);
-        if (idx < 0) return;
-
-        var len = token.Length;
-        if (idx + len < text.Length && text[idx + len] == ' ') len++;
-        InputBox.Text = text.Remove(idx, len);
-        InputBox.CaretIndex = Math.Min(idx, InputBox.Text?.Length ?? 0);
-    }
-
-    /// <summary>
-    /// 用户在输入框里手工改动了文本（选中一段删掉、Ctrl+Z 等）后，
-    /// 把正文里已经不存在的 token 从待发送列表里清掉，保证 chip 栏与正文一致。
-    /// </summary>
-    private void PruneAttachments()
-    {
-        var text = InputBox.Text ?? "";
-        if (_pending.RemoveAll(d => !text.Contains(d.Token, StringComparison.Ordinal)) > 0)
-            RefreshAttachmentBar();
-    }
-
-    /// <summary>把正文里的 token 全部换成真实路径 —— 这一步之后才是发给模型的内容。</summary>
-    private string ExpandAttachments(string text)
-    {
-        foreach (var d in _pending)
-            text = text.Replace(d.Token, d.Info.Path, StringComparison.Ordinal);
-        return text;
-    }
-
-    /// <summary>光标前紧邻一个 token 时整体删掉它（而不是删掉一个字符）。</summary>
-    private bool TryDeleteTokenBeforeCaret()
-    {
-        if (InputBox.SelectionStart != InputBox.SelectionEnd) return false;   // 有选区时交给默认删除
-
-        var text = InputBox.Text ?? "";
-        var caret = Math.Clamp(InputBox.CaretIndex, 0, text.Length);
-        if (caret <= 0) return false;
-
-        foreach (var d in _pending)
-        {
-            var idx = text.LastIndexOf(d.Token, caret - 1, StringComparison.Ordinal);
-            if (idx < 0 || idx + d.Token.Length != caret) continue;
-
-            _pending.Remove(d);
-            InputBox.Text = text.Remove(idx, d.Token.Length);
-            InputBox.CaretIndex = idx;
-            RefreshAttachmentBar();
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>光标后紧邻一个 token 时整体删掉它。</summary>
-    private bool TryDeleteTokenAfterCaret()
-    {
-        if (InputBox.SelectionStart != InputBox.SelectionEnd) return false;
-
-        var text = InputBox.Text ?? "";
-        var caret = Math.Clamp(InputBox.CaretIndex, 0, text.Length);
-        if (caret >= text.Length) return false;
-
-        foreach (var d in _pending)
-        {
-            if (text.IndexOf(d.Token, caret, StringComparison.Ordinal) != caret) continue;
-
-            var len = d.Token.Length;
-            if (caret + len < text.Length && text[caret + len] == ' ') len++;
-            _pending.Remove(d);
-            InputBox.Text = text.Remove(caret, len);
-            InputBox.CaretIndex = caret;
-            RefreshAttachmentBar();
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// 粘贴：剪贴板里是文件（含截图工具直接放进去的位图）就转成附件，
-    /// 否则交回 TextBox 走它自己的文本粘贴。
-    /// </summary>
-    private async Task PasteFromClipboardAsync()
-    {
-        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-        if (clipboard is null)
-        {
-            InputBox.Paste();
-            return;
-        }
-
-        try
-        {
-            // 资源管理器里复制的文件：本来就有路径，直接用
-            var files = (await clipboard.TryGetFilesAsync())?.ToList();
-            if (files is { Count: > 0 })
-            {
-                AddAttachments(files.Select(f => AttachmentStore.FromPath(f.Path.LocalPath)));
-                return;
-            }
-
-            // 截图工具直接塞进剪贴板的位图：没有路径，落成缓存文件
-            var bitmap = await clipboard.TryGetBitmapAsync();
-            if (bitmap is not null)
-            {
-                using var buffer = new MemoryStream();
-                bitmap.Save(buffer);   // Avalonia 默认存 PNG
-                var attachment = await AttachmentStore.SaveClipboardImageAsync(buffer.ToArray());
-                if (attachment is not null)
-                {
-                    AddAttachments(new[] { attachment });
-                    return;
-                }
-            }
-        }
-        catch
-        {
-            // 剪贴板读取失败就退回普通文本粘贴
-        }
-
-        InputBox.Paste();
-    }
-
-    /// <summary>
-    /// 输入框的隧道阶段按键：Ctrl+V 要在 TextBox 自己粘贴之前截下来，
-    /// Backspace / Delete 要在光标紧邻 token 时整体删掉占位符。
-    /// </summary>
-    private void OnInputKeyDownTunnel(object? sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.V && e.KeyModifiers.HasFlag(KeyModifiers.Control))
-        {
-            e.Handled = true;
-            _ = PasteFromClipboardAsync();
-            return;
-        }
-
-        if (e.KeyModifiers != KeyModifiers.None) return;
-
-        if (e.Key == Key.Back && TryDeleteTokenBeforeCaret())
-            e.Handled = true;
-        else if (e.Key == Key.Delete && TryDeleteTokenAfterCaret())
-            e.Handled = true;
-    }
-
-    private async void OnAddFileClick(object? sender, RoutedEventArgs e)
-    {
-        var top = TopLevel.GetTopLevel(this);
-        if (top is null) return;
-        try
-        {
-            var files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-            {
-                Title = "选择要附加的文件",
-                AllowMultiple = true,
-            });
-            AddAttachments(files.Select(f => AttachmentStore.FromPath(f.Path.LocalPath)));
-        }
-        catch
-        {
-            // 选择器不可用时不做处理
-        }
-    }
-
-    private void OnInputDrop(object? sender, DragEventArgs e)
-    {
-        var files = e.DataTransfer.TryGetFiles()?.ToList();
-        if (files is null || files.Count == 0) return;
-        AddAttachments(files.Select(f => AttachmentStore.FromPath(f.Path.LocalPath)));
-        e.Handled = true;
-    }
-
-    // ---- 草稿（随输入实时落库） ----
-
-    /// <summary>
-    /// 草稿载荷。有附件时必须把 token → 路径的映射一起存：
-    /// 只存正文的话，重开会话后 <c>@图片1</c> 还在，但「图片1 是哪个文件」已经丢了。
-    /// </summary>
-    private sealed record DraftPayload(string Text, List<DraftAttachmentDto> Attachments);
-
-    private sealed record DraftAttachmentDto(string Token, string Path);
-
-    private string SerializeDraft()
-    {
-        if (_pending.Count == 0) return InputBox.Text ?? "";
-        return JsonSerializer.Serialize(new DraftPayload(
-            InputBox.Text ?? "",
-            _pending.Select(d => new DraftAttachmentDto(d.Token, d.Info.Path)).ToList()));
-    }
-
-    private void RestoreDraft()
-    {
-        var raw = _profile.Draft?.Load();
-
-        // 必须在碰 InputBox.Text 之前记下「库里现在存的是什么」：下面所有分支都会给输入框赋值，
-        // 而 Avalonia 的 TextBox.Text 默认值是 null，连赋空串都是一次真实变化并触发 TextChanged。
-        // 先记下来，SaveDraftAsync 才有依据判断「这次触发只是恢复、没有真的改动」。
-        _lastSavedDraft = raw ?? "";
-
-        if (string.IsNullOrEmpty(raw))
-        {
-            InputBox.Text = "";
-            _pending.Clear();
-            RefreshAttachmentBar();
-            return;
-        }
-
-        // 不带附件的草稿是纯文本；带附件的存成 JSON。解析失败一律按纯文本处理。
-        if (!raw.StartsWith('{'))
-        {
-            InputBox.Text = raw;
-            return;
-        }
-
-        try
-        {
-            var payload = JsonSerializer.Deserialize<DraftPayload>(raw);
-            if (payload is null)
-            {
-                InputBox.Text = raw;
-                return;
-            }
-
-            _pending.Clear();
-            foreach (var dto in payload.Attachments)
-            {
-                if (string.IsNullOrEmpty(dto.Token)) continue;
-                if (AttachmentStore.FromPath(dto.Path) is not { } info) continue;
-                _pending.Add(new DraftAttachment(dto.Token, info));
-            }
-
-            _tokenSeq = _pending.Count;   // 够用即可，NextToken 还会查重
-            InputBox.Text = payload.Text;
-            PruneAttachments();
-            RefreshAttachmentBar();
-        }
-        catch
-        {
-            InputBox.Text = raw;
-        }
-    }
-
-    private async Task SaveDraftAsync()
-    {
-        if (_profile.Draft is not { } draft) return;
-
-        // 内容与库里一致就什么都不做。这不是优化，是修 bug：
-        // 打开会话时 RestoreDraft 会给输入框赋一次值（草稿为空就是空串），而 Avalonia 的
-        // TextBox.Text 默认值是 null，这次 null→"" 同样算「变化」并触发 TextChanged。
-        // 少了这道闸门，光是点开一个会话就会往数据库写一次草稿。
-        if (SerializeDraft() == _lastSavedDraft) return;
-
-        // 串行化：上一次写还没回来时只做个标记，等它回来后用最新内容再写一遍。
-        // 不去重不行 —— 并发写同一条记录时，先发的未必先落，旧草稿会盖掉新的。
-        if (_draftSaving)
-        {
-            _draftPending = true;
-            return;
-        }
-
-        _draftSaving = true;
-        try
-        {
-            do
-            {
-                _draftPending = false;
-
-                // 排队期间内容可能又变回原样（或变回已落盘的值），再判一次
-                var text = SerializeDraft();
-                if (text == _lastSavedDraft) break;
-
-                await draft.SaveAsync(text);
-                _lastSavedDraft = text;
-            }
-            while (_draftPending);
-        }
-        finally
-        {
-            _draftSaving = false;
-        }
-    }
+    // ---- 附件与草稿 ----
+    //
+    // 原先这里放着附件草稿（占位符 token ↔ 文件路径）与草稿落库的整套实现。
+    // 它们已经搬走，原因见这条链路上的三处：
+    //   * Controls/ChatInputControl.axaml(.cs) —— 控件把逻辑接到 Avalonia 事件上
+    //   * Services/Attachments/AttachmentDraft.cs —— 纯逻辑（有单元测试覆盖）
+    //   * HtaciAI.Tests —— 覆盖 token 碰撞、光标处整体删除、孤儿清理、序列化
+    //
+    // 视图这边只需在装配时把 _profile.Draft 交给控件（见 InitializeAsync 与构造函数）。
 
     // ============================================================
     // 可折叠「已深度思考」卡片

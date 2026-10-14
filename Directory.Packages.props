@@ -22,5 +22,15 @@
         <PackageVersion Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />
 
         <PackageVersion Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.11" />
+
+        <!-- 测试。两点约束，动之前先看清楚：
+             1) Avalonia.Headless.XUnit 的版本必须与上面的 Avalonia 保持一致 —— 它会把 Avalonia
+                本身一起拉进来，版本不同会让整个解决方案的 Avalonia 被顶到更高版本。
+             2) 它依赖的是 xunit **v3**，与经典 xunit 2.x 不能共存（同一个 FactAttribute
+                会在两个程序集里各有一份，编译期 CS0433）。所以这里用 xunit.v3。 -->
+        <PackageVersion Include="xunit.v3" Version="3.2.2" />
+        <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+        <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+        <PackageVersion Include="Avalonia.Headless.XUnit" Version="12.0.4" />
     </ItemGroup>
 </Project>

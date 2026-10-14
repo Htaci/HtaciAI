@@ -13,4 +13,5 @@
   <!-- 内置模型表的生成器。独立控制台项目，不参与应用发布，
        只在你改完 models.ini 时手动跑一次（见 docs/model-table.md）。 -->
   <Project Path="tools/ModelTableGen/ModelTableGen.csproj" />
+  <Project Path="HtaciAI.Tests/HtaciAI.Tests.csproj" />
 </Solution>

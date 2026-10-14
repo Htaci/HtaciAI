@@ -890,11 +890,18 @@ public partial class ConversationPage : UserControl
         RebuildNav();
     }
 
-    private async void OnNewChatSend(object? sender, string text)
+    private async void OnNewChatSend(object? sender, InputSubmit submit)
     {
         if (sender is not NewChatView nv) return;
         nv.SendRequested -= OnNewChatSend;
-        if (string.IsNullOrWhiteSpace(text)) return;
+
+        var text = submit.Text;
+        if (string.IsNullOrWhiteSpace(text) && submit.Attachments.Count == 0) return;
+
+        // 没有可用模型就不往下走：发送按钮这时是禁用的，但回车绕过禁用按钮走到了这里。
+        // 必须在建会话<b>之前</b>拦住 —— 否则会先落一条空会话，然后才发送失败。
+        // 输入内容留在输入框里（控件提交后不清空），配好模型回来还能接着发。
+        if (nv.SelectedModel is null) return;
 
         var firstLine = ConversationTitle.InitialTitle(text);
 
@@ -924,7 +931,7 @@ public partial class ConversationPage : UserControl
                 SessionViewCache.KeyForWorkspaceSession(ws.Id, wsSession.Id),
                 () => new WorkspaceProfile(ws, wsSession));
 
-            await wsView.SendMessageAsync(text);
+            await wsView.SendMessageAsync(text, submit.Attachments);
             await ReloadAsync();
             return;
         }
@@ -954,7 +961,7 @@ public partial class ConversationPage : UserControl
                 created.SelectedToolIds = nv.SelectedToolIds;  // 以及新建页激活的工具
             });
 
-        await view.SendMessageAsync(text);
+        await view.SendMessageAsync(text, submit.Attachments);
         await ReloadAsync();
     }
 
