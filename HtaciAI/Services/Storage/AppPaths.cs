@@ -105,18 +105,33 @@ public static class AppPaths
     /// <summary>属性 getter 自愈：即便调用方忘了 Initialize，也不会拿到空路径。</summary>
     private static void EnsureInitialized() => Initialize();
 
-    /// <summary>预览某个模式会解析到哪个根目录，不改变当前状态。供数据管理页展示切换结果。</summary>
-    public static string PreviewRoot(StorageMode mode) => mode switch
+    /// <summary>
+    /// 预览某个模式会解析到哪个根目录，不改变当前状态。供数据管理页展示切换结果。
+    ///
+    /// <b>macOS 上恒定返回 <see cref="AppDataRoot"/></b>：便携模式要求往「程序目录」写数据，
+    /// 而 macOS 的程序目录在 <c>.app</c> 包内（<c>Contents/MacOS</c>）——写进去会破坏代码签名，
+    /// 且从 DMG 直接运行时该位置往往只读或带隔离属性。所以 Mac 上不再提供便携模式，
+    /// 一律走应用数据目录（即 <c>~/Library/Application Support/HtaciAI</c>）。
+    /// </summary>
+    public static string PreviewRoot(StorageMode mode)
     {
-        StorageMode.Portable => PortableRoot,
-        StorageMode.AppData => AppDataRoot,
-        _ => Directory.Exists(PortableRoot) ? PortableRoot : AppDataRoot,
-    };
+        if (OperatingSystem.IsMacOS()) return AppDataRoot;
+
+        return mode switch
+        {
+            StorageMode.Portable => PortableRoot,
+            StorageMode.AppData => AppDataRoot,
+            _ => Directory.Exists(PortableRoot) ? PortableRoot : AppDataRoot,
+        };
+    }
 
     private static void Resolve()
     {
         var bootstrap = StorageBootstrap.Read();
-        _mode = bootstrap.Mode;
+
+        // macOS 上忽略已存的模式：这份 storage.json 可能是别处（如 Windows）同步过来的，
+        // 那里的「便携」在本机并不成立，沿用会让根目录解析到 .app 包内。
+        _mode = OperatingSystem.IsMacOS() ? StorageMode.AppData : bootstrap.Mode;
 
         Apply(PreviewRoot(_mode));
         _requestedRoot = _root;

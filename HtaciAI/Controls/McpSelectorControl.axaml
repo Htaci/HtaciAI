@@ -7,7 +7,7 @@
     <!--
         MCP 服务选择器（可复用控件）：
         按钮显示 MCP 图标 + 已选数量角标，点击弹出菜单逐个勾选要启用的服务。
-        图标与新标签页的「MCP服务」卡片一致（Segoe Fluent Icons U+E8AF）。
+        图标与新标签页的「MCP服务」卡片一致（Fluent System Icons U+E99A，plug_connected）。
         服务列表由外部注入，选中结果通过 SelectedServerIds（TwoWay）暴露。
     -->
     <Button x:Name="RootBtn"
@@ -24,8 +24,8 @@
         </ToolTip.Tip>
         <Grid>
             <TextBlock x:Name="IconText"
-                       Text="&#xe8af;"
-                       FontFamily="Segoe Fluent Icons"
+                       Text="&#xE99A;"
+                       FontFamily="{StaticResource IconFont}"
                        FontSize="14"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"/>

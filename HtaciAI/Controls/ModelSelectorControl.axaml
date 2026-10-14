@@ -36,8 +36,8 @@
             <TextBlock Text="模型与思考模式"/>
         </ToolTip.Tip>
         <StackPanel Orientation="Horizontal">
-            <TextBlock Text="&#xf158;"
-                       FontFamily="Segoe Fluent Icons"
+            <TextBlock Text="&#xF336;"
+                       FontFamily="{StaticResource IconFont}"
                        FontSize="14"
                        Margin="0,0,6,0"
                        HorizontalAlignment="Left"

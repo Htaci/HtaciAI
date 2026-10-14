@@ -13,6 +13,8 @@ using HtaciAI.Services.Tools;
 using HtaciAI.Views.Tools;
 using HtaciAI.Controls;
 
+using HtaciAI.Services;
+
 namespace HtaciAI.Views;
 
 /// <summary>
@@ -319,8 +321,8 @@ public partial class ToolsPage : UserControl
         };
         var icon = new TextBlock
         {
-            Text = "", // Segoe Fluent Icons：扳手（工具）
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = "\uF35C", // Fluent System Icons：扳手（工具）
+            FontFamily = AppFonts.Icons,
             FontSize = 18,
             Foreground = new SolidColorBrush(Color.Parse("#3A7BC8")),
             HorizontalAlignment = HorizontalAlignment.Left

@@ -32,8 +32,8 @@
                             CornerRadius="8"
                             Cursor="Hand"
                             ToolTip.Tip="创建新技能">
-                        <TextBlock Text="&#xe710;"
-                                   FontFamily="Segoe Fluent Icons"
+                        <TextBlock Text="&#xF10A;"
+                                   FontFamily="{StaticResource IconFont}"
                                    FontSize="14"
                                    Foreground="#4B5563"
                                    HorizontalAlignment="Center"

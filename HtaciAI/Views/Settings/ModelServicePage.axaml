@@ -5,36 +5,12 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="550"
              x:Class="HtaciAI.Views.Settings.ModelServicePage">
+    <!--
+        本页只是个导航壳：具体内容（服务商卡片列表 / 服务商详情）全部在代码里构建并塞进 Host。
+        之所以不在这里写两份 XAML 再切可见性：两边的结构差异很大（网格 vs 表格），
+        用可见性切换会让「当前在哪一层」变得难以追踪，也让不相关的控件始终挂在可视树上。
+    -->
     <Grid Background="Transparent">
-        <controls:SmoothScrollViewer>
-	        <StackPanel Margin="20">
-			    <TextBlock Text="模型管理"
-					       FontSize="18"
-					       FontWeight="DemiBold"
-					       HorizontalAlignment="Left"
-					       VerticalAlignment="Top"/>
-			    <TextBlock Text="在此处管理和配置您的模型服务。您可以添加、删除或修改自定义模型服务的设置，以便更好地满足您的需求。"
-					       FontSize="14"
-					       Foreground="#9CA3AF"
-					       HorizontalAlignment="Left"
-					       VerticalAlignment="Top"
-					       Margin="0,10,0,20"/>
-
-                <!-- 自定义模型：服务商分组，动态渲染 -->
-                <Grid Margin="0,10,0,0">
-                    <TextBlock Text="自定义模型" FontWeight="Bold" Margin="0,5,0,0"/>
-                    <Button x:Name="AddProviderBtn"
-                            Margin="0,0,0,0"
-                            Background="Transparent"
-                            HorizontalAlignment="Right"
-                            Padding="5"
-                            Cursor="Hand"
-                            Click="OnAddProviderClick">
-                        <TextBlock Text="+ 添加服务商"/>
-                    </Button>
-                </Grid>
-                <StackPanel x:Name="ProviderList" Margin="0,4,0,0"/>
-            </StackPanel>
-        </controls:SmoothScrollViewer>
+        <ContentControl x:Name="Host"/>
     </Grid>
 </UserControl>

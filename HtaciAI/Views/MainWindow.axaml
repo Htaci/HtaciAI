@@ -103,8 +103,8 @@
                             Margin="5,0,0,0"
                             CornerRadius="50"
                             Click="OnAddTabClick">
-                        <TextBlock Text="&#xe710;"
-                                   FontFamily="Segoe Fluent Icons"
+                        <TextBlock Text="&#xF10A;"
+                                   FontFamily="{StaticResource IconFont}"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    FontSize="12"/>
@@ -117,9 +117,10 @@
                         HorizontalAlignment="Right"
                         VerticalAlignment="Top"
                         Width="50" Height="40"
+                        CornerRadius="0,0,0,0"
                         Click="CloseButton_Click">
-                    <TextBlock Text="&#xe8bb;"
-                               FontFamily="Segoe Fluent Icons"
+                    <TextBlock Text="&#xF36A;"
+                               FontFamily="{StaticResource IconFont}"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="12"/>
@@ -132,8 +133,8 @@
                         Margin="0,0,50,0"
                         Click="MaximizeButton_Click">
                     <TextBlock x:Name="MaximizeGlyph"
-                               Text="&#xe922;"
-                               FontFamily="Segoe Fluent Icons"
+                               Text="&#xEB76;"
+                               FontFamily="{StaticResource IconFont}"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="12"/>
@@ -145,8 +146,8 @@
                         Width="50" Height="40"
                         Margin="0,0,100,0"
                         Click="MinimizeButton_Click">
-                    <TextBlock Text="&#xe921;"
-                               FontFamily="Segoe Fluent Icons"
+                    <TextBlock Text="&#xEBD1;"
+                               FontFamily="{StaticResource IconFont}"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="12"/>
@@ -160,8 +161,8 @@
                         IsTabStop="False"
                         Focusable="False"
                         Click="OnSettingsClick">
-                    <TextBlock Text="&#xe713;"
-                               FontFamily="Segoe Fluent Icons"
+                    <TextBlock Text="&#xF6AA;"
+                               FontFamily="{StaticResource IconFont}"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="14"/>
@@ -186,8 +187,8 @@
                                 Spacing="6"
                                 VerticalAlignment="Center">
                         <TextBlock x:Name="UpdateIcon"
-                                   Text="&#xe72c;"
-                                   FontFamily="Segoe Fluent Icons"
+                                   Text="&#xF13E;"
+                                   FontFamily="{StaticResource IconFont}"
                                    FontSize="12"
                                    Foreground="#374151"
                                    VerticalAlignment="Center"/>

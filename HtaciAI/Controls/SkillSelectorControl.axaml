@@ -6,7 +6,7 @@
              x:Class="HtaciAI.Controls.SkillSelectorControl">
     <!--
         技能选择器（可复用控件）：
-        按钮显示灯泡图标 + 已选数量角标，点击弹出菜单，技能以两组独立勾选：
+        按钮显示书本图标 + 已选数量角标，点击弹出菜单，技能以两组独立勾选：
           - 「已加载」：SKILL.md 全文注入 system，始终可用（status=loaded）
           - 「允许自动使用」：仅元数据注入，模型按需唤醒（status=allowed）
         技能列表由外部注入，选中结果通过 SelectedSkills（TwoWay）暴露。
@@ -25,8 +25,8 @@
         </ToolTip.Tip>
         <Grid>
             <TextBlock x:Name="IconText"
-                       Text="&#xe794;"
-                       FontFamily="Segoe Fluent Icons"
+                       Text="&#xF8FE;"
+                       FontFamily="{StaticResource IconFont}"
                        FontSize="14"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"/>

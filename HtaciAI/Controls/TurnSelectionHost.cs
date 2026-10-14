@@ -6,6 +6,8 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 
+using HtaciAI.Services;
+
 namespace HtaciAI.Controls;
 
 /// <summary>
@@ -17,8 +19,8 @@ namespace HtaciAI.Controls;
 /// </summary>
 public sealed class TurnSelectionHost
 {
-    /// <summary>「显示全部原文」按钮的字形（Segoe Fluent Icons）。</summary>
-    private const string RawIcon = "\uE8AC";
+    /// <summary>「显示全部原文」按钮的字形（Fluent System Icons）。</summary>
+    private const string RawIcon = "\uF66A";
 
     /// <summary>
     /// 全部原文的最大高度。原文未经渲染、没有折叠，一轮长任务下来能有几千像素，
@@ -99,7 +101,7 @@ public sealed class TurnSelectionHost
         _allIcon = new TextBlock
         {
             Text = RawIcon,
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontFamily = AppFonts.Icons,
             FontSize = 13,
             Foreground = IdleFgBrush,
             HorizontalAlignment = HorizontalAlignment.Center,

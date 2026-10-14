@@ -140,8 +140,8 @@
                                 Click="OnSendClick">
                             <Grid>
                                 <TextBlock x:Name="SendGlyph"
-                                           Text="&#xe74a;"
-                                           FontFamily="Segoe Fluent Icons"
+                                           Text="&#xF19C;"
+                                           FontFamily="{StaticResource IconFont}"
                                            FontSize="14"
                                            Foreground="White"
                                            HorizontalAlignment="Center"
@@ -168,8 +168,8 @@
                                 Background="Transparent"
                                 Margin="5"
                                 Click="OnAddFileClick">
-                            <TextBlock Text="&#xe723;"
-                                       FontFamily="Segoe Fluent Icons"
+                            <TextBlock Text="&#xF1AA;"
+                                       FontFamily="{StaticResource IconFont}"
                                        FontSize="14"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"/>
@@ -194,8 +194,8 @@
                                 </MenuFlyout>
                             </Button.Flyout>
                             <TextBlock x:Name="PermModeIcon"
-                                       Text="&#xea18;"
-                                       FontFamily="Segoe Fluent Icons"
+                                       Text="&#xF6BF;"
+                                       FontFamily="{StaticResource IconFont}"
                                        FontSize="14"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"/>
@@ -208,8 +208,8 @@
                                 CornerRadius="8"
                                 Background="Transparent"
                                 Margin="5">
-                            <TextBlock Text="&#xe712;"
-                                       FontFamily="Segoe Fluent Icons"
+                            <TextBlock Text="&#xE825;"
+                                       FontFamily="{StaticResource IconFont}"
                                        FontSize="14"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"/>

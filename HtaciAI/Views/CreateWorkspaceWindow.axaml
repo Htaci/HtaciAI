@@ -88,8 +88,8 @@
                             <StackPanel Orientation="Horizontal"
                                         Spacing="4"
                                         VerticalAlignment="Center">
-                                <TextBlock Text="&#xe710;"
-                                           FontFamily="Segoe Fluent Icons"
+                                <TextBlock Text="&#xF10A;"
+                                           FontFamily="{StaticResource IconFont}"
                                            FontSize="11"/>
                                 <TextBlock Text="选择" FontSize="12"/>
                             </StackPanel>

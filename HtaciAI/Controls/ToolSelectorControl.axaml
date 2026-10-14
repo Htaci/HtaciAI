@@ -24,8 +24,8 @@
         </ToolTip.Tip>
         <Grid>
             <TextBlock x:Name="IconText"
-                       Text="&#xe90f;"
-                       FontFamily="Segoe Fluent Icons"
+                       Text="&#xF8C1;"
+                       FontFamily="{StaticResource IconFont}"
                        FontSize="14"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"/>

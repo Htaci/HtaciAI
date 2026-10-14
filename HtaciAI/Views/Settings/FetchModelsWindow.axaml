@@ -1,0 +1,89 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:HtaciAI.Controls"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="560" d:DesignHeight="620"
+        x:Class="HtaciAI.Views.Settings.FetchModelsWindow"
+        Icon="/Assets/logo.ico"
+        Title="获取模型"
+        Width="560" MinWidth="560" MaxWidth="560"
+        Height="620" MinHeight="620"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <Window.Styles>
+        <Style Selector="Window">
+            <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+            <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+            <Setter Property="WindowDecorations" Value="BorderOnly"/>
+            <Setter Property="CanResize" Value="True"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <SolidColorBrush Color="Transparent" Opacity="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
+        <TextBlock Grid.Row="0"
+                   Text="获取模型"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"
+                   Margin="24,18,24,4"/>
+
+        <!-- 副标题显示实际请求的地址：拉不到时能一眼看出是地址拼错了还是服务端的问题 -->
+        <TextBlock x:Name="SubtitleText"
+                   Grid.Row="1"
+                   FontSize="12"
+                   Foreground="#9CA3AF"
+                   TextWrapping="Wrap"
+                   Margin="24,0,24,10"/>
+
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="24,0,24,8">
+            <TextBox x:Name="FilterBox"
+                     Height="32"
+                     Padding="10,0"
+                     CornerRadius="6"
+                     PlaceholderText="过滤模型 id…"
+                     TextChanged="OnFilterChanged"/>
+            <TextBlock x:Name="CountText"
+                       Grid.Column="1"
+                       FontSize="12"
+                       Foreground="#6B7280"
+                       VerticalAlignment="Center"
+                       Margin="12,0,0,0"/>
+        </Grid>
+
+        <controls:SmoothScrollViewer Grid.Row="3"
+                                     Margin="24,0,24,8"
+                                     HorizontalScrollBarVisibility="Disabled"
+                                     VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="ListPanel" Spacing="2"/>
+        </controls:SmoothScrollViewer>
+
+        <Grid Grid.Row="4"
+              ColumnDefinitions="*,Auto"
+              Margin="24,8,24,18">
+            <TextBlock x:Name="StatusText"
+                       FontSize="12"
+                       Foreground="#6B7280"
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap"
+                       Margin="0,0,12,0"/>
+            <Button Grid.Column="1"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#546E7A"
+                    Foreground="White"
+                    Cursor="Hand"
+                    Click="OnCloseClick">
+                <TextBlock Text="完成" FontSize="13"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Window>

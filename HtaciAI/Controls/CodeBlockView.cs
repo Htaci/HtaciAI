@@ -13,6 +13,8 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using HtaciAI.Controls;
 
+using HtaciAI.Services;
+
 namespace HtaciAI.Controls;
 
 /// <summary>
@@ -34,12 +36,12 @@ public sealed class CodeBlockView : Border
     /// </summary>
     private const double CodeLineHeight = 21;
 
-    private const string GlyphCopy = "";
-    private const string GlyphCheck = "";
-    private const string GlyphSave = "";
-    private const string GlyphCode = "";
+    private const string GlyphCopy = "\uF32C";
+    private const string GlyphCheck = "\uF295";
+    private const string GlyphSave = "\uF680";
+    private const string GlyphCode = "\uF2F0";
 
-    private static readonly FontFamily IconFont = new("Segoe Fluent Icons,Segoe MDL2 Assets");
+    private static readonly FontFamily IconFont = AppFonts.Icons;
 
     private readonly string _language;
     private readonly FontFamily _codeFont;
@@ -377,7 +379,7 @@ internal sealed class GlyphButton : Border
         Glyph = new TextBlock
         {
             Text = glyph,
-            FontFamily = new FontFamily("Segoe Fluent Icons,Segoe MDL2 Assets"),
+            FontFamily = AppFonts.Icons,
             FontSize = 12,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,

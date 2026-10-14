@@ -1919,8 +1919,8 @@ public partial class ConversationView : UserControl
 
     // ---- 消息操作（复制 / 编辑 / 重新生成 / 删除）与 Tokens 汇总 ----
 
-    /// <summary>「重新生成」按钮的字形（Segoe Fluent Icons：Sync）。</summary>
-    private const string RegenerateIcon = "\uE895";
+    /// <summary>「重新生成」按钮的字形（Fluent System Icons：Sync）。</summary>
+    private const string RegenerateIcon = "\uF191";
 
     /// <summary>
     /// 「重新生成」按钮：用户消息与 AI 消息共用同一个入口，
@@ -1953,7 +1953,7 @@ public partial class ConversationView : UserControl
         var icon = new TextBlock
         {
             Text = glyph,
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontFamily = AppFonts.Icons,
             FontSize = 13,
             Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -1995,8 +1995,8 @@ public partial class ConversationView : UserControl
         }
         var total = input + output;
 
-        var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(copyText.ToString()));
-        var delBtn = CreateGlyphButton("", "删除", async () => await DeleteTurnAsync(turnId), hoverColor: "#DC2626");
+        var copyBtn = CreateGlyphButton("\uF32C", "复制", async () => await CopyText(copyText.ToString()));
+        var delBtn = CreateGlyphButton("\uF34D", "删除", async () => await DeleteTurnAsync(turnId), hoverColor: "#DC2626");
 
         var left = new StackPanel
         {
@@ -2027,9 +2027,9 @@ public partial class ConversationView : UserControl
     private Control CreateUserOps(ChatMessage msg)
     {
         var text = msg.Content ?? "";
-        var copyBtn = CreateGlyphButton("", "复制", async () => await CopyText(text));
-        var editBtn = CreateGlyphButton("", "编辑", () => _ = EditUserMessageAsync(msg));
-        var delBtn = CreateGlyphButton("", "删除", async () => await DeleteMessageAsync(msg.Id), hoverColor: "#DC2626");
+        var copyBtn = CreateGlyphButton("\uF32C", "复制", async () => await CopyText(text));
+        var editBtn = CreateGlyphButton("\uF3DE", "编辑", () => _ = EditUserMessageAsync(msg));
+        var delBtn = CreateGlyphButton("\uF34D", "删除", async () => await DeleteMessageAsync(msg.Id), hoverColor: "#DC2626");
 
         return new StackPanel
         {
@@ -2915,8 +2915,8 @@ public partial class ConversationView : UserControl
         private static Control CreateLightbulbIcon(Brush brush)
             => new TextBlock
             {
-                Text = "", // Segoe Fluent Icons：灯泡（ea80）
-                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                Text = "\uF4D7", // Fluent System Icons：灯泡（lightbulb）
+                FontFamily = AppFonts.Icons,
                 FontSize = 14,
                 Foreground = brush,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -2967,8 +2967,8 @@ public partial class ConversationView : UserControl
         {
             var icon = new TextBlock
             {
-                Text = "", // Segoe Fluent Icons：扳手（工具）
-                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                Text = "\uF35C", // Fluent System Icons：扳手（工具）
+                FontFamily = AppFonts.Icons,
                 FontSize = 14,
                 Foreground = new SolidColorBrush(Color.Parse("#333333")),
                 VerticalAlignment = VerticalAlignment.Center,

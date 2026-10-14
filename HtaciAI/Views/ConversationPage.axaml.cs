@@ -363,8 +363,8 @@ public partial class ConversationPage : UserControl
 
         var chevronText = new TextBlock
         {
-            Text = collapsed ? "\uE76C" : "\uE70D",   // ChevronRight / ChevronDown
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = collapsed ? "\uF2B1" : "\uF2A4",   // ChevronRight / ChevronDown
+            FontFamily = AppFonts.Icons,
             FontSize = 11,
             Foreground = chevronIdle,
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -397,7 +397,7 @@ public partial class ConversationPage : UserControl
 
         if (onAdd is not null)
         {
-            var addBtn = GlyphButton("\uE710", "新建会话");
+            var addBtn = GlyphButton("\uF10A", "新建会话");
             addBtn.Click += (_, _) => onAdd();
             Grid.SetColumn(addBtn, 1);
             grid.Children.Add(addBtn);
@@ -423,11 +423,11 @@ public partial class ConversationPage : UserControl
         var expanded = _expandedWorkspaceId == ws.Id;
         var isActive = expanded && _activeWorkspaceId == ws.Id;
 
-        // 文件夹图标随展开态切换（Segoe Fluent Icons：Folder / FolderOpen）
+        // 文件夹图标随展开态切换（Fluent System Icons：Folder / FolderOpen）
         var icon = new TextBlock
         {
-            Text = expanded ? "\uE838" : "\uE8B7",
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = expanded ? "\uF42F" : "\uF419",
+            FontFamily = AppFonts.Icons,
             FontSize = 14,
             Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
             VerticalAlignment = VerticalAlignment.Center,
@@ -448,8 +448,8 @@ public partial class ConversationPage : UserControl
         // 用 Opacity 而不是 IsVisible —— 始终占位，否则鼠标移入移出会把「+」左右推来推去。
         var moreIcon = new TextBlock
         {
-            Text = "\uE712",
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = "\uE825",
+            FontFamily = AppFonts.Icons,
             FontSize = 14,
             Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -476,9 +476,9 @@ public partial class ConversationPage : UserControl
 
         Flyout? menu = null;
         var menuPanel = new StackPanel { Spacing = 2, MinWidth = 140 };
-        menuPanel.Children.Add(MenuRow("\uE70F", "编辑", danger: false,
+        menuPanel.Children.Add(MenuRow("\uF3DE", "编辑", danger: false,
             onClick: () => { menu?.Hide(); _ = EditWorkspaceAsync(ws); }));
-        menuPanel.Children.Add(MenuRow("\uE74D", "删除", danger: true,
+        menuPanel.Children.Add(MenuRow("\uF34D", "删除", danger: true,
             onClick: () => { menu?.Hide(); _ = DeleteWorkspaceAsync(ws); }));
         menu = new Flyout
         {
@@ -487,7 +487,7 @@ public partial class ConversationPage : UserControl
         };
         moreBtn.Click += (_, _) => menu?.ShowAt(moreBtn);
 
-        var newSessionBtn = GlyphButton("\uE710", "在此工作空间新建会话");
+        var newSessionBtn = GlyphButton("\uF10A", "在此工作空间新建会话");
         newSessionBtn.Click += (_, _) => _ = CreateWorkspaceSessionAsync(ws);
         newSessionBtn.Opacity = 0;   // 与「···」一样，悬停该行才出现
 
@@ -599,8 +599,8 @@ public partial class ConversationPage : UserControl
         // ---- 「更多」按钮：平时显示时间，鼠标悬停时换成它 ----
         var moreIcon = new TextBlock
         {
-            Text = "\uE712",
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = "\uE825",
+            FontFamily = AppFonts.Icons,
             FontSize = 14,
             Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -717,9 +717,9 @@ public partial class ConversationPage : UserControl
 
         // ---- 悬浮菜单 ----
         var menuPanel = new StackPanel { Spacing = 2, MinWidth = 140 };
-        menuPanel.Children.Add(MenuRow("\uE8AC", "重命名", danger: false,
+        menuPanel.Children.Add(MenuRow("\uF66A", "重命名", danger: false,
             onClick: () => { menu?.Hide(); BeginRename(); }));
-        menuPanel.Children.Add(MenuRow("\uE74D", "删除", danger: true,
+        menuPanel.Children.Add(MenuRow("\uF34D", "删除", danger: true,
             onClick: () => { menu?.Hide(); _ = onDelete(); }));
 
         menu = new Flyout
@@ -811,7 +811,7 @@ public partial class ConversationPage : UserControl
                     new TextBlock
                     {
                         Text = glyph,
-                        FontFamily = new FontFamily("Segoe Fluent Icons"),
+                        FontFamily = AppFonts.Icons,
                         FontSize = 14,
                         Width = 18,
                         TextAlignment = TextAlignment.Center,
@@ -845,7 +845,7 @@ public partial class ConversationPage : UserControl
             Content = new TextBlock
             {
                 Text = glyph,
-                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                FontFamily = AppFonts.Icons,
                 FontSize = 12,
                 Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
                 HorizontalAlignment = HorizontalAlignment.Center,

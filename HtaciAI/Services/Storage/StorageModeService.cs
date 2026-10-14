@@ -39,9 +39,19 @@ public static class StorageModeService
             settings.PreviousRoot = null;
         }
 
-        var saved = StorageBootstrap.Write(settings);
+        // 「便携」这个选择属于这份安装自身，只写便携目录（随程序走），<b>不</b>写机器级那份：
+        // 写机器级会把它泄漏给同一台机器上别的 HtaciAI 副本 —— 它们读到 portable 后
+        // 会以为自己也是便携版，各自在 exe 旁建一份 data。
+        // 其余模式照旧写当前生效的那份（便携配置已存在时就是它，从而保持一致）。
+        var saved = mode == StorageMode.Portable
+            ? StorageBootstrap.WriteLocal(settings)
+            : StorageBootstrap.Write(settings);
+
         if (!saved)
-            return new ChangeResult(false, rootWillChange, targetRoot, "设置写入失败，请检查配置目录权限。");
+            return new ChangeResult(false, rootWillChange, targetRoot,
+                mode == StorageMode.Portable
+                    ? "无法写入便携目录，便携模式要求程序目录可写。"
+                    : "设置写入失败，请检查配置目录权限。");
 
         if (!rootWillChange)
             return new ChangeResult(true, false, targetRoot, "已保存。当前模式与目标位置一致，无需重启。");

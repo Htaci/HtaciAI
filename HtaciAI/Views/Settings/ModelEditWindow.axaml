@@ -67,6 +67,23 @@
                              PlaceholderText="请求中的模型ID，如：deepseek-v4-flash"/>
                 </StackPanel>
 
+                <StackPanel Spacing="6">
+                    <TextBlock Text="开发商（决定模型头像）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="VendorBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             TextChanged="OnVendorChanged"
+                             PlaceholderText="如 deepseek / openai / qwen，留空 = 未识别"/>
+                    <TextBlock x:Name="VendorHint"
+                               FontSize="11"
+                               Foreground="#6B7280"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
                 <CheckBox x:Name="StreamingCheck"
                           Content="支持流式输出（增量文本输出）"
                           FontSize="13"
@@ -103,6 +120,47 @@
                              CornerRadius="6"
                              Text="-1"
                              PlaceholderText="-1 = 未知"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="最大输出 token"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <TextBox x:Name="MaxOutBox"
+                             Height="34"
+                             Padding="10,0"
+                             CornerRadius="6"
+                             Text="-1"
+                             PlaceholderText="-1 = 未知"/>
+                    <TextBlock Text="目前仅作记录与展示：请求体里还没有下发 max_tokens 的地方。"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="数组格式的 message content（多模态消息）"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="ArrayContentCombo" Height="34" CornerRadius="6"/>
+                    <TextBlock Text="未知 = 跟随服务商设置；不支持 = 一律发纯文本 content，即使模型能看图也降级为文本。"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="temperature 参数"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="TemperatureCombo" Height="34" CornerRadius="6"/>
+                    <TextBlock Text="未知 = 不下发。部分模型在思考模式下会收下这个参数却不生效（静默失效，不报错），这一栏用于把它们标出来。"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
                 </StackPanel>
 
                 <StackPanel Spacing="6">

@@ -1,11 +1,15 @@
 namespace HtaciAI.Models;
 
 /// <summary>
-/// 存储引导配置（bootstrap），落盘于<b>固定位置</b> <c>%APPDATA%\HtaciAI\storage.json</c>。
+/// 存储引导配置（bootstrap）。有<b>两个候选位置</b>，便携那份优先，详见 <see cref="Services.Storage.StorageBootstrap"/>：
+/// <list type="bullet">
+///   <item>便携：<c>&lt;程序目录&gt;/data/storage.json</c>，随程序一起走；</item>
+///   <item>机器级：<c>%APPDATA%\HtaciAI\storage.json</c>，位置恒定。</item>
+/// </list>
 ///
-/// 之所以不放在数据根目录里：这份配置本身决定了根目录在哪（鸡生蛋），所以位置必须与模式无关。
-/// 只放「根目录怎么选」和迁移意图，不放任何业务设置——业务设置应随数据根走，见后续的
-/// <c>&lt;Root&gt;\settings.json</c>。
+/// 之所以不放在数据根目录的最外层：这份配置本身决定了根目录在哪（鸡生蛋），位置必须与模式无关。
+/// 只放「根目录怎么选」和迁移意图，不放任何业务设置——业务设置应随数据根走，见
+/// <c>&lt;Root&gt;/settings.json</c>。
 /// </summary>
 public sealed class StorageSettings
 {

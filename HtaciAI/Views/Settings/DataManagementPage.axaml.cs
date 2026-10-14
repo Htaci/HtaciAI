@@ -32,6 +32,13 @@ public partial class DataManagementPage : UserControl
     private static readonly IBrush RingBrush = new SolidColorBrush(Color.Parse("#D1D5DB"));
     private static readonly IBrush BadgeBrush = new SolidColorBrush(Color.Parse("#EA580C"));
 
+    /// <summary>
+    /// 是否锁定存储模式。macOS 上程序目录在 <c>.app</c> 包内，便携模式不可用，
+    /// 数据固定落在应用数据目录（见 <see cref="AppPaths.PreviewRoot"/>）——
+    /// 这里把另外两个选项画成灰色不可点，避免用户选了一个不会生效的选项。
+    /// </summary>
+    private static readonly bool StorageLocked = OperatingSystem.IsMacOS();
+
     private readonly List<ModeRow> _modeRows = new();
     private StorageMode _selected;
     private TextBlock? _modeBadge;
@@ -198,7 +205,9 @@ public partial class DataManagementPage : UserControl
         });
         body.Children.Add(new TextBlock
         {
-            Text = "点选即保存。数据位置要重启应用后才会切换。",
+            Text = StorageLocked
+                ? "macOS 上数据固定存放在应用数据目录，无需也无法更改。"
+                : "点选即保存。数据位置要重启应用后才会切换。",
             FontSize = 12,
             Foreground = TextFaint,
             Margin = new Thickness(0, 6, 0, 4),
@@ -274,6 +283,8 @@ public partial class DataManagementPage : UserControl
         grid.Children.Add(text);
         Grid.SetColumn(text, 1);
 
+        var locked = StorageLocked && mode != StorageMode.AppData;
+
         var row = new Border
         {
             Background = Brushes.Transparent,
@@ -282,31 +293,48 @@ public partial class DataManagementPage : UserControl
             BorderThickness = new Thickness(1),
             Padding = new Thickness(12, 10),
             Margin = new Thickness(0, 6, 0, 0),
-            Cursor = new Cursor(StandardCursorType.Hand),
+            Cursor = new Cursor(locked ? StandardCursorType.Arrow : StandardCursorType.Hand),
             Child = grid
         };
 
-        row.PointerPressed += (_, e) =>
+        if (locked)
         {
-            e.Handled = true;
-            if (mode == _selected) return;
+            // 压暗 + 去掉指针手势 + 不挂任何点击/悬停处理器，让它读起来就是「不可选」。
+            row.Opacity = 0.45;
+            title.Foreground = TextFaint;
+            dot.IsVisible = false;
+        }
+        else
+        {
+            row.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                if (mode == _selected) return;
 
-            _selected = mode;
-            RefreshModeRows();
-            ApplySelectedMode();
-        };
-        row.PointerEntered += (_, _) =>
-        {
-            if (mode != _selected) row.Background = Surface;
-        };
-        row.PointerExited += (_, _) =>
-        {
-            if (mode != _selected) row.Background = Brushes.Transparent;
-        };
+                _selected = mode;
+                RefreshModeRows();
+                ApplySelectedMode();
+            };
+            row.PointerEntered += (_, _) =>
+            {
+                if (mode != _selected) row.Background = Surface;
+            };
+            row.PointerExited += (_, _) =>
+            {
+                if (mode != _selected) row.Background = Brushes.Transparent;
+            };
+        }
 
-        _modeRows.Add(new ModeRow(mode, row, dotInner, description));
+        _modeRows.Add(new ModeRow(mode, row, dotInner, description, locked));
         return row;
     }
+
+    /// <summary>macOS 上某个选项为何不可用（替换掉路径说明，免得显示一个不会生效的路径）。</summary>
+    private static string LockedReason(StorageMode mode) => mode switch
+    {
+        StorageMode.Portable => "macOS 的程序目录在 .app 包内，写入会破坏代码签名，因此不可用。",
+        _ => "macOS 固定使用应用数据目录，不提供此模式。"
+    };
 
     /// <summary>需要重启才切换数据位置时，才露出「迁移现有数据」与重启按钮。</summary>
     private Border CreateRestartPanel()
@@ -370,6 +398,15 @@ public partial class DataManagementPage : UserControl
     {
         foreach (var row in _modeRows)
         {
+            if (row.Locked)
+            {
+                // 锁定行既不显示选中态，也不显示解析路径（那会误导成「选它就是这里」）。
+                row.Row.Background = Brushes.Transparent;
+                row.Dot.IsVisible = false;
+                row.Description.Text = LockedReason(row.Mode);
+                continue;
+            }
+
             var selected = row.Mode == _selected;
             row.Row.Background = selected ? Surface : Brushes.Transparent;
             row.Dot.IsVisible = selected;
@@ -384,6 +421,14 @@ public partial class DataManagementPage : UserControl
     private void RefreshBadge()
     {
         if (_modeBadge is null) return;
+
+        // macOS 上模式恒定、与配置无关，显示「待重启切换」只会让人困惑。
+        if (StorageLocked)
+        {
+            _modeBadge.Text = ModeName(StorageMode.AppData);
+            _modeBadge.Foreground = TextMono;
+            return;
+        }
 
         var configured = StorageBootstrap.Read().Mode;
         if (configured == AppPaths.Mode)
@@ -562,23 +607,27 @@ public partial class DataManagementPage : UserControl
     private static string ModeName(StorageMode mode) => mode switch
     {
         StorageMode.Portable => "便携",
-        StorageMode.AppData => "APPDATA",
+        StorageMode.AppData => "应用数据",
         _ => "默认"
     };
 
     private static string ModeDescription(StorageMode mode) => mode switch
     {
         StorageMode.Portable => "始终使用程序目录下的 data 文件夹，数据跟着程序走。",
-        StorageMode.AppData => @"始终使用 %APPDATA%\HtaciAI，即使程序目录下有 data 文件夹。",
-        _ => @"程序目录下存在 data 文件夹时使用它，否则使用 %APPDATA%\HtaciAI。"
+        StorageMode.AppData => $"始终使用 {AppPaths.AppDataRoot}，即使程序目录下有 data 文件夹。",
+        _ => $"程序目录下存在 data 文件夹时使用它，否则使用 {AppPaths.AppDataRoot}。"
     };
 
     /// <summary>一行模式选项里需要随选中态联动的控件。</summary>
-    private sealed class ModeRow(StorageMode mode, Border row, Border dot, TextBlock description)
+    private sealed class ModeRow(
+        StorageMode mode, Border row, Border dot, TextBlock description, bool locked)
     {
         public StorageMode Mode { get; } = mode;
         public Border Row { get; } = row;
         public Border Dot { get; } = dot;
         public TextBlock Description { get; } = description;
+
+        /// <summary>该选项在当前平台上不可用（macOS 上的便携 / 默认），已画成灰色且不可点。</summary>
+        public bool Locked { get; } = locked;
     }
 }

@@ -77,8 +77,8 @@
                                Foreground="#9CA3AF"
                                VerticalAlignment="Center"/>
                     <TextBlock x:Name="Chevron"
-                               Text="&#xE76C;"
-                               FontFamily="Segoe Fluent Icons"
+                               Text="&#xF2B1;"
+                               FontFamily="{StaticResource IconFont}"
                                FontSize="10"
                                Foreground="#C5C5C7"
                                VerticalAlignment="Center"/>

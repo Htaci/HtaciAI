@@ -47,7 +47,7 @@ public sealed class NotificationToast : Window
 
     private const int MaxVisible = 4;
 
-    private static readonly FontFamily IconFont = new("Segoe Fluent Icons");
+    private static readonly FontFamily IconFont = AppFonts.Icons;
 
     /// <summary>当前在屏上的提醒（列表靠后的更新，堆叠时位置更高）。</summary>
     private static readonly List<NotificationToast> Visible = new();

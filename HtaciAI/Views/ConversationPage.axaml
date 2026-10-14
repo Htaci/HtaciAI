@@ -94,8 +94,8 @@
                                         Spacing="8"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Center">
-                                <TextBlock Text="&#xe710;"
-                                           FontFamily="Segoe Fluent Icons"
+                                <TextBlock Text="&#xF10A;"
+                                           FontFamily="{StaticResource IconFont}"
                                            FontSize="14"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Text="创建新会话"

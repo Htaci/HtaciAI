@@ -23,16 +23,10 @@ namespace HtaciAI.Controls;
 /// </summary>
 public partial class ModelSelectorControl : UserControl
 {
-    /// <summary>思考模式 wire 值 → 枚举 的固定映射（菜单展示顺序）。</summary>
-    private static readonly (string Label, ThinkingMode Mode)[] ThinkingOptions =
-    {
-        ("NoThink", ThinkingMode.NoThink),
-        ("none", ThinkingMode.Default),
-        ("low", ThinkingMode.Low),
-        ("high", ThinkingMode.High),
-        ("max", ThinkingMode.Max),
-    };
-
+    /// <summary>
+    /// 思考档位的候选与展示文案统一由 <see cref="ThinkingModes"/> 提供 ——
+    /// 这里不再自己写一份，否则新增档位时必然漏改一边。
+    /// </summary>
     private List<ModelDetails> _models = new();
 
     /// <summary>
@@ -40,6 +34,12 @@ public partial class ModelSelectorControl : UserControl
     /// 内容没变就跳过重建，避免菜单刚展开就被清空重填的闪动。
     /// </summary>
     private string _lastSignature = "";
+
+    /// <summary>
+    /// 上次构建思考子菜单时所用模型声明的档位。换模型后档位集合可能变化，
+    /// 但模型列表指纹（见 <see cref="Signature"/>）不包含这些，所以要单独记一份来触发重建。
+    /// </summary>
+    private string _thinkingSignature = "";
 
     /// <summary>
     /// 模型列表指纹：服务商名 + 模型 id + 显示名。这三者决定了菜单结构与每一项的文案，
@@ -164,6 +164,15 @@ public partial class ModelSelectorControl : UserControl
         {
             UpdateModelLabel();
             UpdateSelectionMarkers();
+
+            // 已选档位在新模型上可能不存在（比如从支持 max 的模型切到只到 high 的），
+            // 必须先收敛再对外通知，否则会带着一个即将被判为无效的档位发出去。
+            EnsureThinkingModeAvailable();
+
+            // 换模型后可用档位变了就得重建那一节，否则菜单里还留着上一个模型的档位。
+            if (ThinkingSignature(SelectedModel) != _thinkingSignature)
+                RebuildMenu();
+
             SelectedModelChanged?.Invoke(this, SelectedModel);
         }
         else if (change.Property == ThinkingModeProperty)
@@ -189,8 +198,8 @@ public partial class ModelSelectorControl : UserControl
     /// <summary>思考模式子菜单的对号（思考模式沿用对号，模型/服务商用绿点）。</summary>
     private static Control CheckIcon() => new TextBlock
     {
-        Text = "\uE73E",
-        FontFamily = new FontFamily("Segoe Fluent Icons"),
+        Text = "\uF295",
+        FontFamily = AppFonts.Icons,
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.Parse("#4A90D9")),
     };
@@ -269,22 +278,48 @@ public partial class ModelSelectorControl : UserControl
 
         items.Add(new Separator());
         items.Add(BuildThinkingMenu());
+        _thinkingSignature = ThinkingSignature(SelectedModel);
         UpdateSelectionMarkers();
     }
 
-    /// <summary>构建思考模式子菜单。</summary>
+    /// <summary>思考子菜单的指纹：当前模型声明了哪些档位。变了才需要重建那一节。</summary>
+    private static string ThinkingSignature(ModelDetails? model)
+        => model is null ? "" : string.Join('\u0001', model.ThinkingStrengths);
+
+    /// <summary>
+    /// 构建思考模式子菜单。只列出<b>当前模型声明支持的档位</b> ——
+    /// 下发一个模型不认识的档位名会被服务端直接拒绝，所以没声明就不该出现在菜单里。
+    /// 模型没声明任何档位（或根本不是内置表认得的模型）时只剩 NoThink / none 两项，
+    /// 这两个是仅有的「不会因为猜错档位而失败」的选项。
+    /// </summary>
     private MenuItem BuildThinkingMenu()
     {
         var parent = new MenuItem { Header = "思考模式" };
-        foreach (var (label, mode) in ThinkingOptions)
+
+        foreach (var mode in ThinkingModes.AvailableFor(SelectedModel?.ThinkingStrengths))
         {
-            var mi = new MenuItem { Header = label };
+            var mi = new MenuItem { Header = ThinkingModes.Label(mode) };
             var captured = mode;
             mi.Click += (_, _) => ThinkingMode = captured;
             _thinkingItems.Add((mi, captured));
             parent.Items.Add(mi);
         }
+
         return parent;
+    }
+
+    /// <summary>
+    /// 当前已选档位在新模型上不可用时，退回 <see cref="ThinkingMode.Default"/>。
+    ///
+    /// 退回 Default 而不是 NoThink：Default 不往请求里写任何思考字段、走模型自身默认，
+    /// 是唯一对任何模型都安全的选项。NoThink 会写一个显式关闭字段，
+    /// 而部分模型（始终思考的那些）收下这个字段是会报错的。
+    /// </summary>
+    private void EnsureThinkingModeAvailable()
+    {
+        var available = ThinkingModes.AvailableFor(SelectedModel?.ThinkingStrengths);
+        if (!available.Contains(ThinkingMode))
+            ThinkingMode = ThinkingMode.Default;
     }
 
     /// <summary>
@@ -322,13 +357,6 @@ public partial class ModelSelectorControl : UserControl
             ThinkingLabel.Text = ThinkingModeToLabel(ThinkingMode);
     }
 
-    private static string ThinkingModeToLabel(ThinkingMode mode) => mode switch
-    {
-        ThinkingMode.NoThink => "NoThink",
-        ThinkingMode.Default => "none",
-        ThinkingMode.Low => "low",
-        ThinkingMode.High => "high",
-        ThinkingMode.Max => "max",
-        _ => "none",
-    };
+    /// <summary>按钮上显示的档位文案。与菜单文案同源，避免两处不一致。</summary>
+    private static string ThinkingModeToLabel(ThinkingMode mode) => ThinkingModes.Label(mode);
 }

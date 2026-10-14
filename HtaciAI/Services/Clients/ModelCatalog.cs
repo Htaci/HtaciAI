@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Models;
+using HtaciAI.Services.ModelTable;
 
 namespace HtaciAI.Services;
 
@@ -73,8 +74,16 @@ public static class ModelCatalog
         SupportsThinking = m.SupportsThinking,
         ThinkingStrengths = m.ThinkingStrengths,
         Capabilities = m.Capabilities,
-        SupportsArrayContent = p.SupportsArrayContent,
+        // 模型级设置优先，没设置（null = 不知道）时跟随服务商。
+        // 分层的原因：数组 content 主要由线路/服务商决定，但偶尔有单个模型不认，
+        // 所以默认跟着服务商走，需要时再给模型单独覆盖。
+        SupportsArrayContent = m.SupportsArrayContent ?? p.SupportsArrayContent,
         SupportsStreaming = p.SupportsStreaming && m.SupportsStreaming,
         ContextWindow = m.ContextWindow,
+        MaxOutputTokens = m.MaxOutputTokens,
+        TemperatureSupported = m.TemperatureSupported,
+        Vendor = m.Vendor,
+        VendorName = VendorIcons.VendorName(m.Vendor),
+        ConfigOrigin = m.ConfigOrigin,
     };
 }

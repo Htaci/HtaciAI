@@ -62,6 +62,10 @@
     </Application.Styles>
 
     <Application.Resources>
+        <!-- 内置图标字体（Fluent System Icons，MIT），随程序一起打包，未装该字体的系统也能正常显示。
+             与 Services/AppFonts.IconFontUri 指向同一资源，XAML 里统一用 {StaticResource IconFont} 引用。 -->
+        <FontFamily x:Key="IconFont">avares://HtaciAI/Assets/Fonts/FluentSystemIcons-Regular.ttf#FluentSystemIcons-Regular</FontFamily>
+
         <!-- Fluent 的 FlyoutPresenter 用它作 Padding，默认值很大（WinUI 里是 16,15,16,17），
              弹出的菜单外框会显得很空。这里收窄到刚好贴合行内容。
              同一个键还被模板内层 Border 的 Padding 使用，一并收紧，

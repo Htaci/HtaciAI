@@ -298,9 +298,34 @@ public sealed class ModelDetails
     public bool SupportsThinking { get; init; }
     public IReadOnlyList<string> ThinkingStrengths { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> Capabilities { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// 是否接受数组格式的 content。已经算好「模型级覆盖 → 服务商设置」的最终值，
+    /// 调用方不必再关心两层覆盖关系。
+    /// </summary>
     public bool SupportsArrayContent { get; init; } = true;
     public bool SupportsStreaming { get; init; } = true;
     public long ContextWindow { get; init; } = -1;
+
+    /// <summary>最大输出 token。-1 = 未知。目前仅作记录，请求体里还没有下发处。</summary>
+    public long MaxOutputTokens { get; init; } = -1;
+
+    /// <summary>
+    /// 是否接受 temperature 参数。null = 未知（调用方按「不传」处理）。
+    /// 请求体里目前不下发 temperature，这个字段的价值在于界面能把没意义的旋钮置灰：
+    /// 部分模型的思考模式下 temperature 收而不生效（DeepSeek 就是），
+    /// 参数调了没反应比报错更难查。
+    /// </summary>
+    public bool? TemperatureSupported { get; init; }
+
+    /// <summary>开发商 id（决定头像）。空 = 没认出来。</summary>
+    public string Vendor { get; init; } = "";
+
+    /// <summary>开发商展示名（如「DeepSeek」「智谱」）；没认出来为 null。</summary>
+    public string? VendorName { get; init; }
+
+    /// <summary>这行配置的来源，决定界面是否提示「配置需要补充」。见 <see cref="ModelConfigOrigin"/>。</summary>
+    public ModelConfigOrigin ConfigOrigin { get; init; } = ModelConfigOrigin.Manual;
 }
 
 /// <summary>tool_calls 与 chat_message.metadata 之间的 JSON 序列化辅助。</summary>

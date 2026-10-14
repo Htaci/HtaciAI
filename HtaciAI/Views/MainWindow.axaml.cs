@@ -45,10 +45,10 @@ public partial class MainWindow : Window
     /// <summary>按当前窗口状态切换「最大化 / 还原」的图标。</summary>
     private void UpdateMaximizeGlyph()
     {
-        // Segoe Fluent Icons：E922 = 最大化，E923 = 还原。
+        // Fluent System Icons：EB76 = 最大化，F78C = 还原。
         MaximizeGlyph.Text = WindowState == WindowState.Maximized
-            ? "\uE923"
-            : "\uE922";
+            ? "\uF78C"
+            : "\uEB76";
     }
 
     // ============================================================
@@ -221,11 +221,11 @@ public partial class MainWindow : Window
 
         var (glyph, fg, bg) = state switch
         {
-            UpdateButtonState.UpdateAvailable => ("\uE896", "#FFFFFF", "#16A34A"),   // Download
-            UpdateButtonState.Checking => ("\uE72C", "#9CA3AF", null),              // Refresh
-            UpdateButtonState.UpToDate => ("\uE73E", "#16A34A", null),              // CheckMark
-            UpdateButtonState.Problem => ("\uE72C", "#9CA3AF", null),
-            _ => ("\uE72C", "#374151", null),
+            UpdateButtonState.UpdateAvailable => ("\uF151", "#FFFFFF", "#16A34A"),   // Download
+            UpdateButtonState.Checking => ("\uF13E", "#9CA3AF", null),              // Refresh
+            UpdateButtonState.UpToDate => ("\uF295", "#16A34A", null),              // CheckMark
+            UpdateButtonState.Problem => ("\uF13E", "#9CA3AF", null),
+            _ => ("\uF13E", "#374151", null),
         };
 
         UpdateLabel.Text = label;

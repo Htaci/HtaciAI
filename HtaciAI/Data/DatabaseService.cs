@@ -186,6 +186,13 @@ public static class DatabaseService
             version = 18;
             SetVersion(conn, version);
         }
+
+        if (version < 19)
+        {
+            RunMigrationV19(conn);
+            version = 19;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -672,6 +679,27 @@ public static class DatabaseService
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "ALTER TABLE workspaces ADD COLUMN default_model_id TEXT;";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 内置模型表接入后新增的列。
+    ///
+    /// 全部给了默认值，老行的语义不被改写。特别是 <c>config_origin</c> 默认 3（Manual）：
+    /// 升级前用户手填的模型本来就是手工配置的，内置表上线不该让它们突然挂上「配置需要补充」。
+    /// 可空的三态列（supports_array_content / temperature_supported）留 NULL，
+    /// 表示「不知道」—— 与 0（明确不支持）是两回事，不能合并。
+    /// </summary>
+    private static void RunMigrationV19(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            ALTER TABLE ai_model ADD COLUMN vendor TEXT;
+            ALTER TABLE ai_model ADD COLUMN max_output_tokens INTEGER NOT NULL DEFAULT -1;
+            ALTER TABLE ai_model ADD COLUMN supports_array_content INTEGER;
+            ALTER TABLE ai_model ADD COLUMN temperature_supported INTEGER;
+            ALTER TABLE ai_model ADD COLUMN config_origin INTEGER NOT NULL DEFAULT 3;
+            """;
         cmd.ExecuteNonQuery();
     }
 

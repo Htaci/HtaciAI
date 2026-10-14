@@ -49,25 +49,39 @@ public sealed class OpenAiExClient : IChatClient
     }
 
     /// <summary>
+    /// 规范化到「API 版本根」，如 <c>https://api.moonshot.cn</c> → <c>https://api.moonshot.cn/v1</c>。
+    ///
+    /// 与 <see cref="NormalizeOpenAiEndpoint"/>、<see cref="ModelsUrl"/> 共用同一套判断，
+    /// 三者拼出的路径必然同源 —— 否则「对话能通、拉模型列表却 404」这种问题会很难查。
+    /// </summary>
+    public static string NormalizeBaseUrl(string endpoint)
+    {
+        var url = endpoint?.Trim().TrimEnd('/') ?? string.Empty;
+        if (url.Length == 0) return url;
+
+        // 已含完整接口路径：剥掉，回到版本根，避免重复追加
+        if (url.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+            url = url[..^"/chat/completions".Length].TrimEnd('/');
+
+        return url.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? url : url + "/v1";
+    }
+
+    /// <summary>
     /// 规范化 OpenAI 兼容 Chat Completions 端点：
     /// base URL（如 https://api.moonshot.cn）自动补全为 /v1/chat/completions；
     /// 已含完整路径则原样返回，避免重复追加成 .../v1/chat/completions/v1/chat/completions。
     /// </summary>
     public static string NormalizeOpenAiEndpoint(string endpoint)
     {
-        var url = endpoint?.Trim().TrimEnd('/') ?? string.Empty;
-        if (url.Length == 0) return url;
+        var baseUrl = NormalizeBaseUrl(endpoint);
+        return baseUrl.Length == 0 ? baseUrl : baseUrl + "/chat/completions";
+    }
 
-        // 已含完整路径：直接返回
-        if (url.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
-            return url;
-
-        // 已到版本目录（如 .../v1）：只需补 /chat/completions
-        if (url.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-            return url + "/chat/completions";
-
-        // 其余一律视为 base URL：补 /v1/chat/completions
-        return url + "/v1/chat/completions";
+    /// <summary>模型列表端点（OpenAI 兼容 GET /models，用于「获取模型」）。</summary>
+    public static string ModelsUrl(string endpoint)
+    {
+        var baseUrl = NormalizeBaseUrl(endpoint);
+        return baseUrl.Length == 0 ? baseUrl : baseUrl + "/models";
     }
 
     public async Task<ChatStreamResult> StreamAsync(
@@ -210,23 +224,19 @@ public sealed class OpenAiExClient : IChatClient
 
         switch (options.Thinking)
         {
+            case ThinkingMode.Default:
+                // 不填任何思考字段，走模型默认。这是唯一「无论模型支持什么都不会错」的选项，
+                // 所以档位未知时的默认值必须是它，而不是 NoThink。
+                break;
             case ThinkingMode.NoThink:
                 WriteThinkingToggle(body, enabled: false);
                 break;
-            case ThinkingMode.Low:
-                WriteThinkingToggle(body, enabled: true);
-                body[_effortField] = MapEffort("low");
-                break;
-            case ThinkingMode.High:
-                WriteThinkingToggle(body, enabled: true);
-                body[_effortField] = MapEffort("high");
-                break;
-            case ThinkingMode.Max:
-                WriteThinkingToggle(body, enabled: true);
-                body[_effortField] = MapEffort("max");
-                break;
             default:
-                // ThinkingMode.Default（none）：不填，走模型默认
+                // 其余都是「开启思考 + 指定强度」。档位名统一取自 ThinkingModes，
+                // 这里不再逐个列举 —— 新增档位只改那一处。
+                WriteThinkingToggle(body, enabled: true);
+                if (ThinkingModes.WireValue(options.Thinking) is { } strength)
+                    body[_effortField] = MapEffort(strength);
                 break;
         }
 

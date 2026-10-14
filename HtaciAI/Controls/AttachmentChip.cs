@@ -8,6 +8,8 @@ using Avalonia.Media;
 using HtaciAI.Models;
 using HtaciAI.Services.Attachments;
 
+using HtaciAI.Services;
+
 namespace HtaciAI.Controls;
 
 /// <summary>
@@ -43,7 +45,7 @@ public sealed class AttachmentChip : Border
         row.Children.Add(new TextBlock
         {
             Text = GlyphFor(item.Kind),
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontFamily = AppFonts.Icons,
             FontSize = compact ? 11 : 12,
             Foreground = new SolidColorBrush(Color.Parse("#5B6472")),
             VerticalAlignment = VerticalAlignment.Center,
@@ -80,8 +82,8 @@ public sealed class AttachmentChip : Border
     {
         var close = new TextBlock
         {
-            Text = "",   // Cancel（×）
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = "\uF36A",   // Cancel（×）
+            FontFamily = AppFonts.Icons,
             FontSize = 10,
             Foreground = new SolidColorBrush(Color.Parse("#9AA3AF")),
             VerticalAlignment = VerticalAlignment.Center,
@@ -99,11 +101,11 @@ public sealed class AttachmentChip : Border
         return close;
     }
 
-    /// <summary>种类图标（Segoe Fluent Icons）。</summary>
+    /// <summary>种类图标（Fluent System Icons）。</summary>
     private static string GlyphFor(string kind) => kind switch
     {
-        "image" => "",    // Picture
-        "office" or "text" => "",   // Document
-        _ => "",          // Page
+        "image" => "\uF489",    // Picture
+        "office" or "text" => "\uF379",   // Document
+        _ => "\uF379",          // Page
     };
 }

@@ -108,8 +108,8 @@
                             Margin="5"
                             Click="OnSendClick">
                             
-                            <TextBlock Text="&#xe724;"
-                                       FontFamily="Segoe Fluent Icons"
+                            <TextBlock Text="&#xF69A;"
+                                       FontFamily="{StaticResource IconFont}"
                                        FontSize="14"
                                        Foreground="White"
                                        HorizontalAlignment="Center"
@@ -136,8 +136,8 @@
                                                    Foreground="Gray" />-->
                                     </StackPanel>
                                 </ToolTip.Tip>
-                                <TextBlock Text="&#xe723;"
-                                           FontFamily="Segoe Fluent Icons"
+                                <TextBlock Text="&#xF1AA;"
+                                           FontFamily="{StaticResource IconFont}"
                                            FontSize="14"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
@@ -156,8 +156,8 @@
                                                    FontWeight="Bold" />
                                     </StackPanel>
                                 </ToolTip.Tip>
-                                <TextBlock Text="&#xe7be;"
-                                           FontFamily="Segoe Fluent Icons"
+                                <TextBlock Text="&#xE6E7;"
+                                           FontFamily="{StaticResource IconFont}"
                                            FontSize="14"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
@@ -189,8 +189,8 @@
                                     </MenuFlyout>
                                 </Button.Flyout>
                                 <TextBlock x:Name="PermModeIcon"
-                                           Text="&#xea18;"
-                                           FontFamily="Segoe Fluent Icons"
+                                           Text="&#xF6BF;"
+                                           FontFamily="{StaticResource IconFont}"
                                            FontSize="14"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>

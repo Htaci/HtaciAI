@@ -6,6 +6,8 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 
+using HtaciAI.Services;
+
 namespace HtaciAI.Views;
 
 public partial class NewTabPage : UserControl
@@ -27,7 +29,7 @@ public partial class NewTabPage : UserControl
         {
             Title = "智能对话",
             Description = "对话、工作空间与任务的统一入口",
-            IconGlyph = "",                          // Chat
+            IconGlyph = "\uF287",                          // Chat
             Tags = new[] { "对话", "工作空间" },
             MainColor = Color.FromArgb(0xFF, 0x4A, 0x90, 0xD9),
             LightBg = Color.FromArgb(0xFF, 0xEE, 0xF4, 0xFB),
@@ -41,7 +43,7 @@ public partial class NewTabPage : UserControl
         {
             Title = "工具",
             Description = "管理工具和工具集，创建新的工具",
-            IconGlyph = "",                          // Repair
+            IconGlyph = "\uF8C1",                          // Repair
             Tags = new[] { "Tools", "管理" },
             MainColor = Color.FromArgb(0xFF, 0x0E, 0xA5, 0xA6),
             LightBg = Color.FromArgb(0xFF, 0xEA, 0xF7, 0xF7),
@@ -68,7 +70,7 @@ public partial class NewTabPage : UserControl
         {
             Title = "技能",
             Description = "管理已安装的技能",
-            IconGlyph = "",                          // Certificate（与输入框技能选择器一致）
+            IconGlyph = "\uF8FE",                          // Book（与输入框技能选择器一致）
             Tags = new[] { "Skills" },
             MainColor = Color.FromArgb(0xFF, 0x2E, 0xAF, 0x7D),
             LightBg = Color.FromArgb(0xFF, 0xED, 0xF8, 0xF3),
@@ -107,7 +109,7 @@ public partial class NewTabPage : UserControl
         {
             Title = "MCP服务",
             Description = "连接并管理 MCP 服务器，为 AI 扩展外部工具能力。",
-            IconGlyph = "",                          // Remote
+            IconGlyph = "\uE99A",                          // plug_connected（与输入框 MCP 选择器一致）
             Tags = new[] { "MCP", "服务" },
             MainColor = Color.FromArgb(0xFF, 0x7B, 0x5E, 0xA7),
             LightBg = Color.FromArgb(0xFF, 0xF3, 0xEF, 0xF8),
@@ -134,7 +136,7 @@ public partial class NewTabPage : UserControl
         {
             Title = "自动化",
             Description = "规划定时任务和自动化流程",
-            IconGlyph = "",                          // Stopwatch
+            IconGlyph = "\uF827",                          // Stopwatch
             Tags = new[] { "Automation", "Scheduling" },
             MainColor = Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
             LightBg = Color.FromArgb(0xFF, 0xFF, 0xF9, 0xF0),
@@ -179,7 +181,7 @@ public partial class NewTabPage : UserControl
             Child = new TextBlock
             {
                 Text = data.IconGlyph,
-                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                FontFamily = AppFonts.Icons,
                 FontSize = 24,
                 Foreground = new SolidColorBrush(data.MainColor),
                 HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
@@ -352,7 +354,7 @@ public partial class NewTabPage : UserControl
         public string Title { get; init; } = "";
         public string Description { get; init; } = "";
 
-        /// <summary>Segoe Fluent Icons 字形码位（如 ""）。</summary>
+        /// <summary>Fluent System Icons 字形码位（如 "\uF8C1"）。</summary>
         public string IconGlyph { get; init; } = "";
 
         public string[] Tags { get; init; } = [];

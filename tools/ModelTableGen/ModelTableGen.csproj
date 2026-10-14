@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    内置模型表的生成器。刻意做成独立的小控制台项目，而不是应用的一部分：
+      * 应用运行时只读生成出来的 C# 常量，不解析 ini。启动零解析开销，也没有「配置文件找不到」的失败路径。
+      * 生成器只在维护模型表时运行，不参与应用发布。
+
+    用法（在仓库根目录）：dotnet run，项目参数指向本目录。
+    详见 HtaciAI/Services/ModelTable/models.ini 的文件头。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>HtaciAI.Tools.ModelTableGen</RootNamespace>
+    <AssemblyName>ModelTableGen</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

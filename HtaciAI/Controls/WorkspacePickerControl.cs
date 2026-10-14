@@ -10,6 +10,8 @@ using Avalonia.Media;
 using HtaciAI.Models;
 using HtaciAI.Controls;
 
+using HtaciAI.Services;
+
 namespace HtaciAI.Controls;
 
 /// <summary>
@@ -66,8 +68,8 @@ public class WorkspacePickerControl : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock
             {
-                Text = "",                          // Package（立方体）
-                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                Text = "\uE1BC",                          // Package（立方体）
+                FontFamily = AppFonts.Icons,
                 FontSize = 18,
                 Foreground = new SolidColorBrush(Color.Parse("#4F7A61")),
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -102,8 +104,8 @@ public class WorkspacePickerControl : UserControl
 
         _chevron = new TextBlock
         {
-            Text = "",                              // ChevronDown
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = "\uF2A4",                              // ChevronDown
+            FontFamily = AppFonts.Icons,
             FontSize = 12,
             Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
             VerticalAlignment = VerticalAlignment.Center,
@@ -150,8 +152,8 @@ public class WorkspacePickerControl : UserControl
         searchGrid.Children.Add(_search);
         searchGrid.Children.Add(new TextBlock
         {
-            Text = "",                              // Search
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = "\uF690",                              // Search
+            FontFamily = AppFonts.Icons,
             FontSize = 13,
             Foreground = new SolidColorBrush(Color.Parse(SubFg)),
             VerticalAlignment = VerticalAlignment.Center,
@@ -307,7 +309,7 @@ public class WorkspacePickerControl : UserControl
 
     private void SetOpenVisual(bool open)
     {
-        _chevron.Text = open ? "" : "";       // ChevronUp / ChevronDown
+        _chevron.Text = open ? "\uF2B7" : "\uF2A4";       // ChevronUp / ChevronDown
         _card.BorderBrush = new SolidColorBrush(Color.Parse(open ? Accent : CardBorder));
     }
 
@@ -354,8 +356,8 @@ public class WorkspacePickerControl : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock
             {
-                Text = "",
-                FontFamily = new FontFamily("Segoe Fluent Icons"),
+                Text = "\uE1BC",
+                FontFamily = AppFonts.Icons,
                 FontSize = 14,
                 Foreground = new SolidColorBrush(Color.Parse("#4A5B6D")),
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -390,8 +392,8 @@ public class WorkspacePickerControl : UserControl
 
         var check = new TextBlock
         {
-            Text = "",                              // CheckMark
-            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Text = "\uF295",                              // CheckMark
+            FontFamily = AppFonts.Icons,
             FontSize = 14,
             Foreground = new SolidColorBrush(Color.Parse(Accent)),
             VerticalAlignment = VerticalAlignment.Center,
