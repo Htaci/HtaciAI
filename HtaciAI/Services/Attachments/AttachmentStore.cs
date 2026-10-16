@@ -86,7 +86,7 @@ public static class AttachmentStore
     }
 
     /// <summary>
-    /// chip 文字：图片 / 文本 / Word·Excel·PPT / 未识别时直接显示后缀名（A.hello → hello）。
+    /// chip 文字：图片 / 文本文件 / Word·Excel·PPT / 未识别时直接显示后缀名（A.hello → hello）。
     /// 无后缀统一叫「文件」。
     /// </summary>
     public static string LabelFor(string path)
@@ -95,7 +95,7 @@ public static class AttachmentStore
         if (ext.Length == 0) return "文件";
         if (ImageExts.Contains(ext)) return "图片";
         if (OfficeLabels.TryGetValue(ext, out var office)) return office;
-        if (TextExts.Contains(ext)) return "文本";
+        if (TextExts.Contains(ext)) return "文本文件";
         return ext.TrimStart('.');
     }
 

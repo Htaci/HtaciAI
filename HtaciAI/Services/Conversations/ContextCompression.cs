@@ -157,12 +157,9 @@ public static class ContextCompression
 
             builder.AppendLine(string.IsNullOrWhiteSpace(content) ? "（无正文）" : content.Trim());
 
-            // 用户消息带的附件只有路径有意义：正文里的 @图片N 标记到这里已经看不出指向谁
-            var attachments = AttachmentJson.Deserialize(message.Metadata);
-            if (attachments.Count > 0)
-                builder.Append("（本条附带文件：")
-                       .Append(string.Join("、", attachments.Select(a => a.Path)))
-                       .AppendLine("）");
+            // 附件的路径不用另行补充：正文里存的就是 [agent-file:///…] 标记，路径随正文一起
+            // 进摘要，原本在这里从 metadata 里捞一遍纯属重复。
+            // 而且那样还漏 —— 用户手打的标记在 metadata 里没有，只有正文里有。
 
             builder.AppendLine();
         }

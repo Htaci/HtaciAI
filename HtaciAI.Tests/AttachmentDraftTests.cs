@@ -321,4 +321,103 @@ public class AttachmentDraftTests
         Assert.True(draft.IsEmpty);
         Assert.Equal("发送后正文由调用方处理", draft.Expand("发送后正文由调用方处理"));
     }
+
+    // ---- 采纳正文里的标记（粘贴带标记的文本） ----
+    //
+    // 注意这里的路径一律用 Path.GetTempPath() 拼出来，不写死 "C:/..."：
+    // AttachmentStore.FromPath 会走 Path.GetFullPath，而 POSIX 上 "C:/a.png"
+    // 不是绝对路径，会被解析成「当前目录下的 C:/a.png」，测试就测不到东西了。
+
+    private static string MarkerFor(string path) => AttachmentMarker.Format(path);
+
+    [Fact]
+    public void 粘贴标记时换成占位符并登记为附件()
+    {
+        var path = TempPath("adopt1.png");
+        var draft = new AttachmentDraft();
+
+        var adopted = draft.TryAdoptMarkers($"看看这个 {MarkerFor(path)} 对不对", out var edit);
+
+        Assert.True(adopted);
+        Assert.DoesNotContain("agent-file", edit.Text);
+        Assert.Contains("@图片1", edit.Text);
+        var item = Assert.Single(draft.Items);
+        Assert.Equal(path, item.Info.Path);
+    }
+
+    [Fact]
+    public void 粘贴的标记前后补上空白分隔()
+    {
+        var path = TempPath("adopt2.png");
+        var draft = new AttachmentDraft();
+
+        // 标记原本紧贴着文字，换成占位符后必须能分开读
+        draft.TryAdoptMarkers($"看看{MarkerFor(path)}这个", out var edit);
+
+        Assert.Equal("看看 @图片1 这个", edit.Text);
+    }
+
+    [Fact]
+    public void 同一个文件出现两次时复用同一个占位符()
+    {
+        var path = TempPath("adopt3.png");
+        var marker = MarkerFor(path);
+        var draft = new AttachmentDraft();
+
+        draft.TryAdoptMarkers($"{marker} 和 {marker}", out var edit);
+
+        // 语义上是同一个附件，只登记一次
+        Assert.Single(draft.Items);
+        var token = draft.Items.Single().Token;
+        Assert.Equal(2, edit.Text.Split(token).Length - 1);
+    }
+
+    [Fact]
+    public void 没有标记时采纳是空操作()
+    {
+        var draft = new AttachmentDraft();
+        var adopted = draft.TryAdoptMarkers("普通文本", out var edit);
+
+        Assert.False(adopted);
+        Assert.Equal("普通文本", edit.Text);
+        Assert.Empty(draft.Items);
+    }
+
+    [Fact]
+    public void 真的file网址不会被采纳()
+    {
+        var draft = new AttachmentDraft();
+        var adopted = draft.TryAdoptMarkers("file:///C:/x.html 是这个", out var edit);
+
+        Assert.False(adopted);
+        Assert.Equal("file:///C:/x.html 是这个", edit.Text);
+        Assert.Empty(draft.Items);
+    }
+
+    [Fact]
+    public void 采纳后的正文再展开应当还原成原来的标记()
+    {
+        // 往返：粘贴标记 → 变成占位符 → 发送时又变回同一个标记。
+        // 这条是整套设计成立的关键 —— 复制出去再粘回来必须无损。
+        var path = TempPath("adopt 带空格.png");
+        var original = MarkerFor(path);
+
+        var draft = new AttachmentDraft();
+        draft.TryAdoptMarkers($"看 {original}", out var edit);
+
+        Assert.Equal($"看 {original}", draft.Expand(edit.Text));
+    }
+
+    [Fact]
+    public void 采纳多个不同标记时各自登记()
+    {
+        var draft = new AttachmentDraft();
+        draft.TryAdoptMarkers(
+            $"{MarkerFor(TempPath("adoptA.png"))} {MarkerFor(TempPath("adoptB.txt"))}",
+            out var edit);
+
+        Assert.Equal(2, draft.Count);
+        Assert.Contains("@图片1", edit.Text);
+        Assert.Contains("文本文件", edit.Text);
+    }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -68,7 +69,16 @@ public sealed class AttachmentChip : Border
         ToolTip.SetTip(this, item.Path);
         ToolTip.SetPlacement(this, PlacementMode.Bottom);
 
-        PointerEntered += (_, _) => Background = HoverBg;
+        PointerEntered += (_, _) =>
+        {
+            Background = HoverBg;
+
+            // 文件是否存在在悬停时才查，不在构造时查：卡片是随历史消息成批建出来的，
+            // 每条都做一次 File.Exists 是白白的系统调用（长会话里成百上千次），
+            // 而这个信息只有真正悬停看提示的那一刻才有用。
+            ToolTip.SetTip(this, BuildTooltip(item.Path));
+        };
+
         PointerExited += (_, _) => Background = IdleBg;
         PointerPressed += (_, e) =>
         {
@@ -76,6 +86,27 @@ public sealed class AttachmentChip : Border
             AttachmentStore.RevealInExplorer(item.Path);
             e.Handled = true;
         };
+    }
+
+    /// <summary>
+    /// 悬停提示。文件已被删除或挪走时在路径前加一行说明。
+    ///
+    /// <b>刻意不改卡片本身的外观</b>：路径仍然是一个合法的附件（路径在那儿，只是文件此刻不在），
+    /// 常见情形是文件被临时挪走或换机之后路径失效，把它画成警告色会让人以为配置错了、
+    /// 要去做点什么。放在提示里说清楚，够用且不打扰。
+    /// </summary>
+    internal static string BuildTooltip(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) return path;
+        }
+        catch
+        {
+            // 路径本身非法（如含非法字符）或无权访问，一律按「找不到」提示 —— 结果一样
+        }
+
+        return $"文件缺失（已被删除或移走）{Environment.NewLine}{path}";
     }
 
     private static TextBlock BuildRemoveButton(Action onRemove)

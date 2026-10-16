@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using HtaciAI.Controls;
 
 namespace HtaciAI.Views;
 
@@ -111,10 +112,11 @@ public static class MessageEditDialog
         saveBtn.Click += (_, _) => { result = MessageEditResult.Save; dlg.Close(); };
         sendBtn.Click += (_, _) => { result = MessageEditResult.Send; dlg.Close(); };
 
-        // 编辑框里 Ctrl+Enter 直接发送、Esc 取消：改完不必再去够按钮
+        // 编辑框里 Cmd/Ctrl+Enter 直接发送、Esc 取消：改完不必再去够按钮。
+        // 修饰键随平台（macOS 上是 Command），见 InputGestures 的说明。
         box.KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+            if (e.Key == Key.Enter && InputGestures.HasPrimaryCommand(e))
             {
                 result = MessageEditResult.Send;
                 dlg.Close();

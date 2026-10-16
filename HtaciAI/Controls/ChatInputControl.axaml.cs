@@ -83,12 +83,8 @@ public partial class ChatInputControl : UserControl
     {
         InitializeComponent();
 
-        // 回车发送、Shift+Enter 换行：TextBox 内部处理 Enter（AcceptsReturn）时事件已被标记 handled，
-        // 需注册 handledEventsToo:true 才能可靠拦截回车（否则 Enter 只在输入框内换行而不发送）。
-        InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDown, handledEventsToo: true);
-
-        // Ctrl+V 走隧道阶段：必须早于 TextBox 自己的粘贴，否则剪贴板里的文件/位图
-        // 已经被当成文本处理掉了（表现就是粘贴图片没反应）。
+        // 全部按键处理都走隧道阶段：必须早于 TextBox 自己的类处理器。
+        // 两件事都依赖这个顺序，见 OnInputKeyDownTunnel 的说明。
         InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDownTunnel, RoutingStrategies.Tunnel);
 
         DragDrop.SetAllowDrop(InputBox, true);
@@ -96,6 +92,13 @@ public partial class ChatInputControl : UserControl
 
         InputBox.TextChanged += (_, _) =>
         {
+            // 采纳标记时我们自己会改一次文本，那一次不该再往下走（否则递归）。
+            if (_adoptingMarkers) return;
+
+            // 粘贴进来的文本可能带着附件标记（如从别的消息里复制的一段）。
+            // 这一步把标记换成占位符并登记成附件，于是粘贴之后 chip 栏就直接有东西了。
+            AdoptPastedMarkers();
+
             // 用户手工改了正文（删掉一段、撤销）之后，正文里已经不存在的占位符要从草稿里清掉，
             // 否则 chip 栏会显示一个正文里根本没有的附件。
             if (_draft.Prune(InputBox.Text ?? "")) RefreshAttachmentBar();
@@ -250,13 +253,26 @@ public partial class ChatInputControl : UserControl
     /// </summary>
     public IList<MenuItem> MoreItems { get; } = new List<MenuItem>();
 
-    /// <summary>新增一个菜单项并挂上触发动作。</summary>
+    /// <summary>
+    /// 新增一个菜单项并挂上触发动作。
+    ///
+    /// 菜单（<see cref="MenuFlyout"/>）在这里按需装配，而不是写进 XAML：Flyout 内部的元素
+    /// 不在本控件的命名域里，给它的项写 x:Name 拿不到字段。宿主一个项都不注入时按钮保持无菜单，
+    /// 点它不会有任何反应（新建页就是这种情况 —— 它没有历史可压）。
+    /// </summary>
     public void AddMoreItem(string header, Action onClick)
     {
         var item = new MenuItem { Header = header, IsEnabled = !_running };
         item.Click += (_, _) => onClick();
         MoreItems.Add(item);
+
+        MoreMenu.Items.Add(item);
+        MoreBtn.Flyout = MoreMenu;
+        ToolTip.SetTip(MoreBtn, "更多功能");
     }
+
+    /// <summary>「更多功能」的菜单，随第一个注入项一起挂到按钮上。</summary>
+    private MenuFlyout MoreMenu { get; } = new MenuFlyout();
 
     // 说明：附件按钮没有做下拉菜单。粘贴走 Ctrl+V（含截图直接粘贴），
     // 上传走按钮本身 —— 再套一层菜单只是多一个会失效的入口。
@@ -390,26 +406,19 @@ public partial class ChatInputControl : UserControl
         Submit();
     }
 
-    private void OnInputKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-        {
-            e.Handled = true;
-
-            // 回车在运行中不当作停止 —— 那颗按钮的语义切换只对鼠标点击成立，
-            // 键盘上误按回车就中止一轮生成太容易发生了。
-            if (_running) return;
-            Submit();
-        }
-    }
-
     /// <summary>
     /// 提交当前内容。空文本且无附件时不发（纯附件也应该能发出去，所以两个条件都要看）。
     /// </summary>
     public void Submit()
     {
-        var raw = InputBox.Text ?? "";
-        if (string.IsNullOrWhiteSpace(raw) && _draft.IsEmpty) return;
+        // 首尾空白在这里去掉。两件事依赖它：
+        //   - 用户粘贴进来的文本可能自带尾部换行；
+        //   - 附件占位符插入时会补一个尾随空格（见 AttachmentDraft.InsertToken）。
+        // 只规范化本地这份「要发出去的文本」，<b>不动输入框里的内容</b> ——
+        // 发送失败时输入框要原样保留，而草稿（占位符 ↔ 路径）必须继续与框内文本对得上。
+        var raw = (InputBox.Text ?? "").Trim();
+
+        if (raw.Length == 0 && _draft.IsEmpty) return;
 
         // 发给模型的是真实路径，不是 @图片1
         var text = _draft.Expand(raw);
@@ -442,6 +451,37 @@ public partial class ChatInputControl : UserControl
         {
             // 选择器不可用时不做处理
         }
+    }
+
+    /// <summary>采纳标记期间置位，避免「改文本 → 触发 TextChanged → 再采纳」的递归。</summary>
+    private bool _adoptingMarkers;
+
+    /// <summary>
+    /// 把正文里的附件标记（<c>[agent-file:///…]</c>）换成占位符并登记为附件。
+    ///
+    /// 放在 TextChanged 里而不是只挂在粘贴事件上：这样手打的标记、拖进来的文本、
+    /// 以及撤销恢复出来的标记都能被同一段逻辑处理，不必为每个入口各写一遍
+    /// （那正是「两处实现只改一处」的老毛病）。
+    /// </summary>
+    private void AdoptPastedMarkers()
+    {
+        var text = InputBox.Text ?? "";
+        if (!AttachmentMarker.Contains(text)) return;
+
+        if (!_draft.TryAdoptMarkers(text, out var edit)) return;
+
+        _adoptingMarkers = true;
+        try
+        {
+            InputBox.Text = edit.Text;
+            InputBox.CaretIndex = edit.Caret;
+        }
+        finally
+        {
+            _adoptingMarkers = false;
+        }
+
+        RefreshAttachmentBar();
     }
 
     /// <summary>附加一批文件（路径已解析好的除外）。供宿主在外部拖放等场景调用。</summary>
@@ -534,12 +574,34 @@ public partial class ChatInputControl : UserControl
     }
 
     /// <summary>
-    /// 输入框的隧道阶段按键：Ctrl+V 要在 TextBox 自己粘贴之前截下来，
-    /// Backspace / Delete 要在光标紧邻占位符时整体删掉它。
+    /// 输入框的隧道阶段按键。三件事都必须在 TextBox 自己的类处理器之前截下来：
+    ///
+    /// <list type="bullet">
+    ///   <item><b>回车发送</b> —— <c>AcceptsReturn=True</c> 的 TextBox 会在自己的 OnKeyDown 里
+    ///     先把换行插进正文。若把「回车就发送」注册在冒泡阶段（更靠后），读到的文本末尾
+    ///     已经多了个换行，发出去的消息气泡里就会多一个空行。
+    ///     注意 Avalonia 里<b>类处理器先于同元素的实例处理器</b>执行，所以哪怕加
+    ///     <c>handledEventsToo: true</c> 也拦不住它 —— 只有隧道阶段够早。</item>
+    ///   <item><b>粘贴（Cmd+V / Ctrl+V）</b> —— 否则剪贴板里的文件/位图已经被当成文本
+    ///     处理掉了（表现就是粘贴图片没反应）。修饰键随平台，见 <see cref="IsPasteGesture"/>。</item>
+    ///   <item><b>Backspace / Delete</b> —— 光标紧邻附件占位符时整体删掉它，而不是留个残渣。</item>
+    /// </list>
     /// </summary>
     private void OnInputKeyDownTunnel(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.V && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        // 回车：发送。Shift+Enter 故意不接管，让它落到 TextBox 默认行为上（换行）。
+        if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            // 置 Handled 就阻止了 TextBox 插入换行 —— 这正是本分支存在的意义。
+            e.Handled = true;
+
+            // 运行中回车不当作「停止」：那颗按钮的语义切换只对鼠标点击成立，
+            // 键盘上误按回车就中止一轮生成太容易发生了。
+            if (!_running) Submit();
+            return;
+        }
+
+        if (InputGestures.IsPaste(e))
         {
             e.Handled = true;
             _ = PasteFromClipboardAsync();

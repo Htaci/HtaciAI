@@ -1,3 +1,4 @@
+using HtaciAI.Services.Attachments;
 using HtaciAI.Services.Storage;
 
 namespace HtaciAI.Services;
@@ -30,13 +31,20 @@ public static class ConversationTitle
     ///   <item>配置了命名模型 → 也先保持占位，等首轮 AI 回复完成后由
     ///   <c>ConversationView.ApplyAutoTitleAsync</c> 生成。</item>
     /// </list>
+    ///
+    /// 消息里可能带附件标记（<c>[agent-file:///…]</c>）。它们要先换成各自的标签再截断 ——
+    /// 否则「附件打头、后面才是文字」的消息，标题会是一串标记，而且 24 字的长度
+    /// 会被路径吃光，一点有用信息都留不下。
     /// </summary>
     public static string InitialTitle(string firstMessage)
     {
         var settings = AppSettingsStore.Current;
 
         if (!settings.AutoTopicNaming) return Placeholder;
-        if (string.IsNullOrWhiteSpace(settings.TopicNamingModelId)) return Truncate(firstMessage);
+
+        var text = AttachmentMarker.StripMarkers(firstMessage);
+
+        if (string.IsNullOrWhiteSpace(settings.TopicNamingModelId)) return Truncate(text);
 
         return Placeholder;
     }

@@ -1914,43 +1914,47 @@ public partial class ConversationView : UserControl
     }
 
     /// <summary>
-    /// 用户气泡正文。消息里记了附件时，把正文中的绝对路径换成内联文件卡片（放在文本流里，
-    /// 所以「图片在句子的哪个位置」这个信息是可见的）；没有附件就走原来的纯文本渲染，不做任何改变。
+    /// 用户气泡正文。正文里的附件标记（<c>[agent-file:///…]</c>）渲染成内联文件卡片
+    /// （放在文本流里，所以「图片在句子的哪个位置」这个信息是可见的）。
     ///
-    /// 注意：落库的正文里是真实路径（模型要读它），卡片只是渲染层的替换。
+    /// <b>渲染只认正文本身</b>，不查 metadata —— 标记是自解释的，所以：
+    /// 附件被删掉之后卡片照常显示（只是点开无处可去）、用户手打的标记也能渲染、
+    /// 复制出去的内容粘回来还是同一个东西。这三件事以前靠「拿 metadata 里的路径
+    /// 去正文里反查」是做不到的。
+    ///
+    /// 旧消息<see cref="AttachmentMarker"/> 建立之前落的正文里是裸路径，
+    /// 这里按普通文本显示 —— 那是正常可读的文字，不做特殊适配。
     /// </summary>
     private static void SetUserBubbleContent(CustomSelectableTextBlock block, ChatMessage msg)
     {
         var text = msg.Content ?? "";
-        var attachments = AttachmentJson.Deserialize(msg.Metadata);
-        if (attachments.Count == 0)
+
+        var spans = AttachmentMarker.Scan(text);
+        if (spans.Count == 0)
         {
             block.Text = text;
             return;
         }
 
         var inlines = new InlineCollection();
-        var rest = text;
-        while (rest.Length > 0)
+        var cursor = 0;
+
+        foreach (var span in spans)
         {
-            // 每轮取「最靠前的那个附件路径」，把它之前的文字原样输出，再插一张卡片
-            var hit = attachments
-                .Select(a => (Attachment: a, Index: rest.IndexOf(a.Path, StringComparison.OrdinalIgnoreCase)))
-                .Where(x => x.Index >= 0)
-                .OrderBy(x => x.Index)
-                .FirstOrDefault();
+            if (span.Start > cursor)
+                inlines.Add(new Run(text[cursor..span.Start]));
 
-            if (hit.Attachment is null)
-            {
-                inlines.Add(new Run(rest));
-                break;
-            }
+            // 路径解析不出来（不该发生，Scan 已保证非空）时退回纯文本，绝不吞掉内容
+            if (AttachmentMarker.ToAttachment(span.Path) is { } info)
+                inlines.Add(new InlineUIContainer(new AttachmentChip(info, null, compact: true)));
+            else
+                inlines.Add(new Run(text.Substring(span.Start, span.Length)));
 
-            if (hit.Index > 0)
-                inlines.Add(new Run(rest[..hit.Index]));
-            inlines.Add(new InlineUIContainer(new AttachmentChip(hit.Attachment, null, compact: true)));
-            rest = rest[(hit.Index + hit.Attachment.Path.Length)..];
+            cursor = span.End;
         }
+
+        if (cursor < text.Length)
+            inlines.Add(new Run(text[cursor..]));
 
         block.Inlines = inlines;
     }

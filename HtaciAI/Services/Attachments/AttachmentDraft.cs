@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using HtaciAI.Models;
 
@@ -66,6 +67,81 @@ public sealed class AttachmentDraft
         return true;
     }
 
+    /// <summary>
+    /// 采纳正文里已有的附件标记：把每个标记换成占位符并登记为附件
+    /// （用于「把一段带标记的文本粘进输入框」这条路径）。
+    ///
+    /// 同一个路径出现多次时复用同一个占位符 —— 语义上它们本来就是同一个附件。
+    /// 路径无法解析（如粘贴来的相对路径）的标记<b>原样留在正文里</b>，
+    /// 不猜、也不删掉用户的文字。
+    /// </summary>
+    /// <returns>true = 至少有一个标记被换成了占位符。</returns>
+    public bool TryAdoptMarkers(string text, out TextEdit edit)
+    {
+        var spans = AttachmentMarker.Scan(text);
+        if (spans.Count == 0)
+        {
+            edit = new TextEdit(text, text.Length);
+            return false;
+        }
+
+        var sb = new StringBuilder(text.Length);
+        var cursor = 0;
+        var adopted = false;
+
+        foreach (var span in spans)
+        {
+            // 标记之前的原文（上一次替换之后到这个标记开头）
+            sb.Append(text, cursor, span.Start - cursor);
+
+            var token = TokenFor(span.Path, text);
+
+            if (token is null)
+            {
+                sb.Append(text, span.Start, span.Length);   // 认不出的路径：原样保留
+            }
+            else
+            {
+                // 占位符前后各要一个空白分隔，已有则不重复补。
+                // 标记本身是紧凑的（`]` 收尾），换成 `@图片1` 后紧贴文字会读成一坨。
+                if (sb.Length > 0 && !char.IsWhiteSpace(sb[^1])) sb.Append(' ');
+
+                sb.Append(token);
+                adopted = true;
+
+                if (span.End < text.Length && !char.IsWhiteSpace(text[span.End])) sb.Append(' ');
+            }
+
+            cursor = span.End;
+        }
+
+        sb.Append(text, cursor, text.Length - cursor);
+
+        var result = sb.ToString();
+        edit = new TextEdit(result, result.Length);
+        return adopted;
+    }
+
+    /// <summary>
+    /// 取该路径对应的占位符：已登记过就复用，否则新建一个（并登记）。
+    /// 路径非法时返回 null，表示「这个标记不该被采纳」。
+    /// </summary>
+    private string? TokenFor(string path, string text)
+    {
+        var existing = _items.FirstOrDefault(
+            i => string.Equals(i.Info.Path, path, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null) return existing.Token;
+
+        if (AttachmentMarker.ToAttachment(path) is not { } info) return null;
+
+        // 查重基准用「原文本」，因为它包含所有还没被替换的标记文本，
+        // 能保证新占位符不会和正文里已有的字符串撞车。
+        var token = NextToken(info.Label, text);
+        _items.Add(new Item(token, info));
+        return token;
+    }
+
     /// <summary>移除一条附件：正文里的占位符与登记一起消失。token 不在正文里时只清登记。</summary>
     /// <param name="caret">当前光标，token 删除位置在光标之后时用它把光标往回带。</param>
     public TextEdit Remove(Item item, string text, int caret)
@@ -96,11 +172,18 @@ public sealed class AttachmentDraft
         return removed > 0;
     }
 
-    /// <summary>把正文里的占位符全部换成真实路径 —— 这一步之后才是发给模型的内容。</summary>
+    /// <summary>
+    /// 把正文里的占位符全部换成<b>附件标记</b>（见 <see cref="AttachmentMarker"/>）——
+    /// 这一步之后的内容才是落库、发给模型、并被气泡渲染的那一份。
+    ///
+    /// 之所以不再换成裸路径：带标记的正文是自解释的，渲染、复制、粘贴三件事读同一份文本。
+    /// 裸路径则要靠 metadata 去正文里反查位置，附件一旦被删就再也认不出来，
+    /// 而且复制出来是一串路径、粘回去变不成附件。
+    /// </summary>
     public string Expand(string text)
     {
         foreach (var item in _items)
-            text = text.Replace(item.Token, item.Info.Path, StringComparison.Ordinal);
+            text = text.Replace(item.Token, AttachmentMarker.Format(item.Info.Path), StringComparison.Ordinal);
 
         return text;
     }
