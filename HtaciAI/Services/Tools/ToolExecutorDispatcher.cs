@@ -26,8 +26,11 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
     /// <summary>当前权限审批档位（由输入框权限图标切换，写自 AppSettings）。</summary>
     public PermissionMode Mode { get; set; } = PermissionMode.Normal;
 
-    /// <summary>审批回调：需要用户确认时调用（由会话视图提供弹窗），返回 true=允许执行。</summary>
-    public Func<ChatToolCall, ToolDefinition, Task<bool>>? ApprovalGate { get; set; }
+    /// <summary>
+    /// 审批回调：需要用户确认时调用（由会话视图提供卡片），返回 true=允许执行。
+    /// 必须把 <paramref name="ct"/> 传下去 —— 用户点「停止」时，挂起的审批不能继续把这一轮吊着。
+    /// </summary>
+    public Func<ChatToolCall, ToolDefinition, CancellationToken, Task<bool>>? ApprovalGate { get; set; }
 
     /// <summary>内置工具宿主上下文（基准目录 + 会话技能读写）。</summary>
     public BuiltinToolContext Context { get; set; } = new();
@@ -42,6 +45,9 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
 
     public async Task<ToolExecution> ExecuteAsync(ChatToolCall call, CancellationToken ct)
     {
+        // 已经开始停止就不要再做任何准备动作（审批、read 校验）了
+        ct.ThrowIfCancellationRequested();
+
         if (string.IsNullOrWhiteSpace(call.Name))
             return ToolExecution.Fail("工具调用缺少名称");
 
@@ -60,7 +66,8 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
         // SkipApproval 的工具本身就是一次用户交互（ask_user_question），同样直接放行。
         if (!tool.IsInternal && !tool.SkipApproval && ToolPermission.RequiresApproval(tool.DangerLevel, Mode))
         {
-            var allowed = ApprovalGate is null ? true : await ApprovalGate(call, tool);
+            var allowed = ApprovalGate is null ? true : await ApprovalGate(call, tool, ct);
+            ct.ThrowIfCancellationRequested();   // 等待审批期间点了停止
             if (!allowed)
                 return ToolExecution.Ok($"用户拒绝执行工具：{tool.Name}");
         }
@@ -76,6 +83,12 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
                 ToolSource.Mcp => await _mcp.ExecuteAsync(tool, call, ct),
                 _ => ToolExecution.Fail($"暂不支持的工具来源：{tool.Source}"),
             };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 用户点了停止：不是工具失败。吞成一条普通结果的话，网关的工具循环会继续跑下去，
+            // 后面每个调用都白白执行一遍。
+            throw;
         }
         catch (Exception ex)
         {

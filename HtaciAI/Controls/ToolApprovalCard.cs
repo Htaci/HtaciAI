@@ -79,8 +79,11 @@ public sealed class ToolApprovalCard : UserControl
         Grid.SetColumn(name, 1);
         head.Children.Add(name);
 
-        var args = new SelectableTextBlock
+        // 自定义块 + 原生选择：入参是多行 JSON，交给框架自己选区（拖选/复制开箱可用），
+        // 卡片内部独立选择，不与轮内的渲染态选区互相干扰。
+        var args = new CustomSelectableTextBlock
         {
+            NativeSelectionEnabled = true,
             Text = FormatJson(call.Arguments),
             FontSize = 12,
             FontFamily = new FontFamily("Consolas"),

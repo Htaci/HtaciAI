@@ -32,8 +32,9 @@ public sealed class BuiltinToolContext
     /// <summary>
     /// 向用户提问并等待作答（由会话视图在当前轮次里插一张提问卡片实现）。为 null 时 ask_user_question 工具不可用。
     /// 返回 null 表示用户关掉了这次询问，未作答。
+    /// 取消令牌同样要传下去：点了「停止」之后不该再继续等一张没人会答的卡。
     /// </summary>
-    public Func<List<AskQuestion>, Task<List<AskAnswer>?>>? AskUser { get; set; }
+    public Func<List<AskQuestion>, CancellationToken, Task<List<AskAnswer>?>>? AskUser { get; set; }
 
     /// <summary>
     /// 当前模型是否支持视觉。由会话视图在每次发送前按所选模型刷新；
@@ -126,6 +127,9 @@ public sealed class BuiltinToolExecutor
 
     public async Task<ToolExecution> ExecuteAsync(ToolDefinition tool, ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
     {
+        // 已经停止就不要再启动任何东西（尤其是 bash：这里放过去就会真的起一个进程）
+        ct.ThrowIfCancellationRequested();
+
         try
         {
             return tool.Name switch
@@ -139,11 +143,17 @@ public sealed class BuiltinToolExecutor
                 "webfetch" => await WebfetchAsync(call, ct),
                 "load_skill" => await LoadSkillAsync(call, ctx),
                 "unload_skill" => await UnloadSkillAsync(call, ctx),
-                "ask_user_question" => await AskUserQuestionAsync(call, ctx),
+                "ask_user_question" => await AskUserQuestionAsync(call, ctx, ct),
                 "view_image" => ViewImage(call, ctx),
                 "invalid" => Invalid(call),
                 _ => ToolExecution.Fail($"暂不支持的内置工具：{tool.Name}"),
             };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 用户点了停止：必须往外抛。在这里 catch 成一条「执行异常」，网关就会把它当成
+            // 普通工具结果继续往下跑（后面的工具、下一轮请求都会照发）。
+            throw;
         }
         catch (Exception ex)
         {
@@ -219,6 +229,14 @@ public sealed class BuiltinToolExecutor
         try
         {
             await p.WaitForExitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 用户点「停止」：进程树杀掉后把取消抛出去。
+            // 不能在这里返回一条「超时」——那会让工具循环继续执行剩下的调用。
+            try { p.Kill(entireProcessTree: true); } catch { /* 已退出则忽略 */ }
+            await TryDrainAsync(stdoutTask, stderrTask);
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -493,6 +511,11 @@ public sealed class BuiltinToolExecutor
                 : $"（{matchCount} 处匹配）";
             return ToolExecution.Ok(header + "\n" + string.Join("\n", output));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 停止不能被这个兜底 catch 吞成一条「grep 失败」—— 那会让工具循环继续跑
+            throw;
+        }
         catch (Exception ex)
         {
             return ToolExecution.Fail($"grep 失败：{ex.Message}");
@@ -543,6 +566,10 @@ public sealed class BuiltinToolExecutor
             }
 
             return ToolExecution.Ok($"（{url}，{kind}，{body.Length} 字符）\n" + Truncate(body, 20000));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;   // 用户点了停止，不是超时
         }
         catch (OperationCanceledException)
         {
@@ -631,7 +658,7 @@ public sealed class BuiltinToolExecutor
 
     // ---- ask_user_question ----
 
-    private static async Task<ToolExecution> AskUserQuestionAsync(ChatToolCall call, BuiltinToolContext ctx)
+    private static async Task<ToolExecution> AskUserQuestionAsync(ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
     {
         if (ctx.AskUser is null)
             return ToolExecution.Fail("当前会话不支持向用户提问");
@@ -640,7 +667,7 @@ public sealed class BuiltinToolExecutor
         if (questions is null)
             return ToolExecution.Fail(error ?? "问题参数无效");
 
-        var answers = await ctx.AskUser(questions);
+        var answers = await ctx.AskUser(questions, ct);
         return ToolExecution.Ok(answers is null
             ? AskUserQuestionTool.CancelledText
             : AskUserQuestionTool.FormatAnswers(questions, answers));

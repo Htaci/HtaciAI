@@ -193,6 +193,13 @@ public static class DatabaseService
             version = 19;
             SetVersion(conn, version);
         }
+
+        if (version < 20)
+        {
+            RunMigrationV20(conn);
+            version = 20;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -578,11 +585,54 @@ public static class DatabaseService
     }
 
     /// <summary>
-    /// 放开 <c>chat_message.role</c> 的取值范围：加上 <c>'agent'</c>。
+    /// 放开 <c>chat_message.role</c> 的取值范围：加上 <c>'agent'</c>（V17）、<c>'error'</c>（V20）。
     ///
-    /// 这一列在 V1 建表时带了 <c>CHECK (role IN ('user','assistant','tool'))</c>，而上下文压缩要往
-    /// 消息流里插一条 <c>role='agent'</c> 的记录（见 <c>ContextCompression</c>）。SQLite 不能删改
-    /// CHECK 约束，唯一的办法是<b>重建表</b>：建新表 → 拷数据 → 删旧表 → 改名 → 重建索引与触发器。
+    /// 这一列在 V1 建表时带了 <c>CHECK (role IN ('user','assistant','tool'))</c>：上下文压缩要插
+    /// <c>role='agent'</c> 的记录（见 <c>ContextCompression</c>），请求出错要插 <c>role='error'</c>
+    /// 的记录（见 <c>ChatError</c>）。SQLite 改不了 CHECK 约束，只能重建表 ——
+    /// 流程与注意事项见 <see cref="RebuildChatMessageTable"/>。
+    /// </summary>
+    private static void RunMigrationV17(SqliteConnection conn)
+        => RebuildChatMessageTable(conn, "chat_message_v17", "'user','assistant','tool','agent'");
+
+    /// <summary>
+    /// 工作空间默认模型：workspaces 增加 default_model_id（存模型 id，空表示不指定）。
+    /// 指定后该工作空间新建的会话用这个模型，否则回落到「上次使用的模型」。
+    /// </summary>
+    private static void RunMigrationV18(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "ALTER TABLE workspaces ADD COLUMN default_model_id TEXT;";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 内置模型表接入后新增的列。
+    ///
+    /// 全部给了默认值，老行的语义不被改写。特别是 <c>config_origin</c> 默认 3（Manual）：
+    /// 升级前用户手填的模型本来就是手工配置的，内置表上线不该让它们突然挂上「配置需要补充」。
+    /// 可空的三态列（supports_array_content / temperature_supported）留 NULL，
+    /// 表示「不知道」—— 与 0（明确不支持）是两回事，不能合并。
+    /// </summary>
+    private static void RunMigrationV19(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            ALTER TABLE ai_model ADD COLUMN vendor TEXT;
+            ALTER TABLE ai_model ADD COLUMN max_output_tokens INTEGER NOT NULL DEFAULT -1;
+            ALTER TABLE ai_model ADD COLUMN supports_array_content INTEGER;
+            ALTER TABLE ai_model ADD COLUMN temperature_supported INTEGER;
+            ALTER TABLE ai_model ADD COLUMN config_origin INTEGER NOT NULL DEFAULT 3;
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>同 V17，只是把 <c>'error'</c> 也加进 role 的合法取值。</summary>
+    private static void RunMigrationV20(SqliteConnection conn)
+        => RebuildChatMessageTable(conn, "chat_message_v20", "'user','assistant','tool','agent','error'");
+
+    /// <summary>
+    /// 重建 chat_message：SQLite 不能删改 CHECK 约束，放开 role 取值只能这么做。
     ///
     /// 重建是破坏性操作，所以做了三件保命的事：
     /// <list type="number">
@@ -591,18 +641,20 @@ public static class DatabaseService
     ///   <item>先删掉 <c>trg_msg_delete_chat</c>、最后原样建回来 —— 改名那一步会检查整个 schema，
     ///     而它引用的旧表在中间那个瞬间是不存在的，留着它会让 RENAME 直接报错。</item>
     /// </list>
-    /// 新表的列与约束必须与当前实际结构一致（包含 V13 用 ALTER 补上的 duration_ms），
+    /// 新表的列与约束必须与当前实际结构一致（含 ALTER 陆续补上的 duration_ms 等），
     /// 少一列就等于把那一列的数据丢掉。
     /// </summary>
-    private static void RunMigrationV17(SqliteConnection conn)
+    /// <param name="tempTable">中间表名。每个迁移用各自的：中途失败的迁移会把名字占住。</param>
+    /// <param name="roleValues">role 的合法取值（已带引号的 SQL 字面量）。</param>
+    private static void RebuildChatMessageTable(SqliteConnection conn, string tempTable, string roleValues)
     {
-        const string createTable = """
-            CREATE TABLE chat_message_v17 (
+        var createTable = $"""
+            CREATE TABLE {tempTable} (
                 id              TEXT PRIMARY KEY,
                 session_id      TEXT NOT NULL,
                 turn_id         TEXT NOT NULL,
                 sequence_number INTEGER NOT NULL,
-                role            TEXT NOT NULL CHECK (role IN ('user','assistant','tool','agent')),
+                role            TEXT NOT NULL CHECK (role IN ({roleValues})),
                 content         TEXT,
                 thinking        TEXT,
                 tool_call_id    TEXT,
@@ -621,8 +673,8 @@ public static class DatabaseService
             );
             """;
 
-        const string copyRows = """
-            INSERT INTO chat_message_v17
+        var copyRows = $"""
+            INSERT INTO {tempTable}
                 (id, session_id, turn_id, sequence_number, role, content, thinking, tool_call_id, tool_name,
                  status, usage_json, model_name, metadata, is_deleted, deleted_at, created_at, updated_at, duration_ms)
             SELECT
@@ -658,7 +710,7 @@ public static class DatabaseService
                 throw new InvalidOperationException($"chat_message 重建时行数对不上：{before} → {copied}");
 
             Execute(conn, transaction, "DROP TABLE chat_message;");
-            Execute(conn, transaction, "ALTER TABLE chat_message_v17 RENAME TO chat_message;");
+            Execute(conn, transaction, $"ALTER TABLE {tempTable} RENAME TO chat_message;");
             Execute(conn, transaction, recreateIndexes);
             Execute(conn, transaction, recreateTrigger);
 
@@ -669,38 +721,6 @@ public static class DatabaseService
             transaction.Rollback();
             throw;
         }
-    }
-
-    /// <summary>
-    /// 工作空间默认模型：workspaces 增加 default_model_id（存模型 id，空表示不指定）。
-    /// 指定后该工作空间新建的会话用这个模型，否则回落到「上次使用的模型」。
-    /// </summary>
-    private static void RunMigrationV18(SqliteConnection conn)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "ALTER TABLE workspaces ADD COLUMN default_model_id TEXT;";
-        cmd.ExecuteNonQuery();
-    }
-
-    /// <summary>
-    /// 内置模型表接入后新增的列。
-    ///
-    /// 全部给了默认值，老行的语义不被改写。特别是 <c>config_origin</c> 默认 3（Manual）：
-    /// 升级前用户手填的模型本来就是手工配置的，内置表上线不该让它们突然挂上「配置需要补充」。
-    /// 可空的三态列（supports_array_content / temperature_supported）留 NULL，
-    /// 表示「不知道」—— 与 0（明确不支持）是两回事，不能合并。
-    /// </summary>
-    private static void RunMigrationV19(SqliteConnection conn)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            ALTER TABLE ai_model ADD COLUMN vendor TEXT;
-            ALTER TABLE ai_model ADD COLUMN max_output_tokens INTEGER NOT NULL DEFAULT -1;
-            ALTER TABLE ai_model ADD COLUMN supports_array_content INTEGER;
-            ALTER TABLE ai_model ADD COLUMN temperature_supported INTEGER;
-            ALTER TABLE ai_model ADD COLUMN config_origin INTEGER NOT NULL DEFAULT 3;
-            """;
-        cmd.ExecuteNonQuery();
     }
 
     private static int CountMessages(SqliteConnection conn, SqliteTransaction? transaction)

@@ -70,10 +70,15 @@ public static class ScriptProcess
         {
             await p.WaitForExitAsync(linkedCts.Token);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 用户点了停止：子进程必须一起收掉。原先这里直接 return，解释器进程会留在后台
+            // 继续跑，用户看到的就是「点了停止但东西还在动」。
+            try { p.Kill(entireProcessTree: true); } catch { /* 已退出则忽略 */ }
+            throw;
+        }
         catch (OperationCanceledException)
         {
-            if (ct.IsCancellationRequested)
-                return new ScriptRunResult { Success = false, Error = "工具调用已取消", CommandLine = commandLine };
             try { p.Kill(entireProcessTree: true); } catch { /* 已退出则忽略 */ }
             return new ScriptRunResult
             {

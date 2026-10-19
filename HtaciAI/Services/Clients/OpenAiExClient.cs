@@ -49,6 +49,34 @@ public sealed class OpenAiExClient : IChatClient
     }
 
     /// <summary>
+    /// 把一次失败的响应整理成给人看的文本：首行是状态码，其后是服务端返回体。
+    ///
+    /// 首行格式固定（<c>HTTP 401 Unauthorized</c>）是有用的：错误卡的标题取的就是异常消息的首行
+    /// （见 <c>ChatError.Summarize</c>），状态码摆在标题上，一眼能看出是鉴权、模型名不存在还是额度用尽。
+    /// </summary>
+    private static async Task<string> DescribeHttpFailureAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var head = $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}".TrimEnd();
+
+        try
+        {
+            var body = (await response.Content.ReadAsStringAsync(ct)).Trim();
+            if (body.Length == 0) return head;
+
+            // 服务端偶尔回一整页 HTML 错误页，无上限地收进去只会把记录撑爆
+            const int bodyLimit = 8000;
+            if (body.Length > bodyLimit) body = body[..bodyLimit] + "\n…（返回体过长，已截断）";
+
+            return head + "\n服务端返回：" + body;
+        }
+        catch
+        {
+            // 读返回体失败（连接已断等）不影响「这次请求失败」这件事本身
+            return head;
+        }
+    }
+
+    /// <summary>
     /// 规范化到「API 版本根」，如 <c>https://api.moonshot.cn</c> → <c>https://api.moonshot.cn/v1</c>。
     ///
     /// 与 <see cref="NormalizeOpenAiEndpoint"/>、<see cref="ModelsUrl"/> 共用同一套判断，
@@ -88,8 +116,7 @@ public sealed class OpenAiExClient : IChatClient
         IReadOnlyList<ChatMessage> history,
         string? systemPrompt,
         ChatRequestOptions options,
-        Action<string> onContent,
-        Action<string>? onThinking,
+        ChatRoundSink sink,
         CancellationToken ct)
     {
         var messages = BuildMessages(systemPrompt, history, options.SupportsVision);
@@ -103,7 +130,11 @@ public sealed class OpenAiExClient : IChatClient
 
         //using var response = await Http.SendAsync(request, ct);
         using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
+
+        // 不用 EnsureSuccessStatusCode：它抛出的消息里只有状态码，
+        // 而服务端的错误原因（鉴权失败、模型不存在、额度用尽…）全在返回体里 —— 那才是排查要看的。
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(await DescribeHttpFailureAsync(response, ct), null, response.StatusCode);
 
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream, Encoding.UTF8);
@@ -118,7 +149,9 @@ public sealed class OpenAiExClient : IChatClient
 
         while (true)
         {
-            var line = await reader.ReadLineAsync();
+            // 必须把 ct 交给读取本身：SendAsync 的 ct 只管到响应头，
+            // 流式阶段（输出中）点「停止」就靠这里把读操作中断掉。
+            var line = await reader.ReadLineAsync(ct);
             if (line is null) break;
             if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
 
@@ -126,6 +159,12 @@ public sealed class OpenAiExClient : IChatClient
             if (data == "[DONE]") break;
 
             using var doc = JsonDocument.Parse(data);
+
+            // 有些服务商在流中间用 error 对象报错（内容审计、额度用尽…）。
+            // 不处理会连原因一起丢掉 —— 那一轮静默地变成「空回复」。
+            if (doc.RootElement.TryGetProperty("error", out var errorEl))
+                throw new InvalidOperationException("流式响应中返回错误：" + errorEl.GetRawText());
+
             if (!doc.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
                 continue;
 
@@ -149,7 +188,7 @@ public sealed class OpenAiExClient : IChatClient
                     if (!string.IsNullOrEmpty(text))
                     {
                         thinkingSb.Append(text);
-                        onThinking?.Invoke(text);
+                        sink.OnThinking(text);
                     }
                 }
             }
@@ -161,11 +200,13 @@ public sealed class OpenAiExClient : IChatClient
                 if (!string.IsNullOrEmpty(text))
                 {
                     contentSb.Append(text);
-                    onContent(text);
+                    sink.OnContent(text);
                 }
             }
 
-            // tool_calls：数组，按 index 累积 id / function.name / function.arguments
+            // tool_calls：数组，按 index 累积 id / function.name / function.arguments。
+            // 每片都往外抛一次：界面靠它「参数还在传的时候就先把工具卡建出来」，
+            // 攒到最后一次性返回的话，用户要等到工具都跑完了才看得到任何动静。
             if (delta.TryGetProperty("tool_calls", out var tc) && tc.ValueKind == JsonValueKind.Array)
             {
                 foreach (var item in tc.EnumerateArray())
@@ -178,15 +219,30 @@ public sealed class OpenAiExClient : IChatClient
                         toolCalls.Add(new ChatToolCall());
 
                     var call = toolCalls[index];
+                    string? idDelta = null;
+                    string? nameDelta = null;
+                    var argumentDelta = "";
+
                     if (item.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String)
-                        call.Id = idProp.GetString();
+                    {
+                        idDelta = idProp.GetString();
+                        call.Id = idDelta;
+                    }
                     if (item.TryGetProperty("function", out var fn) && fn.ValueKind == JsonValueKind.Object)
                     {
                         if (fn.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String)
-                            call.Name = nameProp.GetString();
+                        {
+                            nameDelta = nameProp.GetString();
+                            call.Name = nameDelta;
+                        }
                         if (fn.TryGetProperty("arguments", out var argProp) && argProp.ValueKind == JsonValueKind.String)
-                            call.Arguments += argProp.GetString();
+                        {
+                            argumentDelta = argProp.GetString() ?? "";
+                            call.Arguments += argumentDelta;
+                        }
                     }
+
+                    sink.OnToolCall(new ToolCallDelta(index, idDelta, nameDelta, argumentDelta));
                 }
             }
 

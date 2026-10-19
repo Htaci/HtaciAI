@@ -19,7 +19,8 @@ namespace HtaciAI.Controls;
 ///  - 语义上更贴合实际需求（复制一轮回答），也不会把上下两轮的内容连成一段；
 ///  - 与原生选择的块不冲突：本选择器只接管「原生选择被禁用」的块
 ///    （见 <see cref="CustomSelectableTextBlock.NativeSelectionEnabled"/>），
-///    用户气泡、代码块这些自己就能拖选的块一律放行。
+///    用户气泡、代码块、错误卡、工具入参、全部原文这些自己就能拖选的块一律放行 ——
+///    它们同时也是选区运算的边界（指针落在上面时不把选区延伸过去）。
 ///
 /// 与 <see cref="TurnSelectionHost"/> 的「原文模式」是两条独立路径：原文模式把块切成原生可选，
 /// 本选择器则在<b>渲染态</b>下就能选中已渲染的文本，两者互不干扰。
@@ -93,15 +94,29 @@ public sealed class TurnTextSelector
         return sb.ToString();
     }
 
+    /// <summary>
+    /// 复制选中文本。
+    ///
+    /// 整体包在 try 里：写系统剪贴板会抛异常（剪贴板被别的程序占住时 Windows 直接给
+    /// CLIPBRD_E_CANT_OPEN），而这里是 <c>async void</c> —— 抛出去就是进程崩溃。
+    /// Avalonia 自己的 <c>SelectableTextBlock.Copy</c> 同样对这类异常做了兜底。
+    /// </summary>
     public async void CopyAsync()
     {
-        var text = GetSelectedText();
-        if (string.IsNullOrEmpty(text)) return;
-        var clipboard = TopLevel.GetTopLevel(_host)?.Clipboard;
-        if (clipboard == null) return;
-        var transfer = new DataTransfer();
-        transfer.Add(DataTransferItem.CreateText(text));
-        await clipboard.SetDataAsync(transfer);
+        try
+        {
+            var text = GetSelectedText();
+            if (string.IsNullOrEmpty(text)) return;
+            var clipboard = TopLevel.GetTopLevel(_host)?.Clipboard;
+            if (clipboard == null) return;
+            var transfer = new DataTransfer();
+            transfer.Add(DataTransferItem.CreateText(text));
+            await clipboard.SetDataAsync(transfer);
+        }
+        catch (Exception)
+        {
+            // 剪贴板被占用 / 权限拒绝等：复制失败不该让程序退出，用户再点一次即可
+        }
     }
 
     // ---- 宿主指针 / 键盘事件 ----

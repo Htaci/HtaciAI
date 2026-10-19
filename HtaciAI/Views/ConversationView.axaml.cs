@@ -113,6 +113,20 @@ public partial class ConversationView : UserControl
     /// </summary>
     private Dictionary<string, string> _toolCallInputs = new();
 
+    /// <summary>
+    /// 实时轮里已经建出来的工具卡：tool_call_id → 卡。
+    /// 参数分片一到就建卡（见 <see cref="BeginAssistantRound"/> 的 OnToolCall），之后
+    /// 「开始执行」「执行完成」都只是更新这一张 —— 不复用的话一次调用会出现两张卡，
+    /// 一张永远停在「执行中」。只在一轮内有效，每轮开始清空。
+    /// </summary>
+    private readonly Dictionary<string, ToolCallCard> _toolCardsById = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// 本轮建了卡、但流式分片里还没带 tool_call_id 的卡（少数服务商首片不带 id）。
+    /// 落库时按先后认领，认领不到才新建。
+    /// </summary>
+    private readonly List<ToolCallCard> _unclaimedToolCards = new();
+
     /// <summary>当前轮请求的开始时刻（Unix 毫秒），用于聚合卡显示用时。</summary>
     private long _turnStartedAt;
 
@@ -346,7 +360,7 @@ public partial class ConversationView : UserControl
     /// <summary>
     /// 工具审批入口：审批卡片同样插进当前轮次的正文之间，等用户点「允许执行 / 拒绝」。
     /// </summary>
-    private async Task<bool> ApproveInlineAsync(ChatToolCall call, ToolDefinition tool)
+    private async Task<bool> ApproveInlineAsync(ChatToolCall call, ToolDefinition tool, CancellationToken ct)
     {
         ToolApprovalCard? card = null;
         ReportActivity(SessionActivity.WaitingConfirm);
@@ -371,8 +385,19 @@ public partial class ConversationView : UserControl
                 approvalCard.Respond(action != NoticeAction.Deny);
             });
 
-        var allowed = await card.Allowed;
-        await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
+        bool allowed;
+        try
+        {
+            // WaitAsync(ct)：点「停止」时这张卡要一起作废。
+            // 原来这里是裸 await —— 审批卡一挂起，停止按钮就完全没反应，直到用户去点允许/拒绝。
+            allowed = await approvalCard.Allowed.WaitAsync(ct);
+        }
+        finally
+        {
+            // 取消时也要撤掉卡片：否则它会留在正文里，变成一个永远等不到结果的控件
+            await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(approvalCard));
+        }
+
         ReportActivity(SessionActivity.Running);   // 授权只是打断一下，本轮请求还在继续
         return allowed;
     }
@@ -382,7 +407,7 @@ public partial class ConversationView : UserControl
     /// （没有活动轮次时兜底挂到消息面板末尾），等用户作答后把结果交回工具。
     /// 答完就把卡片撤掉：重新打开会话本来也不会渲染它，这次询问的记录留在工具卡里。
     /// </summary>
-    private async Task<List<AskAnswer>?> AskInlineAsync(List<AskQuestion> questions)
+    private async Task<List<AskAnswer>?> AskInlineAsync(List<AskQuestion> questions, CancellationToken ct)
     {
         AskUserCard? card = null;
         ReportActivity(SessionActivity.WaitingConfirm);
@@ -397,8 +422,17 @@ public partial class ConversationView : UserControl
             "需要你的协助，请完成问题回答。",
             workspaceName: _profile.WorkspaceName);
 
-        var answers = await card.Answer;
-        await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
+        List<AskAnswer>? answers;
+        try
+        {
+            // 同审批卡：用户点「停止」时不能再等一个没人会答的问题
+            answers = await card.Answer.WaitAsync(ct);
+        }
+        finally
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
+        }
+
         ReportActivity(SessionActivity.Running);
         return answers;
     }
@@ -455,8 +489,92 @@ public partial class ConversationView : UserControl
         _messages.Add(m);
         if (m.Role == "user")
             AddMessage(m);
+        else if (m.Role == "assistant")
+            IndexToolCallInputs(m);
         else if (m.Role == "tool")
-            AddToolCallCard(m);
+            UpsertToolCard(m);
+        else if (ChatError.IsError(m))
+            AddErrorCard(m);
+    }
+
+    /// <summary>
+    /// 把一条 assistant 消息里的 tool_calls 记进入参索引。实时轮的工具卡靠它显示入参 ——
+    /// 这个索引原先只在读历史时构建，于是实时轮的调用查不到入参、展开看到的是「{}」，
+    /// 要重开会话才正常。<see cref="BeginAssistantRound"/> 的流式回调也会实时写一遍
+    /// （让卡片在参数还在传时就有内容），这里是流结束后的权威版本。
+    /// </summary>
+    private void IndexToolCallInputs(ChatMessage assistantMsg)
+    {
+        foreach (var call in ToolCallJson.Deserialize(assistantMsg.Metadata))
+            if (!string.IsNullOrEmpty(call.Id))
+                _toolCallInputs[call.Id] = call.Arguments ?? "{}";
+    }
+
+    /// <summary>
+    /// 网关回调：同一条消息的第二次落库（工具跑完了、重新解析成 invalid、补本轮耗时）。
+    /// 工具行的第二次落库正好就是「卡片从执行中翻成结果」，所以这里要更新界面。
+    /// </summary>
+    private async Task UpdatePersistedMessageAsync(ChatMessage m)
+    {
+        // 写失败不外抛：占位行落的是「被中断」这个合法结果，所以库里留下的历史照样是
+        // 完整可发送的（只是少了这次的真实输出），没必要为一次次要写入把整轮对话打断。
+        try { await ChatRepository.UpdateMessageAsync(m); } catch { /* 忽略 */ }
+
+        if (m.Role == "tool")
+            UpsertToolCard(m);
+        else if (m.Role == "assistant")
+            // 未解析的工具会被改写成 invalid（工具名与入参都换了），索引跟着更新
+            IndexToolCallInputs(m);
+    }
+
+    /// <summary>
+    /// 工具行的实时更新落到卡片上：流式阶段建过卡的就复用它，没有才新建。
+    /// 复用是必须的 —— 同一次调用建两张卡的话，一张会永远停在「执行中」。
+    /// </summary>
+    private void UpsertToolCard(ChatMessage toolMsg)
+    {
+        var id = toolMsg.ToolCallId;
+        var name = toolMsg.ToolName ?? "工具";
+        var input = FindToolCallInput(id);
+
+        ToolCallCard? card = null;
+        if (!string.IsNullOrEmpty(id))
+            _toolCardsById.TryGetValue(id, out card);
+
+        // 流式阶段建过卡，但分片里始终没带 id：按先后认领，别让它变成一张永远没有结果的孤儿卡
+        if (card is null && _unclaimedToolCards.Count > 0)
+        {
+            card = _unclaimedToolCards[0];
+            _unclaimedToolCards.RemoveAt(0);
+            if (!string.IsNullOrEmpty(id))
+                _toolCardsById[id] = card;
+        }
+
+        if (card is null)
+        {
+            // 没见过这张卡（服务商没在流里下发 tool_calls、或是「重新生成」这类回放）：照旧新建
+            AddToolCallCard(toolMsg);
+            return;
+        }
+
+        if (toolMsg.Status is "completed" or "failed")
+            card.SetData(name, input, toolMsg.Content ?? "");
+        else
+            card.SetRunning(name, input);
+    }
+
+    /// <summary>
+    /// 实时：错误记录渲染成红色错误卡，追加到当前 turn 的内容区
+    /// （没有活动 turn 时兜底挂到消息面板）。
+    /// </summary>
+    private void AddErrorCard(ChatMessage msg)
+    {
+        var card = new ErrorCard(msg.Content);
+        if (_activeTurnHost is null)
+            MessagesPanel.Children.Add(card.Root);
+        else
+            _activeTurnHost.ContentPanel.Children.Add(card.Root);
+        ScrollToEnd();
     }
 
     // ---- 加载模型与消息 ----
@@ -518,6 +636,10 @@ public partial class ConversationView : UserControl
             _historyLoaded = true;
             _historyLoadTcs?.TrySetResult();
         }
+
+        // 打开会话时懒修一次：只碰这个会话，不做全库扫描
+        using (PerfTrace.Measure("①.5 工具调用配对修复"))
+            await RepairToolCallPairingAsync();
 
         using (PerfTrace.Measure("② 首屏渲染（含分组）"))
         {
@@ -624,8 +746,7 @@ public partial class ConversationView : UserControl
                 history,
                 ContextCompression.SummarySystemPrompt,
                 options,
-                chunk => builder.Append(chunk),
-                null,
+                new ChatRoundSink { OnContent = chunk => builder.Append(chunk) },
                 ct);
 
             var summary = builder.ToString().Trim();
@@ -871,6 +992,10 @@ public partial class ConversationView : UserControl
         // 本轮是不是用户自己按「停止」结束的：那种情况不发出错提醒
         _stoppedByUser = false;
 
+        // 发送前再修一次：会话是打开着的，但坏消息可能是上一轮刚被强杀时留下的。
+        // 没坏消息时这只是内存里的一遍扫描，不写库。
+        await RepairToolCallPairingAsync();
+
         _profile.State.LastMessageAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await PersistSessionAsync();
 
@@ -917,9 +1042,18 @@ public partial class ConversationView : UserControl
                 options,
                 client,
                 _toolExecutor,
-                async m => { persisted.Add(m.Id); await PersistMessage(m); },
+                new ChatPersistSink
+                {
+                    Insert = async m => { persisted.Add(m.Id); await PersistMessage(m); },
+                    Update = UpdatePersistedMessageAsync,
+                },
                 BeginAssistantRound,
                 _sendCts.Token);
+
+            // 流式阶段的停止由网关内部按 interrupted 收尾并<b>正常返回</b>，不会走到下面的 catch。
+            // 按「失败但没有错误信息」识别出来 —— 否则用户自己按的停止也会收到一条「任务出错」提醒。
+            if (turn is { Success: false, Error: null })
+                _stoppedByUser = true;
         }
         catch (OperationCanceledException)
         {
@@ -935,6 +1069,11 @@ public partial class ConversationView : UserControl
             // 不会走到收尾逻辑，定时器会一直跑下去（运行中的 DispatcherTimer 会吊住页面）。
             StopTurnTimer();
         }
+
+        // 停在半路的工具卡（参数还在接收 / 执行中）不会再有回调，就地收成终态。
+        // 两条停止路径都要覆盖：工具执行中被取消（异常上抛）、流式输出中被取消（网关正常返回）。
+        if (_stoppedByUser)
+            MarkLiveToolCardsInterrupted();
 
         // 重新生成：新消息落库时拿到的序列号在会话末尾（当下只能拿到「最大值 + 1」），
         // 这里把它们挪回原位置，否则重生成的回复会跑到最后一轮后面。
@@ -1215,7 +1354,8 @@ public partial class ConversationView : UserControl
         };
 
         var builder = new StringBuilder();
-        await client.StreamAsync(history, system, options, chunk => builder.Append(chunk), null, CancellationToken.None);
+        await client.StreamAsync(history, system, options,
+            new ChatRoundSink { OnContent = chunk => builder.Append(chunk) }, CancellationToken.None);
 
         return builder.ToString().Trim().Trim('"', '\'', '“', '”', '。', '，', '、', '\r', '\n', ' ');
     }
@@ -1305,7 +1445,7 @@ public partial class ConversationView : UserControl
             {
                 _turnGroups.Add((null, new List<ChatMessage> { m }));
             }
-            else if (m.Role is "assistant" or "tool")
+            else if (m.Role is "assistant" or "tool" or "error")
             {
                 var key = m.TurnId;
                 var last = _turnGroups.Count > 0 ? _turnGroups[^1] : default;
@@ -1589,6 +1729,11 @@ public partial class ConversationView : UserControl
                 }
                 toolCount++;
             }
+            else if (ChatError.IsError(m))
+            {
+                // 错误卡排在那一轮的末尾：它就是这一轮的结果
+                host.ContentPanel.Children.Add(new ErrorCard(m.Content).Root);
+            }
         }
 
         // 历史记录：聚合卡显示推算出的用时并保持折叠
@@ -1711,6 +1856,10 @@ public partial class ConversationView : UserControl
                 sb.AppendLine("输出: " + (string.IsNullOrWhiteSpace(m.Content) ? "（无输出）" : m.Content.TrimEnd()));
                 sb.AppendLine();
             }
+            else if (ChatError.IsError(m))
+            {
+                sb.AppendLine("[错误] " + (m.Content ?? "").TrimEnd()).AppendLine();
+            }
         }
         return sb.ToString().TrimEnd();
     }
@@ -1720,7 +1869,29 @@ public partial class ConversationView : UserControl
     {
         var card = new ToolCallCard();
         card.SetData(toolMsg.ToolName ?? "工具", FindToolCallInput(toolMsg.ToolCallId), toolMsg.Content ?? "");
+        AttachToolCard(card);
+    }
 
+    /// <summary>
+    /// 用户按下停止：把还停在「接收参数 / 执行中」的实时工具卡收成终态，
+    /// 然后清掉索引。网关不会再回调这些卡了 —— 不处理的话它们会一直转下去，
+    /// 直到用户重开这个会话（历史是按落库状态重绘的）。
+    /// </summary>
+    private void MarkLiveToolCardsInterrupted()
+    {
+        foreach (var card in _toolCardsById.Values) card.MarkInterrupted();
+        foreach (var card in _unclaimedToolCards) card.MarkInterrupted();
+
+        _toolCardsById.Clear();
+        _unclaimedToolCards.Clear();
+    }
+
+    /// <summary>
+    /// 把一张工具卡挂进本轮：计数、必要时把卡外那段叙述收进聚合卡（顺序才对）、滚动。
+    /// 参数刚开始流式时就要挂卡，所以建卡与挂卡分成两步。
+    /// </summary>
+    private void AttachToolCard(ToolCallCard card)
+    {
         _turnToolCount++;
         if (_activeTurnHost is null)
         {
@@ -1748,6 +1919,33 @@ public partial class ConversationView : UserControl
         _activeTurnCard ??= AttachActivityCard(_activeTurnHost);
         _activeTurnHost.MoveBodyIntoCard(_activeTurnBody);
         _activeTurnBody = null;
+    }
+
+    /// <summary>
+    /// 懒修复历史里「配不上对」的工具调用：带 tool_calls 的 assistant 消息后面缺了对应的 tool 结果。
+    ///
+    /// 成因是应用在工具执行途中被关掉 —— assistant 那条（含 tool_calls）已经落库，工具结果还没写。
+    /// 危害不止这一轮：那条残缺消息会一直留在历史里，此后<b>每次</b>发送都被服务端 400 拒掉
+    /// （<c>insufficient tool messages following tool_calls message</c>），会话再也发不出消息，
+    /// 除非手动删掉那一轮。
+    ///
+    /// 只修当前会话，且只在<b>打开会话</b>与<b>发送前</b>各跑一次 —— 全库扫描在长会话上代价太大，
+    /// 而这两个时刻正好是「马上要发出去」和「刚打开来看」的时候，懒检查足够覆盖。
+    /// 没有坏消息时它就只是一遍内存扫描，一个字都不写库。
+    /// </summary>
+    private async Task RepairToolCallPairingAsync()
+    {
+        var touched = ToolCallRepair.RepairInPlace(_messages);
+        if (touched.Count == 0) return;
+
+        foreach (var message in touched)
+        {
+            // 落库失败不影响这次发送：网关拼请求时还会再修一遍（ToolCallRepair.ForWire）
+            try { await ChatRepository.UpdateMessageAsync(message); } catch { /* 忽略 */ }
+        }
+
+        // metadata 变了，入参索引跟着失效，重建一次
+        BuildToolCallIndex();
     }
 
     /// <summary>按 tool_call_id 反查输入参数（来自对应 assistant 消息的 metadata 里的 tool_calls）。</summary>
@@ -2019,6 +2217,14 @@ public partial class ConversationView : UserControl
     {
         var (displayName, providerName) = ModelInfo(assistantMsg.ModelName ?? "");
 
+        // 上一轮的工具卡到这里已经收尾（结果已经回填），按 id 的索引可以清掉了。
+        // 每轮都要清：不同轮的 index 都从 0 开始，留着上一轮的会串卡。
+        _toolCardsById.Clear();
+        _unclaimedToolCards.Clear();
+
+        // 本轮按 index 累积每个调用的名字与入参（服务端会把一个名字/参数切成多片下发）
+        var roundCalls = new Dictionary<int, (ToolCallCard Card, StringBuilder Name, StringBuilder Args)>();
+
         // 同一 turn（含多轮工具调用）复用根容器；新 turn 时重建
         if (assistantMsg.TurnId is null || assistantMsg.TurnId != _activeTurnId || _activeTurnRoot is null)
         {
@@ -2090,7 +2296,40 @@ public partial class ConversationView : UserControl
                 _activeTurnCard?.ScrollContentToEnd();
                 ScrollToEnd();
             },
-            OnFailed = message => body.AppendText("请求失败：" + message),
+            OnToolCall = delta =>
+            {
+                Input.MarkFirstOutput();
+
+                // 第一次见到这个 index：参数还在传，卡就先立起来。
+                // 等流结束才建卡的话，用户要盯着一个毫无反应的界面直到工具跑完 ——
+                // 而在模型写调用参数的这段时间里，界面上其实什么都不会变。
+                if (!roundCalls.TryGetValue(delta.Index, out var call))
+                {
+                    var card = new ToolCallCard();
+                    card.SetStreaming(delta.Name ?? "工具");
+                    AttachToolCard(card);
+                    _unclaimedToolCards.Add(card);
+                    roundCalls[delta.Index] = call = (card, new StringBuilder(), new StringBuilder());
+                }
+
+                if (!string.IsNullOrEmpty(delta.Name))
+                    call.Card.SetStreamingName(call.Name.Append(delta.Name).ToString());
+
+                if (!string.IsNullOrEmpty(delta.ArgumentsDelta))
+                    call.Card.SetStreamingInput(call.Args.Append(delta.ArgumentsDelta).ToString());
+
+                if (!string.IsNullOrEmpty(delta.Id))
+                {
+                    // 实时补入参索引：它原先只在读历史时构建，实时轮的调用查不到入参，
+                    // 展开工具卡看到的是「{}」（要重开会话才正常）。落库与渲染都靠它取入参。
+                    _toolCallInputs[delta.Id] = call.Args.ToString();
+                    _toolCardsById[delta.Id] = call.Card;
+                    _unclaimedToolCards.Remove(call.Card);
+                }
+
+                _activeTurnCard?.ScrollContentToEnd();
+                ScrollToEnd();
+            },
         };
     }
 
@@ -2256,8 +2495,7 @@ public partial class ConversationView : UserControl
     // 原先这里放着附件草稿（占位符 token ↔ 文件路径）与草稿落库的整套实现。
     // 它们已经搬走，原因见这条链路上的三处：
     //   * Controls/ChatInputControl.axaml(.cs) —— 控件把逻辑接到 Avalonia 事件上
-    //   * Services/Attachments/AttachmentDraft.cs —— 纯逻辑（有单元测试覆盖）
-    //   * HtaciAI.Tests —— 覆盖 token 碰撞、光标处整体删除、孤儿清理、序列化
+    //   * Services/Attachments/AttachmentDraft.cs —— 纯逻辑（token 碰撞 / 光标处整体删除 / 孤儿清理 / 序列化）
     //
     // 视图这边只需在装配时把 _profile.Draft 交给控件（见 InitializeAsync 与构造函数）。
 
@@ -2453,6 +2691,21 @@ public partial class ConversationView : UserControl
         private readonly TextBlock _titleBlock;
         private readonly TextBlock _inputBlock;
         private readonly TextBlock _outputBlock;
+
+        /// <summary>标题右侧的运行状态（接收参数… / 执行中…）。跑完就收起，所以空文本时整个隐藏。</summary>
+        private readonly TextBlock _statusBlock;
+
+        /// <summary>「输出」那一行的小标题。入参还在接收时整段输出都不存在，跟着输出块一起收起。</summary>
+        private readonly TextBlock _outputLabel;
+
+        /// <summary>上一次重排流式入参的时刻。参数分片很密，展开状态下不能每片都重排。</summary>
+        private long _lastInputPaint;
+
+        /// <summary>流式入参重排的最小间隔（毫秒）。只影响展开中的卡，折叠时一个字都不排版。</summary>
+        private const int InputPaintIntervalMs = 120;
+
+        /// <summary>卡片是否已经到了终态（有结果 / 已被中断）。终态不再接受状态切换。</summary>
+        private bool _terminal;
         private readonly StackPanel _rawStack;
         private readonly StackPanel _swapRow;
         private readonly TextBlock _swapLabel;
@@ -2530,10 +2783,28 @@ public partial class ConversationView : UserControl
                 Margin = new Thickness(0, 0, 8, 0),
                 VerticalAlignment = VerticalAlignment.Center,
             };
+            // 状态跟在标题后面（同一格里排一行）：卡片默认折叠，运行状态是折叠状态下唯一
+            // 能看出「这次调用正在跑」的地方，所以它必须在头上，不能藏在展开内容里。
+            _statusBlock = new TextBlock
+            {
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0),
+                IsVisible = false,
+            };
+
+            var titleRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Children = { _titleBlock, _statusBlock },
+            };
+
             Grid.SetColumn(iconHost, 0);
             headerGrid.Children.Add(iconHost);
-            Grid.SetColumn(_titleBlock, 1);
-            headerGrid.Children.Add(_titleBlock);
+            Grid.SetColumn(titleRow, 1);
+            headerGrid.Children.Add(titleRow);
             Grid.SetColumn(chevron, 2);
             headerGrid.Children.Add(chevron);
 
@@ -2575,9 +2846,10 @@ public partial class ConversationView : UserControl
             {
                 Spacing = 4,
             };
+            _outputLabel = MakeLabel("输出");
             contentStack.Children.Add(MakeLabel("输入"));
             contentStack.Children.Add(_inputBlock);
-            contentStack.Children.Add(MakeLabel("输出"));
+            contentStack.Children.Add(_outputLabel);
             contentStack.Children.Add(_outputBlock);
             _rawStack = contentStack;
 
@@ -2650,10 +2922,86 @@ public partial class ConversationView : UserControl
             Root = root;
         }
 
+        /// <summary>
+        /// 参数正在流式接收：调用刚被模型吐出来，名字通常已经有了，入参照着分片一段段长。
+        /// 这时候还没有输出，输出那一整段先收起来 —— 显示「（无输出）」会让人以为工具已经跑完了。
+        /// </summary>
+        public void SetStreaming(string toolName)
+        {
+            _terminal = false;
+            _titleBlock.Text = $"{toolName} 工具";
+            _rawInputJson = "";
+            _inputFormatted = true;
+            ShowOutput(false);
+            SetStatus("接收参数…");
+        }
+
+        /// <summary>流式期间工具名的续片（服务端可能把名字切成几片，累积后的完整名由调用方给）。</summary>
+        public void SetStreamingName(string toolName) => _titleBlock.Text = $"{toolName} 工具";
+
+        /// <summary>
+        /// 流式追加入参原文。分片很密，这里只累积原文：卡片默认折叠，没人看的内容一个字都不排版；
+        /// 展开状态下按 <see cref="InputPaintIntervalMs"/> 节流重排（入参还没收完时是残缺 JSON，
+        /// 排版会退化成原文，这正是我们要的）。
+        /// </summary>
+        public void SetStreamingInput(string inputJson)
+        {
+            _rawInputJson = inputJson;
+            _inputFormatted = false;
+
+            if (!_expanded) return;
+            var now = Environment.TickCount64;
+            if (now - _lastInputPaint < InputPaintIntervalMs) return;
+
+            _lastInputPaint = now;
+            EnsureInputFormatted();
+        }
+
+        /// <summary>参数收全了，工具开始执行：入参定稿，输出还没回来。</summary>
+        public void SetRunning(string toolName, string inputJson)
+        {
+            _terminal = false;
+            _titleBlock.Text = $"{toolName} 工具";
+            _rawInputJson = inputJson;
+            _inputFormatted = false;
+            ShowOutput(false);
+            SetStatus("执行中…");
+            if (_expanded) EnsureInputFormatted();
+        }
+
+        private void SetStatus(string text)
+        {
+            _statusBlock.Text = text;
+            _statusBlock.IsVisible = text.Length > 0;
+        }
+
+        private void ShowOutput(bool visible)
+        {
+            _outputLabel.IsVisible = visible;
+            _outputBlock.IsVisible = visible;
+        }
+
+        /// <summary>
+        /// 用户按了停止：卡片收到终态。执行中的工具不会再有回调，停在「执行中…」会一直转下去。
+        /// 已经有结果的卡不动（<see cref="_terminal"/>）。
+        /// </summary>
+        public void MarkInterrupted()
+        {
+            if (_terminal) return;
+
+            _terminal = true;
+            ShowOutput(true);
+            _outputBlock.Text = ToolCallRepair.InterruptedResult;
+            SetStatus("已中断");
+        }
+
         public void SetData(string toolName, string inputJson, string output)
         {
+            _terminal = true;
             _titleBlock.Text = $"{toolName} 工具";
             _outputBlock.Text = string.IsNullOrWhiteSpace(output) ? "（无输出）" : output;
+            ShowOutput(true);
+            SetStatus("");
 
             _rawInputJson = inputJson;
             _inputFormatted = false;

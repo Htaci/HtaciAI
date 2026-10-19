@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Models;
+using HtaciAI.Services.Conversations;
 using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Services;
@@ -51,7 +52,8 @@ public sealed class ChatGateway
     /// 处理一轮对话：
     /// 用户消息占一个 turn；整个 AI 回复（含多轮工具调用/结果/续写）共享另一个 turn。
     /// 循环直到 AI 不再请求工具或达到轮数上限。
-    /// persist：每条新消息（user / tool / assistant）落库；beginRound：新一轮 assistant 开始时创建 UI 并返回流式回调。
+    /// <paramref name="store"/>：每条新消息（user / tool / assistant）落库；
+    /// <paramref name="beginRound"/>：新一轮 assistant 开始时创建 UI 并返回流式回调。
     ///
     /// <paramref name="userText"/> 为 null 表示<b>重新生成</b>：不新建用户消息，
     /// <paramref name="history"/> 自身就是完整上下文（结尾是那条用户消息），只产生新的 AI 回复。
@@ -65,7 +67,7 @@ public sealed class ChatGateway
         ChatRequestOptions options,
         IChatClient client,
         IToolExecutor? tools,
-        Func<ChatMessage, Task> persist,
+        ChatPersistSink store,
         Func<ChatMessage, ChatRoundSink> beginRound,
         CancellationToken ct)
     {
@@ -73,7 +75,11 @@ public sealed class ChatGateway
 
         // —— 用户轮次（重新生成时没有这一步） ——
         ChatMessage? userMsg = null;
-        var messages = new List<ChatMessage>(history);
+
+        // 发出去之前先修好配对：历史里可能留着「assistant 有 tool_calls、却没有 tool 回它」的残缺消息
+        // （应用在工具执行途中被杀就会留下这种），服务端遇到它整轮请求直接 400。
+        // 放在这里而不是各个调用方：只要是走网关发的请求，就都过这一道。
+        var messages = new List<ChatMessage>(ToolCallRepair.ForWire(history));
 
         if (userText is not null)
         {
@@ -92,7 +98,7 @@ public sealed class ChatGateway
                 CreatedAt = now,
                 UpdatedAt = now,
             };
-            await persist(userMsg);
+            await store.Insert(userMsg);
             messages.Add(userMsg);
         }
 
@@ -105,6 +111,10 @@ public sealed class ChatGateway
 
         for (var round = 0; round < MaxToolRounds; round++)
         {
+            // 上一轮工具刚跑完、用户这时按了停止：不要再发下一次请求。
+            // 不检查的话，停止信号要等这次 HTTP 往返建连后才生效，看起来就是「点了没反应」。
+            ct.ThrowIfCancellationRequested();
+
             var assistantMsg = new ChatMessage
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -123,20 +133,31 @@ public sealed class ChatGateway
             ChatStreamResult result;
             try
             {
-                result = await client.StreamAsync(messages, systemPrompt, options, sink.OnContent, sink.OnThinking, ct);
+                result = await client.StreamAsync(messages, systemPrompt, options, sink, ct);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // 用户主动停止：不是失败，按 interrupted 落库，不往正文里写错误文案
+                // 用户主动停止：不是失败，按 interrupted 落库，不往正文里写错误文案。
+                // when 过滤是必须的：超时同样抛 OperationCanceledException，但它不是用户取消的，
+                // 要落到下面的通用 catch 里按出错记录 —— 少了它超时会无声无息，那是最难查的一类失败。
                 assistantMsg.Status = "interrupted";
-                await persist(assistantMsg);
+                await store.Insert(assistantMsg);
                 return new ChatTurnResult(userMsg, assistantMsg, false, null);
             }
             catch (Exception ex)
             {
                 assistantMsg.Status = "failed";
-                sink.OnFailed(ex.Message);
-                await persist(assistantMsg);
+                await store.Insert(assistantMsg);
+
+                // 错误另存一条 role=error 的消息：完整的异常信息（类型 / 消息 / 服务端返回体 / 调用栈）
+                // 都在正文里，界面上渲染成红色错误卡。assistant 那条只留失败状态、正文为空。
+                await store.Insert(ChatError.Create(
+                    sessionId,
+                    aiTurnId,
+                    await ChatRepository.GetNextSequenceAsync(sessionId),
+                    client.ModelName,
+                    ex));
+
                 return new ChatTurnResult(userMsg, assistantMsg, false, ex.Message);
             }
 
@@ -150,7 +171,7 @@ public sealed class ChatGateway
                 assistantMsg.Metadata = ToolCallJson.Serialize(result.ToolCalls);
             }
             assistantMsg.UsageJson = BuildUsageJson(result);
-            await persist(assistantMsg);
+            await store.Insert(assistantMsg);
             messages.Add(assistantMsg);
             final = assistantMsg;
 
@@ -162,8 +183,35 @@ public sealed class ChatGateway
             var toolCalls = result.ToolCalls.ToList();
             foreach (var call in toolCalls)
             {
-                var exec = await tools.ExecuteAsync(call, ct);
+                // 一批里有多个调用时，停止要在两个调用之间就生效，
+                // 而不是把剩下的每个都启动一遍再各自取消
+                ct.ThrowIfCancellationRequested();
+
                 var toolName = call.Name ?? "";
+
+                // 顺序是刻意的：<b>先落一条占位行，再去执行</b>。
+                // 带 tool_calls 的 assistant 消息上一轮已经落库了，若等执行完才写结果，
+                // 这中间用户关掉软件就会留下「有 tool_calls、没有 tool 回它」的历史 ——
+                // 服务端此后每次发送都 400，且那条坏消息留在库里，这个会话再也发不出去。
+                // 占位行直接写成中断态：真被杀掉时它已经是最终形态，不需要任何事后收敛。
+                var toolMsg = new ChatMessage
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    SessionId = sessionId,
+                    TurnId = aiTurnId,
+                    SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
+                    Role = "tool",
+                    Content = ToolCallRepair.InterruptedResult,
+                    ToolCallId = call.Id,
+                    ToolName = toolName,
+                    Status = "interrupted",
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                await store.Insert(toolMsg);
+                messages.Add(toolMsg);
+
+                var exec = await tools.ExecuteAsync(call, ct);
                 string toolContent;
 
                 if (!exec.Success)
@@ -182,7 +230,7 @@ public sealed class ChatGateway
                         };
                         ReplaceCall(toolCalls, call.Id, invalidCall);
                         assistantMsg.Metadata = ToolCallJson.Serialize(toolCalls);
-                        await ChatRepository.UpdateMessageAsync(assistantMsg);
+                        await store.Update(assistantMsg);
                         toolName = "invalid";
                         toolContent = BuiltinToolExecutor.FormatInvalidError(invalidCall);
                     }
@@ -198,24 +246,13 @@ public sealed class ChatGateway
                     toolContent = exec.Display;
                 }
 
-                var toolMsg = new ChatMessage
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    SessionId = sessionId,
-                    TurnId = aiTurnId,
-                    SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
-                    Role = "tool",
-                    Content = toolContent,
-                    // view_image 的结果：只存路径，构造下一次请求时才读文件编码成图片 part
-                    Metadata = exec.ImagePath is null ? null : ToolImageJson.Serialize(exec.ImagePath),
-                    ToolCallId = call.Id,
-                    ToolName = toolName,
-                    Status = "completed",
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                };
-                await persist(toolMsg);
-                messages.Add(toolMsg);
+                // 占位行的第二次落库：结果、真实工具名（未解析工具会被改写成 invalid）、失败状态
+                toolMsg.Content = toolContent;
+                toolMsg.ToolName = toolName;
+                // view_image 的结果：只存路径，构造下一次请求时才读文件编码成图片 part
+                toolMsg.Metadata = exec.ImagePath is null ? null : ToolImageJson.Serialize(exec.ImagePath);
+                toolMsg.Status = exec.Success ? "completed" : "failed";
+                await store.Update(toolMsg);
             }
         }
 
@@ -224,7 +261,7 @@ public sealed class ChatGateway
         if (final is not null)
         {
             final.DurationMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - now;
-            await ChatRepository.UpdateMessageAsync(final);
+            await store.Update(final);
         }
 
         return new ChatTurnResult(userMsg, final, true, null);
@@ -271,7 +308,33 @@ public sealed class ChatRoundSink
 {
     public Action<string> OnContent { get; set; } = _ => { };
     public Action<string> OnThinking { get; set; } = _ => { };
-    public Action<string> OnFailed { get; set; } = _ => { };
+
+    /// <summary>
+    /// 工具调用分片。同一轮里的多个调用靠 <see cref="ToolCallDelta.Index"/> 区分，
+    /// 界面据此在参数还在传的时候就把工具卡建出来 —— 等到流结束才建的话，
+    /// 用户要盯着一个没反应的界面直到工具跑完。
+    /// </summary>
+    public Action<ToolCallDelta> OnToolCall { get; set; } = _ => { };
+}
+
+/// <summary>
+/// 一次工具调用的流式分片。
+/// id / name 通常只在首片出现，arguments 逐片追加 —— 这里给的是<b>分片原文</b>，
+/// 累积成完整调用是客户端自己的事（它返回的 <see cref="ChatStreamResult.ToolCalls"/> 才是权威结果）。
+/// </summary>
+public readonly record struct ToolCallDelta(int Index, string? Id, string? Name, string ArgumentsDelta);
+
+/// <summary>
+/// 网关对外的落库出口。插入与更新分成两个口子，是因为工具结果是<b>先插入、后更新</b>：
+/// 只有两个口子分开，界面才能在同一张卡上先显示「执行中」、再把输出填进去。
+/// </summary>
+public sealed class ChatPersistSink
+{
+    /// <summary>新消息落库（用户消息、assistant 消息、工具占位行、错误记录）。</summary>
+    public required Func<ChatMessage, Task> Insert { get; init; }
+
+    /// <summary>同一条消息的第二次落库（工具跑完、重新解析为 invalid、补本轮耗时）。</summary>
+    public required Func<ChatMessage, Task> Update { get; init; }
 }
 
 /// <summary>一次 ChatAsync 的结果。<see cref="User"/> 在重新生成时为 null（那一次没有新建用户消息）。</summary>

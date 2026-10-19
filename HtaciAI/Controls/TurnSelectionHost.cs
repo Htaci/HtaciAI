@@ -33,7 +33,7 @@ public sealed class TurnSelectionHost
     private static readonly IBrush IdleFgBrush = new SolidColorBrush(Color.Parse("#9CA3AF"));
     private static readonly IBrush HoverFgBrush = new SolidColorBrush(Color.Parse("#374151"));
 
-    private readonly SelectableTextBlock _allRaw;
+    private readonly CustomSelectableTextBlock _allRaw;
     private readonly SmoothScrollViewer _allRawScroll;
     private readonly TextBlock _allIcon;
     private readonly Button _allBtn;
@@ -58,15 +58,17 @@ public sealed class TurnSelectionHost
     {
         ContentPanel = new StackPanel { Spacing = 10 };
 
-        _allRaw = new SelectableTextBlock
+        // 自定义块 + 原生选择：原文是整轮的长文本，交给框架自己选区（拖选/复制开箱可用），
+        // 同时它不参与轮内的自定义选区 —— 原文模式与渲染态本来就是两条独立路径，互不干扰。
+        _allRaw = new CustomSelectableTextBlock
         {
+            NativeSelectionEnabled = true,
             Text = "",
             FontFamily = new FontFamily("Microsoft YaHei UI"),
             FontSize = 13.5,
             Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 23,
-            IsVisible = false,
         };
 
         var stack = new Grid();
