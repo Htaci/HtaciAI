@@ -1,0 +1,79 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using HtaciAI.Plugin.Abstractions;
+
+namespace HtaciAI.Plugin.Sample;
+
+/// <summary>
+/// 最小可用插件：只用到日志与私有存储，不做任何界面或对话改动。
+///
+/// 它的用途是「一个能被照着抄的骨架」和「M0 的端到端验证」：
+/// 加载后能在 <c>&lt;数据根&gt;/logs/plugin.log</c> 里看到它写下的两行日志，
+/// 并在 <c>&lt;数据根&gt;/plugin-data/htaci.sample/</c> 里看到 <c>stats.json</c>。
+/// </summary>
+public sealed class SamplePlugin : IPlugin
+{
+    private CancellationTokenSource? _timerCts;
+    private Task? _worker;
+
+    /// <summary>插件私有数据。字段名随便取，宿主只负责按文件存 JSON。</summary>
+    private sealed class Stats
+    {
+        public int LaunchCount { get; set; }
+        public string? LastStartedAt { get; set; }
+    }
+
+    public async Task InitializeAsync(IPluginContext context, CancellationToken ct)
+    {
+        context.Log.Info($"启动：宿主 {context.HostVersion}，插件目录 {context.PluginDirectory}");
+
+        // 演示私有存储：与插件目录分开，插件被替换时这里的数据不会丢
+        var stats = context.Storage.Load<Stats>("stats") ?? new Stats();
+        stats.LaunchCount++;
+        stats.LastStartedAt = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        context.Storage.Save("stats", stats);
+
+        context.Log.Info($"这是第 {stats.LaunchCount} 次启动（上次：{stats.LastStartedAt}）");
+
+        // 演示「插件必须自己停掉后台任务」：宿主没法从外部停它，
+        // 留着运行中的定时器会让程序集无法卸载，禁用后就只能提示「需重启」。
+        _timerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var token = _timerCts.Token;
+        _worker = Task.Run(async () =>
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(5), token);
+                    context.Log.Info("心跳");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 正常停止
+            }
+        }, token);
+
+        await Task.CompletedTask;
+    }
+
+    public async Task ShutdownAsync(CancellationToken ct)
+    {
+        // 停掉自己起的任务 —— 这一步漏了，禁用插件就永远只能「需重启」。
+        _timerCts?.Cancel();
+
+        // 光 Cancel 不够：任务可能正跑在 catch 里，它的状态机仍然引用着本程序集的类型。
+        // 等它真的结束，宿主才可能把程序集回收掉。
+        if (_worker is not null)
+        {
+            try { await _worker.WaitAsync(TimeSpan.FromSeconds(2), ct); }
+            catch { /* 超时或取消就算了，宿主那边会有兜底 */ }
+        }
+
+        _worker = null;
+        _timerCts?.Dispose();
+        _timerCts = null;
+    }
+}

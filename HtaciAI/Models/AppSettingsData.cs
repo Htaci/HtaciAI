@@ -57,6 +57,15 @@ public sealed class AppSettingsData
     public bool AllowAgentSelfExtension { get; set; } = true;
 
     /// <summary>
+    /// 是否加载插件（<c>&lt;数据根&gt;/plugins</c> 下那些）。
+    ///
+    /// <b>默认关闭，且这不是安全沙箱</b>：插件在宿主进程里跑，能读写文件、能建窗口，
+    /// 宿主只能做到「声明能力、启用前展示、出错隔离、崩溃归因」。默认关是因为
+    /// 加载即执行，用户没主动打开之前不该有任何第三方代码跑起来。
+    /// </summary>
+    public bool EnablePlugins { get; set; }
+
+    /// <summary>
     /// 更新清单地址（形如 <c>{"version":"1.2.0","url":"…","notes":"…"}</c> 的 JSON）。
     /// 空 = 未配置，「检查更新」按钮会引导用户来这里填。
     /// </summary>

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- 插件作者的编译目标：只需要引用契约程序集，不引用宿主。
+         宿主版本会把它同步到程序集信息里，插件可以用它做自己的兼容判断。 -->
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\HtaciAI.Plugin.Abstractions\HtaciAI.Plugin.Abstractions.csproj">
+      <!-- 契约由宿主提供，绝不随插件一起输出：插件目录里多一份
+           HtaciAI.Plugin.Abstractions.dll 会造成两套类型，宿主建出来的上下文插件认不得。 -->
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

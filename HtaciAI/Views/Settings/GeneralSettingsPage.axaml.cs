@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -8,6 +11,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using HtaciAI.Models;
 using HtaciAI.Services;
+using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Updates;
 
@@ -53,6 +57,7 @@ public partial class GeneralSettingsPage : UserControl
         ContentPanel.Children.Add(CreateSessionCacheCard());
         ContentPanel.Children.Add(CreateToolRoundsCard());
         ContentPanel.Children.Add(CreateSelfExtensionCard());
+        ContentPanel.Children.Add(CreatePluginsCard());
         ContentPanel.Children.Add(CreateCompressionCard());
         ContentPanel.Children.Add(CreateUpdateCard());
         RefreshCacheRows();
@@ -101,6 +106,128 @@ public partial class GeneralSettingsPage : UserControl
         };
 
         return CreateCard("AI 自我扩展", "让 AI 为自己新增工具与技能。关掉不影响已经建好的那些。", body);
+    }
+
+    // ---- 卡片：插件 ----
+
+    /// <summary>
+    /// 「启用插件」。默认关闭，因为加载插件就是执行第三方代码。
+    ///
+    /// 这里只放总开关与目录入口；逐个插件的启停、能力清单、崩溃记录在 M6 的插件页里 ——
+    /// 那是另一块界面，先把它折在设置页会显得拥挤。
+    /// </summary>
+    private Control CreatePluginsCard()
+    {
+        var toggle = new CheckBox
+        {
+            Content = "启用插件",
+            FontSize = 13,
+            IsChecked = _data.EnablePlugins,
+        };
+        toggle.IsCheckedChanged += async (_, _) =>
+        {
+            if (_suppressSave) return;
+
+            _data.EnablePlugins = toggle.IsChecked == true;
+            Persist();
+
+            // 开关切换立即生效：开 = 扫描并加载，关 = 全部卸载
+            try
+            {
+                await PluginManager.Instance.ReloadAsync();
+            }
+            catch (Exception ex)
+            {
+                if (_pluginsStatus is null) return;
+                _pluginsStatus.Foreground = Danger;
+                _pluginsStatus.Text = "加载插件失败：" + ex.Message;
+                return;
+            }
+
+            RefreshPluginStatus();
+        };
+
+        _pluginsStatus = new TextBlock
+        {
+            FontSize = 12,
+            Foreground = TextFaint,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+        RefreshPluginStatus();
+
+        var openDir = CreateActionButton("打开插件目录");
+        openDir.PointerPressed += (_, e) =>
+        {
+            e.Handled = true;
+            OpenPluginsDirectory();
+        };
+
+        var row = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            Spacing = 10,
+            Children = { openDir, _pluginsStatus },
+        };
+
+        var body = new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                toggle,
+                new TextBlock
+                {
+                    Text = "插件是第三方代码，运行在本程序进程内 —— 它和主程序享有同样的权限，" +
+                           "能读写文件、能建自己的窗口。所以默认关闭，打开之前请确认来源可信。\n" +
+                           "疑似导致崩溃的插件会在下次启动时自动跳过加载，并保留崩溃日志。",
+                    FontSize = 12,
+                    Foreground = TextMuted,
+                    TextWrapping = TextWrapping.Wrap,
+                },
+                row,
+            },
+        };
+
+        return CreateCard("插件", "扩展界面与对话流程。加载后按插件声明的能力生效。", body);
+    }
+
+    private TextBlock? _pluginsStatus;
+
+    private void RefreshPluginStatus()
+    {
+        if (_pluginsStatus is null) return;
+
+        if (!_data.EnablePlugins)
+        {
+            _pluginsStatus.Foreground = TextFaint;
+            _pluginsStatus.Text = "未启用";
+            return;
+        }
+
+        var all = PluginManager.Instance.GetAll();
+        var loaded = all.Count(p => p.State == PluginRunState.Loaded);
+        _pluginsStatus.Foreground = all.Count == 0 ? TextFaint : Ok;
+        _pluginsStatus.Text = all.Count == 0
+            ? "已启用，但没有找到插件"
+            : $"已启用：{loaded}/{all.Count} 个插件运行中";
+    }
+
+    private static void OpenPluginsDirectory()
+    {
+        try
+        {
+            Directory.CreateDirectory(PluginManager.PluginsDirectory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = PluginManager.PluginsDirectory,
+                UseShellExecute = true,
+            });
+        }
+        catch
+        {
+            // 打不开资源管理器不是致命问题，用户还能手动过去
+        }
     }
 
     // ---- 卡片 2：最大工具循环次数 ----

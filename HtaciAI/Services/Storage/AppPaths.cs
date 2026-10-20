@@ -14,6 +14,9 @@ namespace HtaciAI.Services.Storage;
 ///   attachments/     剪贴板图片缓存
 ///   skills/          技能定义（&lt;id&gt;/SKILL.md），用户可手改
 ///   tools/           脚本工具（原 ~/.htaci/tool_tools）
+///   plugins/         插件（&lt;id&gt;/plugin.json + dll），以及宿主侧的 state.json
+///   plugin-data/     插件私有数据（&lt;id&gt;/），与插件目录分开以免升级时被覆盖
+///   logs/            插件日志与崩溃日志
 ///   settings.json    业务设置（默认配置页的项）
 /// </code>
 ///
@@ -44,6 +47,9 @@ public static class AppPaths
     private static string _skills = "";
     private static string _tools = "";
     private static string _settings = "";
+    private static string _plugins = "";
+    private static string _pluginData = "";
+    private static string _logs = "";
     private static string _requestedRoot = "";
     private static StorageMode _mode = StorageMode.Default;
     private static string? _initError;
@@ -65,6 +71,19 @@ public static class AppPaths
 
     /// <summary>业务设置文件（默认配置页的那些项）。随数据根走，便携版拷走时设置跟着走。</summary>
     public static string Settings { get { EnsureInitialized(); return _settings; } }
+
+    /// <summary>插件目录：每个插件一个子目录，里面放 <c>plugin.json</c> 与它的 dll。</summary>
+    public static string Plugins { get { EnsureInitialized(); return _plugins; } }
+
+    /// <summary>
+    /// 插件的私有数据目录（<c>&lt;数据根&gt;/plugin-data/&lt;id&gt;</c>）。
+    /// <b>刻意与 <see cref="Plugins"/> 分开</b>：插件升级时整个目录会被替换，
+    /// 数据放里面就会跟着一起没。
+    /// </summary>
+    public static string PluginData { get { EnsureInitialized(); return _pluginData; } }
+
+    /// <summary>日志目录（插件日志、崩溃日志）。</summary>
+    public static string Logs { get { EnsureInitialized(); return _logs; } }
 
     /// <summary>当前配置的模式。</summary>
     public static StorageMode Mode { get { EnsureInitialized(); return _mode; } }
@@ -178,6 +197,9 @@ public static class AppPaths
         _skills = Path.Combine(root, "skills");
         _tools = Path.Combine(root, "tools");
         _settings = Path.Combine(root, "settings.json");
+        _plugins = Path.Combine(root, "plugins");
+        _pluginData = Path.Combine(root, "plugin-data");
+        _logs = Path.Combine(root, "logs");
     }
 
     /// <summary>Windows 下路径大小写不敏感；末尾分隔符差异也不该算作不同目录。</summary>

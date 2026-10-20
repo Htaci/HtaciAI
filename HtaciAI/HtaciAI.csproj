@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -29,6 +29,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\HtaciAI.Shared\HtaciAI.Shared.csproj" />
+    <!-- 插件契约。宿主与插件都必须引用同一个程序集实例，见 PluginLoadContext。 -->
+    <ProjectReference Include="..\HtaciAI.Plugin.Abstractions\HtaciAI.Plugin.Abstractions.csproj" />
   </ItemGroup>
 
   <ItemGroup>

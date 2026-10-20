@@ -1,4 +1,4 @@
-﻿<Solution>
+<Solution>
   <Project Path="HtaciAI.Android/HtaciAI.Android.csproj">
     <Deploy />
   </Project>
@@ -10,6 +10,10 @@
   <Project Path="HtaciAI/HtaciAI.csproj" />
   <Project Path="HtaciAI.Mobile/HtaciAI.Mobile.csproj" />
   <Project Path="HtaciAI.Shared/HtaciAI.Shared.csproj" />
+  <!-- 插件契约：宿主与插件共同引用的那一份，改动它等于改协议。 -->
+  <Project Path="HtaciAI.Plugin.Abstractions/HtaciAI.Plugin.Abstractions.csproj" />
+  <!-- 示例插件：既是 M0 的端到端验证，也是插件作者的起点。不参与应用发布。 -->
+  <Project Path="samples/HtaciAI.Plugin.Sample/HtaciAI.Plugin.Sample.csproj" />
   <!-- 内置模型表的生成器。独立控制台项目，不参与应用发布，
        只在你改完 models.ini 时手动跑一次（见 docs/model-table.md）。 -->
   <Project Path="tools/ModelTableGen/ModelTableGen.csproj" />

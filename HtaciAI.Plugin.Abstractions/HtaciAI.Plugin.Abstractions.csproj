@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- 插件作者的编译目标。M0 的契约里还没有 UI 类型，所以故意不引用 Avalonia：
+         写一个纯逻辑插件不必拖进整套 UI 依赖（UI 契约在 M4 随实现一起进来）。 -->
+  </PropertyGroup>
+</Project>
