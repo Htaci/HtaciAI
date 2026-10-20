@@ -52,10 +52,55 @@ public partial class GeneralSettingsPage : UserControl
     {
         ContentPanel.Children.Add(CreateSessionCacheCard());
         ContentPanel.Children.Add(CreateToolRoundsCard());
+        ContentPanel.Children.Add(CreateSelfExtensionCard());
         ContentPanel.Children.Add(CreateCompressionCard());
         ContentPanel.Children.Add(CreateUpdateCard());
         RefreshCacheRows();
         RefreshThresholdRows();
+    }
+
+    // ---- 卡片：AI 自我扩展 ----
+
+    /// <summary>
+    /// 「允许 AI 创建工具与技能」。
+    ///
+    /// 关掉只是让这两个工具从请求的 tools 数组里消失 —— 权限审批、重名检查、路径约束
+    /// 一样都不放松。它控制的是「模型能不能碰到这个能力」，不是「碰到之后有多宽松」。
+    /// </summary>
+    private Control CreateSelfExtensionCard()
+    {
+        var toggle = new CheckBox
+        {
+            Content = "允许 AI 创建工具与技能",
+            FontSize = 13,
+            IsChecked = _data.AllowAgentSelfExtension,
+        };
+        toggle.IsCheckedChanged += (_, _) =>
+        {
+            if (_suppressSave) return;
+            _data.AllowAgentSelfExtension = toggle.IsChecked == true;
+            Persist();
+        };
+
+        var body = new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                toggle,
+                new TextBlock
+                {
+                    Text = "开启后模型可以调用 create_tool / create_skill 自己写脚本工具和技能。" +
+                           "新建的工具一律是「危险」等级，每次创建都要你在审批卡片上确认；" +
+                           "创建完成的工具和技能不会自动启用，需要你到「工具」「技能」页勾选或加载。",
+                    FontSize = 12,
+                    Foreground = TextMuted,
+                    TextWrapping = TextWrapping.Wrap,
+                },
+            },
+        };
+
+        return CreateCard("AI 自我扩展", "让 AI 为自己新增工具与技能。关掉不影响已经建好的那些。", body);
     }
 
     // ---- 卡片 2：最大工具循环次数 ----

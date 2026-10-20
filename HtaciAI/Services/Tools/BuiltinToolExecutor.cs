@@ -9,9 +9,12 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services.Attachments;
+using HtaciAI.Services.ScriptRuntimes;
 using HtaciAI.Services.Skills;
+using HtaciAI.Services.Storage;
 
 namespace HtaciAI.Services.Tools;
 
@@ -145,6 +148,8 @@ public sealed class BuiltinToolExecutor
                 "unload_skill" => await UnloadSkillAsync(call, ctx),
                 "ask_user_question" => await AskUserQuestionAsync(call, ctx, ct),
                 "view_image" => ViewImage(call, ctx),
+                BuiltinTools.CreateToolName => await CreateToolAsync(call),
+                BuiltinTools.CreateSkillName => await CreateSkillAsync(call),
                 "invalid" => Invalid(call),
                 _ => ToolExecution.Fail($"暂不支持的内置工具：{tool.Name}"),
             };
@@ -578,6 +583,211 @@ public sealed class BuiltinToolExecutor
         catch (Exception ex)
         {
             return ToolExecution.Fail($"请求失败：{ex.Message}");
+        }
+    }
+
+    // ---- create_tool / create_skill（AI 自举） ----
+    //
+    // 这两个工具让模型自己扩展能力。它们的安全模型是「**用户批准的是一段具体内容**」：
+    // 危险等级由程序固定（不接受模型传参），审批卡片上把要写入的脚本 / 正文摊开给用户看，
+    // 用户点「允许执行」才落盘。所有校验都在本文件内做，因为这是唯一的执行入口 ——
+    // 放到 UI 或注册表里做，别的调用路径就绕过去了。
+
+    /// <summary>脚本源码体积上限。脚本是给一次性任务写的小工具，几十 KB 已经远超合理范围。</summary>
+    private const int MaxScriptBytes = 64 * 1024;
+
+    /// <summary>入参 schema 上限。真有这么大的 schema，说明该拆工具了。</summary>
+    private const int MaxSchemaBytes = 16 * 1024;
+
+    /// <summary>
+    /// 技能正文上限。技能是<b>全文注入 system</b> 的，一个超大技能会直接吃掉上下文 ——
+    /// 这是自举里唯一能「一次写坏、长期生效」的地方，必须设上限。
+    /// </summary>
+    private const int MaxSkillBodyBytes = 24 * 1024;
+
+    /// <summary>工具名 = 模型调用名：小写字母开头，后接小写字母 / 数字 / 下划线。</summary>
+    private static readonly Regex ToolNamePattern = new(@"^[a-z][a-z0-9_]{1,63}$", RegexOptions.Compiled);
+
+    /// <summary>技能名 = 目录名 = load_skill 的调用名，规则与「创建技能」窗口一致。</summary>
+    private static readonly Regex SkillNamePattern = new(@"^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.Compiled);
+
+    private static async Task<ToolExecution> CreateToolAsync(ChatToolCall call)
+    {
+        // 总开关：关掉之后即使这个工具还挂在某个会话的工具列表里也不许执行
+        // （工具列表只在组装请求时过滤，会话存档里可能留着旧 id）
+        if (!AppSettingsStore.Current.AllowAgentSelfExtension)
+            return ToolExecution.Fail("用户已关闭「允许 AI 创建工具与技能」，无法创建工具。");
+
+        var name = (BuiltinToolContext.GetArg(call, "name") ?? "").Trim();
+        if (!ToolNamePattern.IsMatch(name))
+            return ToolExecution.Fail(
+                "工具名不合法：必须小写字母开头，只含小写字母、数字、下划线，长度 2-64（如 fetch_weather）。");
+
+        var description = (BuiltinToolContext.GetArg(call, "description") ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(description))
+            return ToolExecution.Fail("缺少 description：模型靠它判断什么时候该调用这个工具。");
+
+        var runtimeText = (BuiltinToolContext.GetArg(call, "runtime") ?? "").Trim().ToLowerInvariant();
+        var runtime = runtimeText switch
+        {
+            "python" => ScriptRuntimeKind.Python,
+            "node" => ScriptRuntimeKind.Node,
+            _ => (ScriptRuntimeKind?)null,
+        };
+        if (runtime is null)
+            return ToolExecution.Fail("runtime 只能是 python 或 node。");
+
+        var script = BuiltinToolContext.GetArg(call, "script") ?? "";
+        if (string.IsNullOrWhiteSpace(script))
+            return ToolExecution.Fail("缺少 script：请把脚本源码全文放在 script 里。");
+        if (Encoding.UTF8.GetByteCount(script) > MaxScriptBytes)
+            return ToolExecution.Fail($"脚本过大（上限 {MaxScriptBytes / 1024} KB），请精简后重试。");
+
+        var schema = (BuiltinToolContext.GetArg(call, "input_schema") ?? "").Trim();
+        if (schema.Length == 0) schema = "{}";
+        if (Encoding.UTF8.GetByteCount(schema) > MaxSchemaBytes)
+            return ToolExecution.Fail($"input_schema 过大（上限 {MaxSchemaBytes / 1024} KB）。");
+        if (ValidateSchema(schema) is { } schemaError)
+            return ToolExecution.Fail("input_schema 不合法：" + schemaError);
+
+        // 重名必须挡：tool_tools.name 没有唯一约束，只会在内存注册表里被静默覆盖 ——
+        // 那样模型写一个叫 bash 的工具就能把真正的 bash 顶掉。
+        if (ToolRegistry.Instance.ResolveByName(name) is { } existing)
+            return ToolExecution.Fail(
+                $"工具名已存在：{name}（来源：{existing.Source}）。换一个名字，或让用户直接修改原工具。");
+
+        // 运行时没装就别落盘：留一个跑不起来的工具比不建更糟
+        var probe = await RuntimeDetector.ProbeAsync(runtime.Value);
+        if (!probe.Found)
+            return ToolExecution.Fail(
+                $"未检测到 {RuntimeDetector.DisplayName(runtime.Value)} 运行时，无法创建该工具。" +
+                "请让用户到「设置 → 环境配置」检查，或改用另一种运行时。");
+
+        var dir = AppPaths.Tools;
+        var path = Path.Combine(dir, name + (runtime == ScriptRuntimeKind.Python ? ".py" : ".js"));
+
+        var tool = new ToolDefinition
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = name,
+            Description = description,
+            Source = ToolSource.Script,
+            Runtime = runtime.Value,
+            Target = path,
+            InputSchemaJson = schema,
+            Enabled = true,
+            // 固定「危险」：等级若能让模型自评，它可以把自己写的工具标成「安全」从而绕开审批。
+            // 用户可在工具页改成别的等级，那是知情之后的选择。
+            DangerLevel = ToolDangerLevel.Danger,
+            CreatedBy = ToolDefinition.CreatedByAgent,
+        };
+
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(path, script, new UTF8Encoding(false));
+            await ToolRepository.CreateAsync(tool);
+        }
+        catch (Exception ex)
+        {
+            // 落库失败就把文件也删掉，不留一个「有脚本、没登记」的孤儿文件
+            try { if (File.Exists(path)) File.Delete(path); } catch { /* 删不掉也没别的办法 */ }
+            return ToolExecution.Fail($"创建工具失败：{ex.Message}");
+        }
+
+        ToolRegistry.Instance.Register(tool);
+
+        // 说清楚「还没生效」：本轮请求的 tools 数组早就发出去了，会话的启用列表也不含它，
+        // 不写明的话模型会紧接着调用一个它以为已经能用的工具，然后收到「未知工具」。
+        return ToolExecution.Ok($"""
+            已创建脚本工具「{name}」（{RuntimeDetector.DisplayName(runtime.Value)}）。
+            脚本路径：{path}
+            危险等级：危险（用户可在「工具」页调整）。
+
+            注意：该工具**尚未启用**，本轮不可调用。请告知用户到「工具」页勾选它，
+            之后在同一会话里即可使用。
+            """);
+    }
+
+    private static async Task<ToolExecution> CreateSkillAsync(ChatToolCall call)
+    {
+        if (!AppSettingsStore.Current.AllowAgentSelfExtension)
+            return ToolExecution.Fail("用户已关闭「允许 AI 创建工具与技能」，无法创建技能。");
+
+        var name = (BuiltinToolContext.GetArg(call, "name") ?? "").Trim();
+        if (!SkillNamePattern.IsMatch(name))
+            return ToolExecution.Fail(
+                "技能名不合法：必须小写字母或数字开头，只含小写字母、数字、. _ -，长度 2-64（如 review-sql）。");
+
+        var description = (BuiltinToolContext.GetArg(call, "description") ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(description))
+            return ToolExecution.Fail("缺少 description：模型靠它判断什么时候该加载这个技能。");
+
+        var body = BuiltinToolContext.GetArg(call, "body") ?? "";
+        if (string.IsNullOrWhiteSpace(body))
+            return ToolExecution.Fail("缺少 body：SKILL.md 正文不能为空。");
+        if (Encoding.UTF8.GetByteCount(body) > MaxSkillBodyBytes)
+            return ToolExecution.Fail(
+                $"技能正文过大（上限 {MaxSkillBodyBytes / 1024} KB）。技能会全文注入 system 提示词，" +
+                "过大会挤掉对话本身；请删掉通用常识，只留这个任务真正需要的步骤与约定。");
+
+        var alias = (BuiltinToolContext.GetArg(call, "alias") ?? "").Trim();
+
+        // 重名（含内置技能）必须挡：覆盖掉内置技能等于用户失去官方指引，而 CreateOnDisk 抛的是
+        // 「已存在」这种模糊说法，这里先给出更具体的提示。
+        if (SkillRegistry.Instance.ResolveById(name) is not null
+            || SkillRegistry.Instance.GetAll().Any(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)))
+            return ToolExecution.Fail($"技能已存在：{name}。换一个名字，或让用户直接改原技能。");
+
+        SkillDefinition created;
+        try
+        {
+            created = SkillRegistry.Instance.CreateOnDisk(
+                name, name, alias, description, body, SkillDefinition.OriginAgent);
+        }
+        catch (Exception ex)
+        {
+            return ToolExecution.Fail($"创建技能失败：{ex.Message}");
+        }
+
+        return ToolExecution.Ok($"""
+            已创建技能「{created.DisplayName}」（{created.Id}），文件：{Path.Combine(SkillRegistry.SkillsRoot, name, "SKILL.md")}
+
+            注意：该技能**尚未加载**。要让它在当前会话生效，请调用 load_skill（name="{name}"）；
+            用户也可以在「技能」页查看、修改或删除它。加载前请先确认正文写的是用户想要的东西。
+            """);
+    }
+
+    /// <summary>
+    /// 校验入参 schema：能解析、根是 object、属性名都是合法标识符。
+    /// 返回 null 表示通过。这里只做「能不能安全下发给模型」的检查，不做完整 JSON Schema 校验 ——
+    /// 各家服务商对 schema 的支持本来就不一致，校验太严反而会挡掉合理写法。
+    /// </summary>
+    private static string? ValidateSchema(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return "根必须是 JSON 对象";
+
+            if (!root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String
+                || type.GetString() != "object")
+                return "根节点的 type 必须是 \"object\"";
+
+            if (root.TryGetProperty("properties", out var props))
+            {
+                if (props.ValueKind != JsonValueKind.Object) return "properties 必须是对象";
+                foreach (var prop in props.EnumerateObject())
+                    if (!Regex.IsMatch(prop.Name, @"^[A-Za-z_][A-Za-z0-9_]*$"))
+                        return $"属性名不合法：{prop.Name}（只能用字母、数字、下划线，且不以数字开头）";
+            }
+
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            return "不是有效的 JSON（" + ex.Message + "）";
         }
     }
 

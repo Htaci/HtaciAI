@@ -110,6 +110,21 @@ public partial class SkillsPage : UserControl
                 Foreground = new SolidColorBrush(Color.Parse("#B0B7C3")),
                 TextTrimming = TextTrimming.CharacterEllipsis
             });
+        // AI 写的技能会全文注入 system，用户该一眼看出哪几段不是自己写的
+        if (s.IsAgentCreated)
+            title.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.Parse("#FFF4E5")),
+                CornerRadius = new Avalonia.CornerRadius(8),
+                Padding = new Avalonia.Thickness(5, 1),
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+                Child = new TextBlock
+                {
+                    Text = "AI 创建",
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.Parse("#B45309")),
+                },
+            });
         title.Children.Add(descBlock);
 
         var item = new Border

@@ -278,7 +278,7 @@ public partial class ToolsPage : UserControl
     {
         var (sourceText, sourceBg, sourceFg) = SourceBadge(tool);
 
-        var levelBadge = BuildLevelBadge(tool.DangerLevel);
+        var levelBadge = BuildEditableLevelBadge(tool);
 
         var nameRow = new StackPanel
         {
@@ -310,6 +310,22 @@ public partial class ToolsPage : UserControl
                 levelBadge,
             }
         };
+
+        // AI 自举建的脚本单独标一下：这段代码不是用户自己写的，值不值得留存该由他一眼判断
+        if (tool.IsAgentCreated)
+            nameRow.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.Parse("#FFF4E5")),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(6, 2),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock
+                {
+                    Text = "AI 创建",
+                    FontSize = 10.5,
+                    Foreground = new SolidColorBrush(Color.Parse("#B45309")),
+                },
+            });
         var descBlock = new TextBlock
         {
             Text = tool.Description,
@@ -404,5 +420,117 @@ public partial class ToolsPage : UserControl
                 Foreground = new SolidColorBrush(Color.Parse("#FFFFFF")),
             },
         };
+    }
+
+    /// <summary>
+    /// 可点的权限等级徽标：点开一个三选菜单直接改等级。
+    ///
+    /// 存在的理由是 AI 自举：模型新建的工具一律记为「危险」，但用户看过脚本之后
+    /// 完全可以判断它其实是只读的 —— 不给一个改的入口，那些工具就永远每次都要审批。
+    /// 内置工具不给这个入口（它们的等级是程序行为的一部分，改了没有意义）。
+    /// </summary>
+    private Control BuildEditableLevelBadge(ToolDefinition tool)
+    {
+        var badge = BuildLevelBadge(tool.DangerLevel);
+        if (tool.Source == ToolSource.Builtin)
+        {
+            ToolTip.SetTip(badge, "内置工具的权限等级固定");
+            return badge;
+        }
+
+        badge.Cursor = new Cursor(StandardCursorType.Hand);
+        ToolTip.SetTip(badge, "点击修改权限等级");
+
+        var menu = new StackPanel { Spacing = 2, MinWidth = 140 };
+
+        // 先声明再在行里捕获：菜单项点击后要能把它自己收起来
+        Flyout? flyout = null;
+
+        foreach (var level in new[] { ToolDangerLevel.Safe, ToolDangerLevel.Risk, ToolDangerLevel.Danger })
+        {
+            var (color, text) = level switch
+            {
+                ToolDangerLevel.Safe => ("#16A34A", "安全"),
+                ToolDangerLevel.Risk => ("#D97706", "风险"),
+                _ => ("#DC2626", "危险"),
+            };
+            var row = new Border
+            {
+                Padding = new Thickness(12, 8),
+                CornerRadius = new CornerRadius(6),
+                Background = Brushes.Transparent,
+                Cursor = new Cursor(StandardCursorType.Hand),
+                Child = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    Children =
+                    {
+                        new Border
+                        {
+                            Width = 8,
+                            Height = 8,
+                            CornerRadius = new CornerRadius(4),
+                            Background = new SolidColorBrush(Color.Parse(color)),
+                            VerticalAlignment = VerticalAlignment.Center,
+                        },
+                        new TextBlock
+                        {
+                            Text = text,
+                            FontSize = 13,
+                            Foreground = new SolidColorBrush(Color.Parse("#374151")),
+                            VerticalAlignment = VerticalAlignment.Center,
+                        },
+                    },
+                },
+            };
+            row.PointerEntered += (_, _) => row.Background = new SolidColorBrush(Color.Parse("#14000000"));
+            row.PointerExited += (_, _) => row.Background = Brushes.Transparent;
+            row.PointerPressed += async (_, e) =>
+            {
+                e.Handled = true;
+                flyout?.Hide();
+                if (level == tool.DangerLevel) return;
+
+                var updated = new ToolDefinition
+                {
+                    Id = tool.Id,
+                    Name = tool.Name,
+                    Description = tool.Description,
+                    InputSchemaJson = tool.InputSchemaJson,
+                    Source = tool.Source,
+                    Runtime = tool.Runtime,
+                    Target = tool.Target,
+                    ToolsetIds = tool.ToolsetIds,
+                    Enabled = tool.Enabled,
+                    DangerLevel = level,
+                    CreatedBy = tool.CreatedBy,
+                };
+
+                try
+                {
+                    await ToolRepository.UpdateAsync(updated);
+                }
+                catch
+                {
+                    // 写库失败就保持原等级：界面上什么都不变，比显示一个没存下的值好
+                    return;
+                }
+
+                ToolRegistry.Instance.Register(updated);
+                ReloadFromRegistry();
+            };
+            menu.Children.Add(row);
+        }
+
+        flyout = new Flyout { Content = menu, Placement = PlacementMode.BottomEdgeAlignedRight };
+        badge.PointerPressed += (_, e) =>
+        {
+            // 吃掉按下，避免冒泡到卡片上（卡片目前只是占位，将来接了详情页也不该被这一下点开）
+            e.Handled = true;
+            flyout!.ShowAt(badge);
+        };
+
+        return badge;
     }
 }

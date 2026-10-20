@@ -26,6 +26,12 @@ public sealed class ChatGateway
     public int MaxToolRounds { get; set; } = 100;
 
     /// <summary>
+    /// 某次 API 往返即将自动重试时的通知（下一个尝试序号, 总尝试数）。
+    /// 重试的粒度是「一次请求」，不是「整轮任务」——见 <see cref="RetryingChatClient"/>。
+    /// </summary>
+    public Action<int, int>? RetryScheduled { get; set; }
+
+    /// <summary>
     /// 按模型 id（UUID 或调用 id）解析客户端，每次发送前按当前选中模型调用。
     ///
     /// <b>解析不到就返回 null，不回退任何内置模型。</b>这里曾经兜底过一个写死地址与密钥的
@@ -106,6 +112,10 @@ public sealed class ChatGateway
         var aiTurnId = await ChatRepository.GetNextTurnIdAsync(sessionId);
         ChatMessage? final = null;
 
+        // 自动重试一律套在这一层，而不是让每个调用方自己包：
+        // 重试的粒度是「一次 API 往返」，工具循环里的每一次请求各有一份新的 5 次额度。
+        var active = new RetryingChatClient(client, RetryScheduled);
+
         // 每轮用户消息重置工具状态（本轮已读取文件等）
         tools?.BeginTurn();
 
@@ -133,7 +143,7 @@ public sealed class ChatGateway
             ChatStreamResult result;
             try
             {
-                result = await client.StreamAsync(messages, systemPrompt, options, sink, ct);
+                result = await active.StreamAsync(messages, systemPrompt, options, sink, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -147,16 +157,31 @@ public sealed class ChatGateway
             catch (Exception ex)
             {
                 assistantMsg.Status = "failed";
+
+                // 失败前已经收到的正文 / 思考要留在库里：那是这一轮真正想出来的东西，
+                // 丢掉之后用户点「重试」面对的是一轮空白，等于白等一场。
+                // （自动重试只在「一个字都还没吐出来」时发生，所以这里的部分内容一定来自最后一次尝试。）
+                var broken = ex as ChatStreamException;
+                if (broken is not null)
+                {
+                    assistantMsg.Content = broken.PartialContent;
+                    assistantMsg.Thinking = string.IsNullOrWhiteSpace(broken.PartialThinking)
+                        ? null
+                        : broken.PartialThinking;
+                }
+
                 await store.Insert(assistantMsg);
 
                 // 错误另存一条 role=error 的消息：完整的异常信息（类型 / 消息 / 服务端返回体 / 调用栈）
-                // 都在正文里，界面上渲染成红色错误卡。assistant 那条只留失败状态、正文为空。
+                // 都在正文里，界面上渲染成红色错误卡。assistant 那条只留状态与上面的部分内容。
+                // 记原始异常而不是外面那层包装：错误卡标题要看到的是「HTTP 502」，
+                // 而不是包装类的名字。
                 await store.Insert(ChatError.Create(
                     sessionId,
                     aiTurnId,
                     await ChatRepository.GetNextSequenceAsync(sessionId),
                     client.ModelName,
-                    ex));
+                    broken?.Cause ?? ex));
 
                 return new ChatTurnResult(userMsg, assistantMsg, false, ex.Message);
             }

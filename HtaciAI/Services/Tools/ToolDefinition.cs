@@ -74,4 +74,28 @@ public sealed class ToolDefinition
     /// </summary>
     public bool SkipApproval { get; init; }
 
+    /// <summary>
+    /// 谁建的这个工具：<c>"user"</c>（人工 / 随程序发布）或 <c>"agent"</c>（AI 自举创建）。
+    ///
+    /// 只用两个取值、不做枚举：这是给界面打标记与事后审计用的元信息，
+    /// 将来多一种来源也不值得为它改一遍库表与迁移。
+    /// AI 自建的工具在工具页会显示「AI 创建」标签 —— 它在审批与启用上并不因此更宽松，
+    /// 但用户需要一个能一眼看出「这段脚本不是我自己写的」的地方。
+    /// </summary>
+    public string CreatedBy { get; init; } = CreatedByUser;
+
+    public const string CreatedByUser = "user";
+    public const string CreatedByAgent = "agent";
+
+    /// <summary>是否由 AI 创建。</summary>
+    public bool IsAgentCreated => CreatedBy == CreatedByAgent;
+
+    /// <summary>
+    /// 是否是「自举工具」（<c>create_tool</c> / <c>create_skill</c>）。
+    ///
+    /// 按名字判定而不是另立标记：这两个工具的语义写在名字里，加字段只会多一处要同步的地方。
+    /// 用途是让「设置里关掉 AI 自我扩展」这一件事只需在一个出口做过滤（会话组装工具列表时）。
+    /// </summary>
+    public bool IsSelfExtension => Name is BuiltinTools.CreateToolName or BuiltinTools.CreateSkillName;
+
 }

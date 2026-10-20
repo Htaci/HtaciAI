@@ -31,4 +31,17 @@ public sealed class SkillDefinition
 
     /// <summary>是否允许使用：false 时不进入可用技能列表，也不可被启用。</summary>
     public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// 谁建的：<c>"user"</c>（人工 / 随程序发布）或 <c>"agent"</c>（AI 自举创建）。
+    /// 写在 SKILL.md 的 frontmatter 里，跟着技能文件走 —— 技能没有库表，元信息只能存在这里。
+    /// 用途是让界面给 AI 写的技能打个标记：技能是全文注入 system 的，用户该知道哪几段不是自己写的。
+    /// </summary>
+    public string Origin { get; init; } = OriginUser;
+
+    public const string OriginUser = "user";
+    public const string OriginAgent = "agent";
+
+    /// <summary>是否由 AI 创建。</summary>
+    public bool IsAgentCreated => Origin == OriginAgent;
 }

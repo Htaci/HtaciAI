@@ -71,7 +71,7 @@ public static class ToolRepository
 
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = "SELECT id, name, description, source, runtime, target, input_schema, enabled, danger_level FROM tool_tools ORDER BY created_at ASC;";
+            cmd.CommandText = "SELECT id, name, description, source, runtime, target, input_schema, enabled, danger_level, created_by FROM tool_tools ORDER BY created_at ASC;";
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
             {
@@ -86,6 +86,9 @@ public static class ToolRepository
                     InputSchemaJson = r.IsDBNull(6) ? "{}" : r.GetString(6),
                     Enabled = r.GetInt32(7) != 0,
                     DangerLevel = ParseDangerLevel(r.IsDBNull(8) ? "" : r.GetString(8)),
+                    CreatedBy = r.IsDBNull(9) || r.GetString(9).Length == 0
+                        ? ToolDefinition.CreatedByUser
+                        : r.GetString(9),
                 });
             }
         }
@@ -122,8 +125,8 @@ public static class ToolRepository
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = """
-                INSERT INTO tool_tools (id, name, description, source, runtime, target, input_schema, enabled, danger_level, created_at, updated_at)
-                VALUES ($id, $name, $description, $source, $runtime, $target, $input_schema, $enabled, $danger_level, $created_at, $updated_at);
+                INSERT INTO tool_tools (id, name, description, source, runtime, target, input_schema, enabled, danger_level, created_by, created_at, updated_at)
+                VALUES ($id, $name, $description, $source, $runtime, $target, $input_schema, $enabled, $danger_level, $created_by, $created_at, $updated_at);
                 """;
             cmd.Parameters.AddWithValue("$id", tool.Id);
             cmd.Parameters.AddWithValue("$name", tool.Name);
@@ -134,6 +137,7 @@ public static class ToolRepository
             cmd.Parameters.AddWithValue("$input_schema", (object?)tool.InputSchemaJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$enabled", tool.Enabled ? 1 : 0);
             cmd.Parameters.AddWithValue("$danger_level", tool.DangerLevel.ToString());
+            cmd.Parameters.AddWithValue("$created_by", tool.CreatedBy);
             cmd.Parameters.AddWithValue("$created_at", now);
             cmd.Parameters.AddWithValue("$updated_at", now);
             await cmd.ExecuteNonQueryAsync();

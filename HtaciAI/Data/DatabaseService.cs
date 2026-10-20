@@ -200,6 +200,13 @@ public static class DatabaseService
             version = 20;
             SetVersion(conn, version);
         }
+
+        if (version < 21)
+        {
+            RunMigrationV21(conn);
+            version = 21;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -630,6 +637,20 @@ public static class DatabaseService
     /// <summary>同 V17，只是把 <c>'error'</c> 也加进 role 的合法取值。</summary>
     private static void RunMigrationV20(SqliteConnection conn)
         => RebuildChatMessageTable(conn, "chat_message_v20", "'user','assistant','tool','agent','error'");
+
+    /// <summary>
+    /// 工具来源：tool_tools 增加 created_by（user / agent）。
+    ///
+    /// 记它是因为 AI 自举之后，「这个工具是谁建的」决定了用户该用什么态度看它 ——
+    /// 模型自己写的脚本需要一个显眼的标记，用户才好审计和批量清理。
+    /// 存量行（含内置）一律按 user 处理：它们本来就是人工或随程序发布的。
+    /// </summary>
+    private static void RunMigrationV21(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "ALTER TABLE tool_tools ADD COLUMN created_by TEXT NOT NULL DEFAULT 'user';";
+        cmd.ExecuteNonQuery();
+    }
 
     /// <summary>
     /// 重建 chat_message：SQLite 不能删改 CHECK 约束，放开 role 取值只能这么做。

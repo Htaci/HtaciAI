@@ -91,8 +91,12 @@ public partial class ConversationPage : UserControl
     // 会话窗口缓存
     // ============================================================
 
-    /// <summary>切走的会话窗口按 key 留在这里，保留期内切回来直接复用。</summary>
-    private readonly SessionViewCache _viewCache = new();
+    /// <summary>
+    /// 切走的会话窗口按 key 留在这里，保留期内切回来直接复用。
+    /// 用的是<b>全进程共用</b>的那一份（见 <see cref="SessionViewCache.Shared"/>），
+    /// 于是多个标签页不会给同一个会话各建一个窗口。
+    /// </summary>
+    private readonly SessionViewCache _viewCache = SessionViewCache.Shared;
 
     /// <summary>当前挂在右侧的窗口对应的缓存键；null 表示当前是「新建会话」页或空提示。</summary>
     private string? _cacheKey;
@@ -113,11 +117,30 @@ public partial class ConversationPage : UserControl
         _cacheSweeper = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         _cacheSweeper.Tick += (_, _) =>
         {
-            foreach (var key in _viewCache.CollectExpired(DateTime.UtcNow, CacheRetention(), _cacheKey))
+            var now = DateTime.UtcNow;
+
+            // 正在显示的这一个每轮都刷新：用户可能停在这一页读了一小时，
+            // 期间没有任何「切回」动作，不刷新就会被按「上次显示时间」淘汰掉 ——
+            // 而淘汰掉正在看的窗口，下次进来就是一个重新读库的新窗口。
+            if (_cacheKey is not null) _viewCache.Touch(_cacheKey, now);
+
+            foreach (var key in _viewCache.CollectExpired(now, CacheRetention(), _cacheKey, IsPinned))
                 _viewCache.Evict(key);
         };
         _cacheSweeper.Start();
     }
+
+    /// <summary>
+    /// 这个窗口不许被淘汰：它的会话还有一轮任务在跑（或在等用户授权 / 作答）。
+    ///
+    /// 运行中的窗口一旦被清掉，切回这个会话时缓存落空、于是重新建一个窗口从库里读 ——
+    /// 读到的是一段「assistant 已落库、工具还没执行完」的半成品历史，
+    /// 渲染出来正好像任务结束（聚合卡收成「已处理」+ 复制/编辑/删除操作栏 + 发送按钮），
+    /// 而旧窗口其实还活着、还在往同一个会话里写。那是「看起来结束了，其实还在跑」的根。
+    /// </summary>
+    private static bool IsPinned(string key)
+        => SessionActivityStore.Get(SessionViewCache.SessionIdOf(key))
+           is SessionActivity.Running or SessionActivity.WaitingConfirm;
 
     /// <summary>
     /// 标签页被关掉后这个页面就没人引用了，但<b>运行中</b>的 DispatcherTimer 会被 Dispatcher
@@ -129,6 +152,11 @@ public partial class ConversationPage : UserControl
     {
         base.OnAttachedToVisualTree(e);
         _cacheSweeper?.Start();
+
+        // 切回这个标签页时右侧可能是空的：窗口是全进程共用的，别的标签页打开同一个会话时
+        // 会把它从这里摘走（一个会话只允许一个窗口）。按会话 id 重新挂一次，缓存命中就原样回来。
+        if (_activeSessionId is { } id && RightPanel.Content is null)
+            _ = OpenSessionAsync(id);
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -171,12 +199,34 @@ public partial class ConversationPage : UserControl
         // 打开会话就算已读：绿点只在「用户没在看这个会话」的时候才有意义
         ClearUnread(view!.SessionId);
 
+        // 一个会话只能有一份窗口：缓存是共用的一份，这个窗口可能正挂在别的标签页上。
+        // 先把它从原来的宿主摘下来，否则把它塞进本页的 ContentControl 会撞上「已有父级」。
+        DetachFromOtherHost(view!);
+
         _cacheKey = key;
         RightPanel.Content = view;
         RebuildNav();
 
         if (isNew) await view!.InitializeAsync();
         return view!;
+    }
+
+    /// <summary>
+    /// 把窗口从「别的宿主」上摘下来。只处理 ContentControl / Panel 两种父级 ——
+    /// 本项目的会话窗口只可能被挂在页面的 <c>RightPanel</c>（ContentControl）里。
+    /// </summary>
+    private void DetachFromOtherHost(ConversationView view)
+    {
+        switch (view.Parent)
+        {
+            case ContentControl owner when !ReferenceEquals(owner, RightPanel):
+                owner.Content = null;
+                break;
+
+            case Panel panel:
+                panel.Children.Remove(view);
+                break;
+        }
     }
 
     private void SetupNewChatButton()
@@ -781,6 +831,12 @@ public partial class ConversationPage : UserControl
     /// <summary>状态变化：只刷新对应那一行（找不到就等下次导航重建时自然带上）。</summary>
     private void OnSessionActivityChanged(string sessionId)
     {
+        // 任务跑完了（不再是 Running/WaitingConfirm）才给这个会话的窗口「重新开始计时」：
+        // 跑的过程中它被钉住、本来也不会被淘汰，淘汰倒计时应当从跑完那一刻算，
+        // 而不是从用户当初切走那一刻算 —— 否则长任务一结束，窗口就立刻够期了。
+        if (SessionActivityStore.Get(sessionId) is not (SessionActivity.Running or SessionActivity.WaitingConfirm))
+            _viewCache.TouchSession(sessionId, DateTime.UtcNow);
+
         if (!_statusRows.TryGetValue(sessionId, out var apply)) return;
         apply(SessionActivityStore.Get(sessionId));
     }

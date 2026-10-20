@@ -42,7 +42,13 @@ public sealed class ErrorCard
     /// <summary>卡片根控件（插进消息流的就是它）。</summary>
     public Border Root { get; }
 
-    public ErrorCard(string? content)
+    /// <summary>
+    /// <paramref name="onRetry"/>
+    /// 为 null 时不出现「重试」按钮（例如没有可重试的上下文）。
+    /// 有值时按钮<b>不</b>自动判定「该不该重试」—— 决定权交给用户：余额用完的就能去充值，
+    /// 配错模型的就能去改配置，改完再点它接着跑，不必重开会话。
+    /// </summary>
+    public ErrorCard(string? content, Action? onRetry = null)
     {
         var summary = ChatError.Summary(content);
         var detail = ChatError.Detail(content);
@@ -125,7 +131,7 @@ public sealed class ErrorCard
         toggleHit.PointerEntered += (_, _) => toggleHit.Background = new SolidColorBrush(Color.Parse("#33DC2626"));
         toggleHit.PointerExited += (_, _) => toggleHit.Background = Brushes.Transparent;
 
-        var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto") };
         var iconHost = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -134,8 +140,41 @@ public sealed class ErrorCard
         };
         Grid.SetColumn(iconHost, 0);
         headerGrid.Children.Add(iconHost);
-        Grid.SetColumn(toggleHit, 1);
+        Grid.SetColumn(toggleHit, 2);
         headerGrid.Children.Add(toggleHit);
+
+        if (onRetry is not null)
+        {
+            // 「重试」与「详情」并排：一个管「接着跑」，一个管「为什么停了」。
+            // 文案用「重试」而不是「重新生成」—— 它复用同一份上下文再发一次，
+            // 上一轮已经产生的思考 / 正文都还留在上面，不是从零开始。
+            var retryHit = new Border
+            {
+                Child = new TextBlock
+                {
+                    Text = "重试",
+                    FontSize = 12,
+                    Foreground = new SolidColorBrush(Color.Parse("#B91C1C")),
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+                Background = Brushes.Transparent,
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 4, 8, 4),
+                Margin = new Thickness(8, 0, 0, 0),
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            ToolTip.SetTip(retryHit, "用同一份上下文再发一次；上面已生成的内容会保留");
+            retryHit.PointerPressed += (_, e) =>
+            {
+                if (e.GetCurrentPoint(retryHit).Properties.IsLeftButtonPressed)
+                    onRetry();
+            };
+            retryHit.PointerEntered += (_, _) => retryHit.Background = new SolidColorBrush(Color.Parse("#33DC2626"));
+            retryHit.PointerExited += (_, _) => retryHit.Background = Brushes.Transparent;
+
+            Grid.SetColumn(retryHit, 1);
+            headerGrid.Children.Add(retryHit);
+        }
 
         _header = new Border
         {

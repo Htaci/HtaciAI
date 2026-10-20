@@ -29,6 +29,17 @@ public sealed class SessionViewCache
 
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// 全进程共用的一份缓存。
+    ///
+    /// <b>必须共用，不能每个页面一份。</b>每个标签页都有自己的 <c>ConversationPage</c>，
+    /// 各建一份缓存就会出现「同一个会话两份窗口」：一份还在跑、继续往库里和界面上写，
+    /// 另一份是从库里读来的快照，看起来像任务已经结束了（复制按钮都出来了、输入框也退回发送态），
+    /// 点它还能再发一条，同一会话两轮并发写。共用之后，「一个会话只有一个窗口」
+    /// 由数据结构本身保证，不必指望每个调用点都记得先去查。
+    /// </summary>
+    public static SessionViewCache Shared { get; } = new();
+
     /// <summary>缓存里的条目数。</summary>
     public int Count => _entries.Count;
 
@@ -40,6 +51,15 @@ public sealed class SessionViewCache
 
     public static string KeyForWorkspaceSession(string workspaceId, string sessionId)
         => $"w:{workspaceId}:{sessionId}";
+
+    /// <summary>从缓存键里取回会话 id（键的两段格式见上面）。会话 id 本身不含冒号。</summary>
+    public static string SessionIdOf(string key)
+    {
+        if (key.StartsWith("s:", StringComparison.Ordinal)) return key[2..];
+
+        var index = key.IndexOf(':', 2);
+        return index < 0 ? key : key[(index + 1)..];
+    }
 
     /// <summary>命中就直接返回；未命中则用 <paramref name="factory"/> 建一个并记下来。</summary>
     public ConversationView GetOrAdd(string key, Func<ConversationView> factory, DateTime utcNow)
@@ -74,6 +94,18 @@ public sealed class SessionViewCache
             entry.LastShownUtc = utcNow;
     }
 
+    /// <summary>
+    /// 刷新某个会话（不论普通会话还是工作空间会话）的最后显示时间。
+    /// 用途：任务跑完时重新起算保留期 —— 运行期间窗口是被钉住不淘汰的，
+    /// 淘汰倒计时该从「跑完」开始，而不是从「当初切走」开始。
+    /// </summary>
+    public void TouchSession(string sessionId, DateTime utcNow)
+    {
+        foreach (var (key, entry) in _entries)
+            if (SessionIdOf(key) == sessionId)
+                entry.LastShownUtc = utcNow;
+    }
+
     /// <summary>移除一条（会话被删除、工作空间被删除时调用，否则删了还能从缓存切回来）。</summary>
     public bool Evict(string key) => _entries.Remove(key);
 
@@ -100,7 +132,14 @@ public sealed class SessionViewCache
     /// 它的「最后显示时间」就是现在，本来也不会过期，但显式排除掉可以防住时钟回拨之类的意外。
     /// </summary>
     /// <param name="retention">保留时长；传 <see cref="Timeout.InfiniteTimeSpan"/> 表示一直保留（永远返回空）。</param>
-    public IReadOnlyList<string> CollectExpired(DateTime utcNow, TimeSpan retention, string? keepKey = null)
+    /// <param name="isPinned">
+    /// 额外钉住的键，<b>不看保留期</b>。当前用途是「这一轮还在跑」的会话：
+    /// 运行中的窗口一旦被淘汰，切回来就会重新建一个空窗口、从库里读一段半成品历史，
+    /// 而旧窗口其实还活着、还在往里写 —— 界面上就是「任务明明还在跑，却显示已完成」。
+    /// 所以只要任务没结束，窗口就不许走。
+    /// </param>
+    public IReadOnlyList<string> CollectExpired(
+        DateTime utcNow, TimeSpan retention, string? keepKey = null, Func<string, bool>? isPinned = null)
     {
         if (retention == Timeout.InfiniteTimeSpan) return Array.Empty<string>();
 
@@ -108,6 +147,7 @@ public sealed class SessionViewCache
         foreach (var (key, entry) in _entries)
         {
             if (key == keepKey) continue;
+            if (isPinned?.Invoke(key) == true) continue;
             if (utcNow - entry.LastShownUtc > retention) expired.Add(key);
         }
 

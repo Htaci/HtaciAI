@@ -48,6 +48,15 @@ public sealed class AppSettingsData
     public bool SessionCacheKeepForever { get; set; }
 
     /// <summary>
+    /// 允许 AI 自我扩展：暴露 <c>create_tool</c> / <c>create_skill</c> 两个工具，
+    /// 让模型能新建脚本工具与技能。
+    ///
+    /// 只有「这两个工具是否出现在工具列表里」这一件事受它控制 —— 权限审批、重名检查、
+    /// 路径约束都不因此放松。关掉它也不会删掉已经建好的工具（那些东西仍归用户在工具页管理）。
+    /// </summary>
+    public bool AllowAgentSelfExtension { get; set; } = true;
+
+    /// <summary>
     /// 更新清单地址（形如 <c>{"version":"1.2.0","url":"…","notes":"…"}</c> 的 JSON）。
     /// 空 = 未配置，「检查更新」按钮会引导用户来这里填。
     /// </summary>

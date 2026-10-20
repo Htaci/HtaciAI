@@ -17,7 +17,189 @@ public static class BuiltinSkills
         ("code-review", CodeReview),
         ("software-engineering-collaborative", SoftwareEngineeringCollaborative),
         ("software-engineering-autonomous", SoftwareEngineeringAutonomous),
+        ("tool-authoring", ToolAuthoring),
+        ("skill-authoring", SkillAuthoring),
     };
+
+    /// <summary>创建工具的指引：脚本协议、入参 schema、命名与返回规范。</summary>
+    private const string ToolAuthoring = """
+        ---
+        name: tool-authoring
+        alias: 创建工具
+        description: 指导如何用 create_tool 为用户创建一个新的脚本工具（Python / Node.js）：何时该建、脚本怎么读写参数与结果、入参 schema 怎么写、命名与错误处理规范
+        ---
+
+        # tool-authoring（创建工具）
+
+        当用户希望你「做一个能反复用的工具」「把这个操作固定下来」或明确要求新增工具时，
+        先加载本技能，再调用 create_tool。
+
+        ## 一、先判断该不该建工具
+
+        该建：
+        - 同一个操作以后还会反复做（查天气、转换格式、调用某个固定 API）。
+        - 规则明确、能写成确定性代码，不需要每次临场判断。
+        - 现有工具做不到，而 bash 里临时拼命令又太脆弱。
+
+        不该建：
+        - 一次性任务：直接用 bash / python 跑一遍就行，不必留下一个永久工具。
+        - 需要判断与取舍的任务（那种属于技能，不属于工具）。
+        - read / write / edit / grep / glob / webfetch 已经能覆盖的事。
+
+        拿不准就先问用户，不要先建后问。
+
+        ## 二、脚本协议（必须严格遵守）
+
+        1. 参数从 **stdin** 读入，是一段 JSON（就是模型调用时给的 arguments）。
+        2. 结果打到 **stdout**，纯文本。stdout 里不要混日志、调试输出、进度条 —— 它整段会被当成工具结果交给模型。
+        3. 失败时用 **非 0 退出码** 退出，把原因写到 **stderr**。应用会把 stderr 当作错误信息显示给模型。
+        4. 不要依赖工作目录、不要读用户没提到的文件；需要路径就让它作为参数传进来。
+        5. 不要有交互（不要等待输入、不要弹窗），脚本是无人值守跑的。
+        6. 默认超时 60 秒，超过会被杀掉；慢操作自己加超时参数或在内部限时。
+
+        Python 模板：
+
+        ```python
+        import json, sys
+
+        def run(text):
+            return text.upper()
+
+        if __name__ == "__main__":
+            try:
+                args = json.loads(sys.stdin.read() or "{}")
+                print(run(**args))
+            except Exception as e:
+                print(str(e), file=sys.stderr)
+                sys.exit(1)
+        ```
+
+        Node.js 模板：
+
+        ```javascript
+        const fs = require('fs');
+
+        function run(text) {
+          return text.toUpperCase();
+        }
+
+        try {
+          const args = JSON.parse(fs.readFileSync(0, 'utf-8') || '{}');
+          console.log(run(args.text));
+        } catch (e) {
+          console.error(e.message);
+          process.exit(1);
+        }
+        ```
+
+        ## 三、入参 schema
+
+        `input_schema` 是字符串，里面是一段 JSON Schema。根必须是 `{"type":"object"}`。
+
+        ```json
+        {"type":"object","properties":{"text":{"type":"string","description":"要转换的文本"}},"required":["text"]}
+        ```
+
+        写法要求：
+        - 每个属性都写 `description`，写清楚「传什么」。模型是按这段描述决定填什么的。
+        - 必填项放进 `required`；能推断出默认值的就不要强制用户传。
+        - 类型用 `string` / `integer` / `number` / `boolean` / `array` / `object`，不要用 `anyOf`、`oneOf`、`$ref` 这类高阶组合 —— 各家服务商支持程度不一致。
+        - 枚举值用 `"enum": [...]`，比如 `{"type":"string","enum":["text","json"]}`。
+        - 属性名只用字母、数字、下划线，且不以数字开头。
+
+        ## 四、命名与描述
+
+        - `name`：小写字母开头，只含小写字母、数字、下划线。用「动词_宾语」：`fetch_weather`、`convert_image`。
+        - 不要与会话里已有的工具重名（read / write / edit / bash / grep / glob / webfetch / view_image / load_skill / unload_skill / ask_user_question / create_tool / create_skill）。
+        - `description`：一句话说清「做什么 + 什么时候用」。这是模型判断要不要调用的唯一依据，别写成产品文案。
+
+        ## 五、建完之后
+
+        - 工具建好**不会自动启用**，本轮也没法调用。你要明确告诉用户：去「工具」页勾选它。
+        - 不要在同一个任务里反复创建同名工具；名字冲突时换一个名字，或请用户修改原工具。
+        - 建好后不要假装调用它，也不要说「我已经用它查了一下」——它此刻还不可用。
+
+        ## 六、危险等级
+
+        新建工具一律是「危险」。这是程序定的，不是你该考虑的参数。
+        如果这个工具其实是只读的，可以告诉用户可以到工具页把等级调低，但不要为此去改脚本去「证明」它安全。
+        """;
+
+    /// <summary>创建技能的指引：frontmatter、正文结构、该写与不该写什么。</summary>
+    private const string SkillAuthoring = """
+        ---
+        name: skill-authoring
+        alias: 创建技能
+        description: 指导如何用 create_skill 把一套流程、规范或检查清单沉淀成技能（SKILL.md）：何时该建、frontmatter 字段含义、正文结构与长度控制
+        ---
+
+        # skill-authoring（创建技能）
+
+        当用户说「把这个流程记下来」「以后都按这个规范做」或需要把一套跨会话长期有效的做法固化时，
+        先加载本技能，再调用 create_skill。
+
+        ## 一、技能与工具的区别
+
+        - 工具（create_tool）是可执行的代码，模型「调用」它。
+        - 技能（create_skill）是写给模型看的说明书，加载后**全文注入 system 提示词**，改变的是模型的做事方式。
+
+        所以：能写成代码的用工具；需要模型按步骤判断、遵守约定、按固定格式输出的，用技能。
+
+        该建技能：
+        - 一套多步骤流程（排查顺序、发布前检查清单）。
+        - 项目/团队约定（命名规范、目录结构、代码风格）。
+        - 某类任务的输出格式要求。
+
+        不该建技能：
+        - 一句话就能说清的规则 —— 直接在对话里说，或让用户写进自己的常用提示词。
+        - 通用常识与模型本来就会的东西（「写代码要注意安全」这种）。
+        - 需要频繁修改的临时信息（会过期的东西）。
+
+        ## 二、frontmatter
+
+        文件是 `SKILL.md`，开头是三个 `---` 之间的元数据：
+
+        ```
+        ---
+        name: review-sql
+        alias: SQL 审查
+        description: 审查 SQL 语句：索引使用、注入风险、可读性
+        ---
+        ```
+
+        - `name`：小写字母或数字开头，只含小写字母、数字、`.`、`_`、`-`。**必须唯一**，不要与已有技能或内置技能重名。它同时是目录名与 `load_skill` 的调用名。
+        - `alias`：给人看的中文名，可省略。只影响界面显示。
+        - `description`：一句话说清「覆盖什么任务、什么时候该加载」。模型靠它判断要不要加载本技能。
+
+        正文不要自己写 frontmatter —— create_skill 的 `body` 参数只放正文，元数据由 name / alias / description 三个参数生成。
+
+        ## 三、正文结构
+
+        建议按这四段写，按需裁剪：
+
+        1. **何时触发**：什么请求、什么信号出现时才该用这个技能。
+        2. **步骤**：编号写清做什么、按什么顺序、每步的判断标准。
+        3. **输出格式**：要给用户看的东西长什么样（标题、表格、字段）。
+        4. **禁止事项**：这个技能下不该做的事（不擅自改文件、不跳过验证等）。
+
+        写法要求：
+        - 用祈使句写指令（「检查…」「不要…」），不要写成介绍文。
+        - 具体到能执行：写「用 glob 找出所有 *.cs」，不要写「注意代码结构」。
+        - 不要嵌套太深，超过三层的小标题说明该拆成两个技能。
+        - 不要写「你可以考虑」这类模糊表述 —— 技能要么是规则，要么是步骤。
+
+        ## 四、长度
+
+        上限 24 KB，实际应当远小于这个数：技能会**全文注入每一次请求**，
+        写 10 KB 的通用常识等于每轮都在挤占对话空间。控制在一两屏内，
+        只写这个任务真正需要的、模型不写就会做错的东西。
+
+        ## 五、建完之后
+
+        - 技能建好**不会自动加载**。要在当前会话生效，需要调用 `load_skill`（name 用你刚创建的 name）。
+        - 加载前先确认正文确实是用户想要的内容；不要把未经确认的内容注入自己的上下文。
+        - 告诉用户可以在「技能」页查看、修改或删除它。
+        """;
 
     /// <summary>代码审查：端到端验证技能注入链路。</summary>
     private const string CodeReview = """

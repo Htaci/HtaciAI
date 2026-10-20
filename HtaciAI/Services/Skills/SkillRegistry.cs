@@ -78,7 +78,8 @@ public sealed class SkillRegistry
     /// 新建技能：写入 <c>&lt;SkillsRoot&gt;/&lt;id&gt;/SKILL.md</c> 后重载注册表。
     /// 写入与解析都在这里，格式不会两头跑偏。id 已被占用时抛 <see cref="InvalidOperationException"/>。
     /// </summary>
-    public SkillDefinition CreateOnDisk(string id, string name, string alias, string description, string body)
+    public SkillDefinition CreateOnDisk(string id, string name, string alias, string description, string body,
+                                        string origin = SkillDefinition.OriginUser)
     {
         var dir = Path.Combine(SkillsRoot, id);
         var file = Path.Combine(dir, "SKILL.md");
@@ -86,7 +87,7 @@ public sealed class SkillRegistry
             throw new InvalidOperationException($"技能「{id}」已存在");
 
         Directory.CreateDirectory(dir);
-        File.WriteAllText(file, BuildSkillMd(name, alias, description, body), Encoding.UTF8);
+        File.WriteAllText(file, BuildSkillMd(name, alias, description, body, origin), Encoding.UTF8);
         LoadFromDisk();
 
         return ResolveById(id) ?? new SkillDefinition
@@ -96,6 +97,7 @@ public sealed class SkillRegistry
             Alias = alias,
             Description = description,
             Body = body,
+            Origin = origin,
         };
     }
 
@@ -103,13 +105,17 @@ public sealed class SkillRegistry
     /// 按 SKILL.md 的约定拼文件内容：frontmatter 只写非空项，与正文之间留一个空行。
     /// 元数据项必须是单行，否则会破坏 frontmatter 解析，所以这里统一压平。
     /// </summary>
-    public static string BuildSkillMd(string name, string alias, string description, string body)
+    public static string BuildSkillMd(string name, string alias, string description, string body,
+                                      string origin = SkillDefinition.OriginUser)
     {
         var sb = new StringBuilder();
         sb.Append("---\n");
         sb.Append("name: ").Append(OneLine(name)).Append('\n');
         if (!string.IsNullOrWhiteSpace(alias)) sb.Append("alias: ").Append(OneLine(alias)).Append('\n');
         if (!string.IsNullOrWhiteSpace(description)) sb.Append("description: ").Append(OneLine(description)).Append('\n');
+        // 只在 AI 创建时写这一行：人工建的技能不需要在文件里多一条噪音，
+        // 缺失即按 user 处理（见 ParseSkill）
+        if (origin == SkillDefinition.OriginAgent) sb.Append("origin: agent\n");
         sb.Append("---\n\n");
         sb.Append(body);
         sb.Append('\n');
@@ -158,7 +164,10 @@ public sealed class SkillRegistry
             var name = meta.TryGetValue("name", out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : id;
             var desc = meta.TryGetValue("description", out var d) ? d.Trim() : "";
             var alias = meta.TryGetValue("alias", out var a) ? a.Trim() : "";
-            return new SkillDefinition { Id = id, Name = name, Alias = alias, Description = desc, Body = body };
+            var origin = meta.TryGetValue("origin", out var o) && o.Trim() == SkillDefinition.OriginAgent
+                ? SkillDefinition.OriginAgent
+                : SkillDefinition.OriginUser;
+            return new SkillDefinition { Id = id, Name = name, Alias = alias, Description = desc, Body = body, Origin = origin };
         }
         catch
         {

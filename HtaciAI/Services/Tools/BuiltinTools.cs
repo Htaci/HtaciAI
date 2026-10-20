@@ -24,6 +24,12 @@ public static class BuiltinTools
     private const string IdUnloadSkill = "builtin-unload-skill";
     private const string IdAskUser = "builtin-ask-user";
     private const string IdViewImage = "builtin-view-image";
+    private const string IdCreateTool = "builtin-create-tool";
+    private const string IdCreateSkill = "builtin-create-skill";
+
+    /// <summary>自举工具名。<see cref="ToolDefinition.IsSelfExtension"/> 按它判定，界面与网关也认这两个常量。</summary>
+    public const string CreateToolName = "create_tool";
+    public const string CreateSkillName = "create_skill";
 
     public static IReadOnlyList<ToolDefinition> GetAll() => new[]
     {
@@ -116,6 +122,38 @@ public static class BuiltinTools
             DangerLevel = ToolDangerLevel.Safe,
             InputSchemaJson =
                 "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"技能名\"}},\"required\":[\"name\"]}",
+        },
+        new ToolDefinition
+        {
+            Id = IdCreateTool,
+            Name = CreateToolName,
+            Description = """
+                创建一个新的脚本工具并登记到工具库（Python / Node.js）。危险：会写入可执行代码。
+                建好之后<b>不会自动启用</b>，需要用户到「工具」页勾选后才能在本会话调用。
+                写之前先 load_skill 加载 tool-authoring 了解脚本协议与参数规范。
+                """,
+            Source = ToolSource.Builtin,
+            // 固定「危险」：等级必须由程序决定，不能交给模型自评 —— 它会把自己写的工具标成「安全」从而绕开审批。
+            // 用户可以在工具页把它改成别的等级，那是知情之后的选择。
+            DangerLevel = ToolDangerLevel.Danger,
+            InputSchemaJson = """
+                {"type":"object","properties":{"name":{"type":"string","description":"工具名，小写字母开头，只含小写字母/数字/下划线（如 fetch_weather）；会作为模型的调用名，全局唯一"},"description":{"type":"string","description":"一句话说明这个工具做什么、什么时候该用它；这是模型判断是否调用的唯一依据"},"runtime":{"type":"string","enum":["python","node"],"description":"脚本运行时：python 或 node"},"script":{"type":"string","description":"脚本源码全文。从 stdin 读入 JSON 参数，把结果打到 stdout；失败时用非 0 退出码并在 stderr 写原因"},"input_schema":{"type":"string","description":"入参 JSON Schema 字符串，根必须是 {\"type\":\"object\"}；无参数时传 {}"}},"required":["name","description","runtime","script","input_schema"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdCreateSkill,
+            Name = CreateSkillName,
+            Description = """
+                创建一个新技能（SKILL.md 知识包），写入技能目录。风险：会写盘。
+                建好之后不会自动加载，需要用户启用或你自己调用 load_skill。
+                写之前先 load_skill 加载 skill-authoring 了解格式与内容规范。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Risk,
+            InputSchemaJson = """
+                {"type":"object","properties":{"name":{"type":"string","description":"技能名，小写字母开头，只含小写字母/数字/-/._（如 review-sql）；同时是目录名与 load_skill 的调用名，全局唯一"},"alias":{"type":"string","description":"给人看的中文别名（可选，仅影响界面显示）"},"description":{"type":"string","description":"一句话说明这个技能覆盖什么任务、何时该加载它"},"body":{"type":"string","description":"SKILL.md 正文（Markdown，不含 frontmatter）。写清楚触发条件、步骤、输出格式与禁止事项"}},"required":["name","description","body"]}
+                """,
         },
         new ToolDefinition
         {

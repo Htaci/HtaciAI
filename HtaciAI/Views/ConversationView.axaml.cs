@@ -183,6 +183,9 @@ public partial class ConversationView : UserControl
         // 运行中控件会自己把注入的项禁用掉（中途插一条压缩会让本轮上下文前后不一致）。
         Input.AddMoreItem("压缩上下文", () => _ = CompressContextAsync(manual: true));
 
+        // 连接断了自动重来这件事必须让用户看见：一断就静默地晾十几秒，看起来就是程序卡死。
+        _gateway.RetryScheduled = OnRetryScheduled;
+
         // 滚到接近顶部时补齐更早的历史（长会话首屏只渲染最后一批，见 RenderHistory）
         MessagesScroll.ScrollChanged += OnMessagesScrollChanged;
         SetupAutoScroll();
@@ -193,6 +196,27 @@ public partial class ConversationView : UserControl
 
     /// <summary>压缩是否在进行中。防重入：自动压缩与手动点击可能撞上。</summary>
     private bool _compressing;
+
+    /// <summary>输入区那条「正在重试」的提示是不是我显示的（收尾时只有我该去清它）。</summary>
+    private bool _retryHintShown;
+
+    /// <summary>
+    /// 网关即将自动重试（一次请求内最多 5 次尝试）。
+    /// 提示不复位等待环：重试期间这一轮仍然在跑，运行态不能闪回发送态。
+    /// </summary>
+    private void OnRetryScheduled(int attempt, int maxAttempts)
+    {
+        void Show()
+        {
+            _retryHintShown = true;
+            Input.ShowHint($"请求中断，正在重试（{attempt - 1}/{maxAttempts - 1} 次失败）…",
+                InputHintKind.Info, autoHide: false);
+        }
+
+        // 重试发生在本轮请求内部，通常已经在 UI 线程上；仍按防御写法处理，别赌调用上下文。
+        if (Dispatcher.UIThread.CheckAccess()) Show();
+        else Dispatcher.UIThread.Post(Show);
+    }
 
     private bool _initialized;
 
@@ -327,6 +351,12 @@ public partial class ConversationView : UserControl
                 if (tool is not null) tools.Add(tool);
             }
         }
+
+        // 「允许 AI 创建工具与技能」关掉时不把这两个工具发给模型。
+        // 只有这一个出口需要过滤：会话存档里可能还留着它们的 id，这里挡掉就等于模型看不见、也调不到。
+        // （执行侧还会再查一次开关，防的是「列表过滤漏了」这类改动。）
+        if (!AppSettingsStore.Current.AllowAgentSelfExtension)
+            tools.RemoveAll(t => t.IsSelfExtension);
 
         return tools.Count > 0 ? tools : null;
     }
@@ -569,7 +599,7 @@ public partial class ConversationView : UserControl
     /// </summary>
     private void AddErrorCard(ChatMessage msg)
     {
-        var card = new ErrorCard(msg.Content);
+        var card = new ErrorCard(msg.Content, onRetry: () => _ = RetryTurnAsync(msg));
         if (_activeTurnHost is null)
             MessagesPanel.Children.Add(card.Root);
         else
@@ -1068,6 +1098,14 @@ public partial class ConversationView : UserControl
             // 放在 finally 里而不是只放在 FinishActivityCard 里：请求异常直接抛出去时那条路径
             // 不会走到收尾逻辑，定时器会一直跑下去（运行中的 DispatcherTimer 会吊住页面）。
             StopTurnTimer();
+
+            // 「正在重试」是临时提示：本轮既然已经有结论了（成功或彻底失败），就把它收掉，
+            // 别让一行「正在重试」留在输入框旁边冒充当前状态。
+            if (_retryHintShown)
+            {
+                _retryHintShown = false;
+                Input.HideHint();
+            }
         }
 
         // 停在半路的工具卡（参数还在接收 / 执行中）不会再有回调，就地收成终态。
@@ -1264,6 +1302,67 @@ public partial class ConversationView : UserControl
         _streamInsertIndex = ComputeInsertIndex(insertAfter);
 
         await RunTurnAsync(selected, client, null, context, attachments: null, insertAfter);
+    }
+
+    /// <summary>
+    /// 重试某一轮失败 / 中断的请求（错误卡上的「重试」）。
+    ///
+    /// 与「重新生成」只差一件事：<b>怎么对待上一轮</b>。重新生成是「不满意，删掉重来」；
+    /// 重试是「没跑完，接着跑」—— 所以这里一条消息都不删。上一轮已经产生的思考与正文
+    /// 留在原地（网关在失败时也把它们落进那条 failed 消息里了），用户想回看还能看，
+    /// 否则一次断网就把好不容易等出来的思考链抹掉，等于白等。
+    ///
+    /// 成功与否都靠自动重试先兜一遍（一次请求 5 次尝试），所以能走到这个按钮面前的基本是
+    /// 「重试也没用」的失败（余额用尽、鉴权失败、模型名不存在）—— 那正是该让用户自己决定
+    /// 是否继续的场景：去充值、去改配置，回来点它接着跑。
+    /// </summary>
+    /// <param name="anchor">失败那一轮里的任意一条消息（错误记录 / 失败的 assistant / 中断的工具行）。</param>
+    private async Task RetryTurnAsync(ChatMessage anchor)
+    {
+        if (_busy)
+        {
+            Input.ShowHint("正在生成回复，先点「停止」再重试", InputHintKind.Info, autoHide: true);
+            return;
+        }
+
+        if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
+        {
+            Input.ShowHint("正在加载历史记录，完成后自动重试…", InputHintKind.Info, autoHide: false);
+            await loadTcs.Task;
+            Input.HideHint();
+        }
+
+        var selected = Input.ModelSelector.SelectedModel;
+        if (selected is null)
+        {
+            Input.ShowHint("尚未配置模型：请到「设置 → 模型服务」添加并启用服务商与模型", InputHintKind.Fail, autoHide: false);
+            return;
+        }
+
+        var anchorIndex = _messages.FindIndex(m => m.Id == anchor.Id);
+        if (anchorIndex < 0) return;
+
+        // 这一轮的起点。错误记录与失败的 assistant 都带着同一个 turn_id，
+        // 按它退回轮次开头，才能把「这一轮之前」的上下文完整取出来。
+        var start = anchor.TurnId is null ? anchorIndex : IndexOfTurnStart(anchor.TurnId, anchorIndex);
+
+        var context = _messages.Take(start).ToList();
+        if (context.Count == 0) return;   // 失败轮前面什么都没有（连用户消息都没有）就没得重试
+
+        _busy = true;
+        var client = await ResolveSendClientAsync(selected);
+        if (client is null)
+        {
+            _busy = false;
+            return;
+        }
+
+        Input.SetRunning(true);
+        ReportActivity(SessionActivity.Running);
+        _autoScroll = true;
+
+        // 不传 insertAfterSequence：新回复追加在末尾（上一轮的控件与消息都留着）
+        await RunTurnAsync(selected, client, null, context, attachments: null);
     }
 
     /// <summary>AI 轮的第一条消息在 <c>_messages</c> 里的下标（找不到就退回 <paramref name="fallback"/>）。</summary>
@@ -1731,8 +1830,11 @@ public partial class ConversationView : UserControl
             }
             else if (ChatError.IsError(m))
             {
-                // 错误卡排在那一轮的末尾：它就是这一轮的结果
-                host.ContentPanel.Children.Add(new ErrorCard(m.Content).Root);
+                // 错误卡排在那一轮的末尾：它就是这一轮的结果。
+                // 历史里的错误卡同样带「重试」：隔了半天回来看到「余额用尽」，
+                // 充完钱在这一轮上接着跑，比翻上去找原来那句用户消息再「重新生成」顺手。
+                host.ContentPanel.Children.Add(
+                    new ErrorCard(m.Content, onRetry: () => _ = RetryTurnAsync(m)).Root);
             }
         }
 
