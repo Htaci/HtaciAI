@@ -12,8 +12,11 @@ public interface IScriptRunner
 {
     ScriptRuntimeKind Kind { get; }
 
-    /// <summary>执行脚本：stdin 写入 argumentsJson，stdout 返回结果。</summary>
-    Task<ScriptRunResult> RunAsync(string scriptPath, string argumentsJson, CancellationToken ct);
+    /// <summary>
+    /// 执行脚本：stdin 写入 argumentsJson，stdout 返回结果。
+    /// <paramref name="timeoutSeconds"/> 是工具入参里声明的时长，null 时用 <see cref="ScriptProcess.DefaultTimeout"/>。
+    /// </summary>
+    Task<ScriptRunResult> RunAsync(string scriptPath, string argumentsJson, int? timeoutSeconds, CancellationToken ct);
 }
 
 /// <summary>一次脚本运行的结果。</summary>

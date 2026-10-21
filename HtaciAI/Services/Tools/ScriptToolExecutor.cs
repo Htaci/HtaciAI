@@ -27,7 +27,10 @@ public sealed class ScriptToolExecutor
         if (runner is null)
             return ToolExecution.Fail($"暂不支持的运行时：{tool.Runtime}");
 
-        var result = await runner.RunAsync(tool.Target, call.Arguments ?? "{}", ct);
+        // 工具入参声明了 timeout 就按它设子进程超时（AI 想跑长时间脚本就自己抬），
+        // 与分派器那一层的超时守卫取同一个值，先触发的一定是这条更具体的。
+        var result = await runner.RunAsync(tool.Target, call.Arguments ?? "{}",
+            BuiltinToolContext.GetIntArg(call, "timeout"), ct);
         if (result.Success)
             return ToolExecution.Ok(string.IsNullOrWhiteSpace(result.Output) ? "（脚本无输出）" : result.Output);
 

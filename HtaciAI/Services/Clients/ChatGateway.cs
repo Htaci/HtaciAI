@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -119,6 +120,28 @@ public sealed class ChatGateway
         // 每轮用户消息重置工具状态（本轮已读取文件等）
         tools?.BeginTurn();
 
+        // 一条 tool 结果行：先插入（内容为占位），执行完再 update 成真实结果。
+        async Task<ChatMessage> InsertToolMessageAsync(ChatToolCall call, string content, string status)
+        {
+            var msg = new ChatMessage
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                SessionId = sessionId,
+                TurnId = aiTurnId,
+                SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
+                Role = "tool",
+                Content = content,
+                ToolCallId = call.Id,
+                ToolName = call.Name ?? "",
+                Status = status,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            await store.Insert(msg);
+            messages.Add(msg);
+            return msg;
+        }
+
         for (var round = 0; round < MaxToolRounds; round++)
         {
             // 上一轮工具刚跑完、用户这时按了停止：不要再发下一次请求。
@@ -140,10 +163,22 @@ public sealed class ChatGateway
 
             var sink = beginRound(assistantMsg);
 
+            // 单独攒一份流式正文与思考：被打断时 StreamAsync 不会返回结果，
+            // 不在这里攒的话这一轮收到的内容只活在界面控件里，落库的是一条空消息 ——
+            // 重开会话看不到，点「继续」时模型也看不到（等于白等一场）。
+            var partial = new StringBuilder();
+            var partialThinking = new StringBuilder();
+            var capturing = new ChatRoundSink
+            {
+                OnContent = delta => { partial.Append(delta); sink.OnContent(delta); },
+                OnThinking = delta => { partialThinking.Append(delta); sink.OnThinking(delta); },
+                OnToolCall = sink.OnToolCall,
+            };
+
             ChatStreamResult result;
             try
             {
-                result = await active.StreamAsync(messages, systemPrompt, options, sink, ct);
+                result = await active.StreamAsync(messages, systemPrompt, options, capturing, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -151,6 +186,8 @@ public sealed class ChatGateway
                 // when 过滤是必须的：超时同样抛 OperationCanceledException，但它不是用户取消的，
                 // 要落到下面的通用 catch 里按出错记录 —— 少了它超时会无声无息，那是最难查的一类失败。
                 assistantMsg.Status = "interrupted";
+                assistantMsg.Content = partial.Length == 0 ? null : partial.ToString();
+                assistantMsg.Thinking = partialThinking.Length == 0 ? null : partialThinking.ToString();
                 await store.Insert(assistantMsg);
                 return new ChatTurnResult(userMsg, assistantMsg, false, null);
             }
@@ -209,8 +246,15 @@ public sealed class ChatGateway
             foreach (var call in toolCalls)
             {
                 // 一批里有多个调用时，停止要在两个调用之间就生效，
-                // 而不是把剩下的每个都启动一遍再各自取消
-                ct.ThrowIfCancellationRequested();
+                // 而不是把剩下的每个都启动一遍再各自取消 —— 但<b>每一条都要留一条结果行</b>：
+                // 少一条，库里就是「assistant 有 3 个 tool_calls、只有 1 条 tool 回它」，
+                // 服务端此后每次发送都 400。所以这里写「未执行」，而不是直接抛出去。
+                if (ct.IsCancellationRequested)
+                {
+                    await InsertToolMessageAsync(call,
+                        $"工具「{call.Name ?? ""}」未执行：用户已停止本轮，没有取得结果。", "failed");
+                    continue;
+                }
 
                 var toolName = call.Name ?? "";
 
@@ -219,24 +263,20 @@ public sealed class ChatGateway
                 // 这中间用户关掉软件就会留下「有 tool_calls、没有 tool 回它」的历史 ——
                 // 服务端此后每次发送都 400，且那条坏消息留在库里，这个会话再也发不出去。
                 // 占位行直接写成中断态：真被杀掉时它已经是最终形态，不需要任何事后收敛。
-                var toolMsg = new ChatMessage
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    SessionId = sessionId,
-                    TurnId = aiTurnId,
-                    SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
-                    Role = "tool",
-                    Content = ToolCallRepair.InterruptedResult,
-                    ToolCallId = call.Id,
-                    ToolName = toolName,
-                    Status = "interrupted",
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                };
-                await store.Insert(toolMsg);
-                messages.Add(toolMsg);
+                var toolMsg = await InsertToolMessageAsync(call, ToolCallRepair.InterruptedResult, "interrupted");
 
-                var exec = await tools.ExecuteAsync(call, ct);
+                ToolExecution exec;
+                try
+                {
+                    exec = await tools.ExecuteAsync(call, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // 停止发生在工具那一层（审批卡被撤销、工具自己按令牌收了尾）。
+                    // 结果照样要写进这条 tool 消息：模型得知道它是被用户停掉的，而不是凭空消失。
+                    exec = ToolExecution.Fail("已被用户强制停止：没有取得结果，不要把它当成执行成功");
+                }
+
                 string toolContent;
 
                 if (!exec.Success)

@@ -10,13 +10,14 @@ namespace HtaciAI.Services.ScriptRuntimes;
 /// </summary>
 public static class ScriptProcess
 {
-    /// <summary>脚本执行默认超时（秒）。</summary>
-    public static TimeSpan DefaultTimeout { get; set; } = TimeSpan.FromSeconds(60);
+    /// <summary>脚本执行默认超时。与工具层的默认超时（<c>ToolExecutorDispatcher.DefaultTimeoutSeconds</c>）取同一个值。</summary>
+    public static TimeSpan DefaultTimeout { get; set; } = TimeSpan.FromSeconds(300);
 
     public static async Task<ScriptRunResult> RunAsync(
         ScriptRuntimeKind kind,
         string scriptPath,
         string argumentsJson,
+        int? timeoutSeconds,
         CancellationToken ct)
     {
         var probe = await RuntimeDetector.ProbeAsync(kind);
@@ -27,13 +28,14 @@ public static class ScriptProcess
                 Error = $"未检测到 {RuntimeDetector.DisplayName(kind)} 运行时，请到「设置 → 环境配置」检查",
             };
 
-        return await RunProcessAsync(probe.ResolvedPath, scriptPath, argumentsJson, ct);
+        return await RunProcessAsync(probe.ResolvedPath, scriptPath, argumentsJson, timeoutSeconds, ct);
     }
 
     private static async Task<ScriptRunResult> RunProcessAsync(
         string interpreter,
         string scriptPath,
         string argumentsJson,
+        int? timeoutSeconds,
         CancellationToken ct)
     {
         var commandLine = $"{interpreter} {scriptPath}";
@@ -64,7 +66,10 @@ public static class ScriptProcess
         var stdoutTask = p.StandardOutput.ReadToEndAsync();
         var stderrTask = p.StandardError.ReadToEndAsync();
 
-        using var timeoutCts = new CancellationTokenSource(DefaultTimeout);
+        // 工具入参能指定时长时按它走（AI 自己说要跑多久），否则用默认值
+        var timeout = timeoutSeconds is > 0 ? TimeSpan.FromSeconds(timeoutSeconds.Value) : DefaultTimeout;
+
+        using var timeoutCts = new CancellationTokenSource(timeout);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         try
         {
@@ -83,7 +88,7 @@ public static class ScriptProcess
             return new ScriptRunResult
             {
                 Success = false,
-                Error = $"脚本执行超时（>{DefaultTimeout.TotalSeconds:0}s）",
+                Error = $"脚本执行超时（>{timeout.TotalSeconds:0}s）",
                 CommandLine = commandLine,
             };
         }

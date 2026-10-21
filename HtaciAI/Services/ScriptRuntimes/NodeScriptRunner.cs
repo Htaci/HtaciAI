@@ -8,6 +8,6 @@ public sealed class NodeScriptRunner : IScriptRunner
 {
     public ScriptRuntimeKind Kind => ScriptRuntimeKind.Node;
 
-    public Task<ScriptRunResult> RunAsync(string scriptPath, string argumentsJson, CancellationToken ct)
-        => ScriptProcess.RunAsync(ScriptRuntimeKind.Node, scriptPath, argumentsJson, ct);
+    public Task<ScriptRunResult> RunAsync(string scriptPath, string argumentsJson, int? timeoutSeconds, CancellationToken ct)
+        => ScriptProcess.RunAsync(ScriptRuntimeKind.Node, scriptPath, argumentsJson, timeoutSeconds, ct);
 }
