@@ -138,6 +138,13 @@ public interface IPluginContext
 }
 ```
 
+> **实装后的差异**（以 [`plugin-handoff.md`](./plugin-handoff.md) 为准）：
+> `IUiSlotRegistry` 实装名是 `IUiExtensionRegistry`；`IPromptContributor` 去掉了 `Layer`
+> （只有「追加到 system 末尾」一种用法）；`BuildAsync` 的签名就是现在这一份：
+> 每插件 4 KB / 单轮合计 8 KB 配额、500 ms 超时、`prompt.contribute` 与 `chat.observe`
+> 全部已实装（M2）；`Windows` / `Slots` 已实装（M4）；`Tools` 仍待做（M0 计划的
+> `tools.provide` 到现在还没接）。
+
 ### 2.3 扩展点
 
 **a) 上下文构建**
@@ -152,8 +159,10 @@ public interface IPromptContributor
 }
 ```
 
-- 接入点：`StandaloneProfile.BuildSystemPrompt` 与 `WorkspaceProfile.BuildSystemPrompt` 的末尾统一走 `PromptComposer`。
-- **签名要改成异步**：现在两者都是 `string BuildSystemPrompt(string modelId)`，调用点在 `RunTurnAsync`（已是 async）。改成 `Task<string> BuildSystemPromptAsync(string modelId, CancellationToken ct)`，插件贡献在发送前一次性取好。不要试图在同步方法里 `GetAwaiter().GetResult()`。
+- 接入点：`ConversationRuntime.RunTurnAsync` 里那一行 `Profile.BuildSystemPrompt` 换成
+  `PromptComposer.ComposeAsync(...)`（M2 实装）。
+- **没有把 profile 接口改成异步**：它只是字符串拼接，改了要动接口、两个实现和
+  「工作空间不能与普通对话合流」的注释，收益为零。包一层就够。
 - 硬约束：每插件配额（默认 4 KB），单次总配额（默认 8 KB）；超限截断并记日志；异常吞掉并跳过该贡献者，不影响本轮发送。
 - 每个插件的实际贡献长度要能在设置页看到——这是唯一能悄悄改变模型行为的入口。
 
@@ -449,14 +458,12 @@ public sealed class WindowOptions
 | M1 | `ConversationRuntime` 拆分 A/B/C 三步 + `ConversationRuntimeRegistry` | 无 | ✅ 已完成 |
 | M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 | ✅ 已完成 |
 | M3 | `ISessionFacade`（主动发起、取消、改权限、读历史；agent 旁注与临时模型未做，理由见交接文档） | M1 | ✅ 已完成 |
-| M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ⬜ 未开始 |
+| M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ✅ 已完成 |
 | M5 | 桌宠插件（先窗口+气泡，后主动发起） | M2、M3、M4 | ⬜ 未开始 |
 | M6 | 「插件」页（新标签页入口）：列表、启用/禁用、能力清单、错误状态、需重启提示、崩溃记录与崩溃日志、崩溃后仍自动加载；与设置页总开关联动 | M0 | ✅ 已完成（含「最近一次贡献字数」） |
 
-**下一步**：M4（`IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片）。
-具体开工要点与落点已写在
-[`plugin-handoff.md`](./plugin-handoff.md) 的「三、待办 → M4」里，照那份做即可；
-本节只维护设计意图，不再重复步骤。
+**下一步**：M5（桌宠插件本体）。M2 / M3 / M4 三块地基都已就绪，
+开工要点写在 [`plugin-handoff.md`](./plugin-handoff.md) 的「三、待办」里。
 
 ---
 
@@ -497,10 +504,11 @@ public sealed class WindowOptions
 - 插件并发 `SendAsync` 同一会话被拒绝（互斥生效）
 - 审批在无视图时的 fallback 行为明确（通知作答 / 自动拒绝）
 
-**M4**
+**M4（已达成，见交接文档第 11 节）**
 - 新标签页出现插件入口卡片，点击回调生效
 - 会话视图重建后插槽内容重新生成，不残留旧控件
 - 插件控件构造抛异常时，页面其他部分照常工作（`PluginControlHost` 兜住）
+- 禁用插件后窗口被关掉、插槽与卡片被清掉，且状态是「已禁用」而不是「需重启」
 
 **M5**
 - 桌宠能显示流式内容尾部；点击能发起一轮；重启后位置被记住

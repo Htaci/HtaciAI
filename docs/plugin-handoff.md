@@ -1,15 +1,15 @@
 # 开发交接快照
 
 > 用途：上下文压缩 / 换人接手时，只读这一份就能接着干。
-> 最后更新：2026-10（对应提交 `M2`）
+> 最后更新：2026-10（对应提交 `M4`）
 
 ---
 
 ## 零、当前状态（读这一段就够开工）
 
 **已完成**：M0（插件加载/卸载/崩溃归因）、M1（`ConversationRuntime` + `ConversationRuntimeRegistry`，
-A/B/C 三步全完）、M2（`PromptComposer` + `IChatEventBus`）、M3（`ISessionFacade`）、M6（插件管理页）、
-工具超时与「继续」那一轮。
+A/B/C 三步全完）、M2（`PromptComposer` + `IChatEventBus`）、M3（`ISessionFacade`）、
+M4（窗口宿主 + 界面插槽 + 安全壳）、M6（插件管理页）、工具超时与「继续」那一轮。
 
 **提交线**（从旧到新）：
 
@@ -22,11 +22,11 @@ f625c5d  M1-C  重新生成/重试/继续/压缩搬进 runtime
 cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 85f91d8  交接文档更新到 M2 开工点
 2209bab  M3：插件能主动发起对话（ISessionFacade）
-（M2）    上下文贡献 + 会话事件总线
+4b3409a  M2：上下文贡献 + 会话事件总线
+（M4）    窗口宿主 + 界面插槽 + 插件控件安全壳
 ```
 
-**下一步：M4（`IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片）**。
-之后只剩 M5（桌宠本体）。开工要点见「三、待办」。
+**下一步：M5（桌宠插件本体）**。三块地基（M2/M3/M4）都齐了，见「三、待办」。
 工作区干净，`dotnet build HtaciAI/HtaciAI.csproj -t:Rebuild` 0 错误、6 个既有告警。
 
 **关键能力现在到哪了**：
@@ -39,8 +39,8 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 | 插件能不能停止一轮 / 改权限档位 / 压缩 / 读历史 | ✅ M3 |
 | 插件能不能观察会话流（流式增量、轮次完成） | ✅ M2（`IChatEventBus`） |
 | 插件能不能往上下文里加东西 | ✅ M2（`PromptComposer` + `IPromptRegistry`） |
-| 插件能不能建窗口 / 插控件 | ⬜ M4 |
-| 桌宠插件本体 | ⬜ M5（依赖 M2/M3/M4） |
+| 插件能不能建窗口 / 插控件 | ✅ M4（`IPluginWindowHost` + `IUiExtensionRegistry`） |
+| 桌宠插件本体 | ⬜ M5（M2/M3/M4 已全部就绪） |
 
 
 ---
@@ -342,6 +342,71 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 
 ---
 
+### 11. 窗口宿主 + 界面插槽（M4）
+
+**目标**：插件能建自己的窗口、能往宿主界面里插控件、能在「新标签页」加一张入口卡片。
+
+契约（`HtaciAI.Plugin.Abstractions/IPluginUi.cs`）。**从这里开始契约程序集引用 Avalonia**
+（`Window` / `Control` 是跨进程内公开协议的一部分），插件不必自带 Avalonia 的 dll ——
+加载器把 `Avalonia*` 一律解析到默认上下文（`PluginLoadContext`）：
+
+| 类型 | 说明 |
+| --- | --- |
+| `IPluginWindowHost.CreateStandalone(WindowOptions)` | 建一个配好的窗口：透明 / 无边框 / 置顶 / 不进任务栏 / 可拖动 / 按「插件 id + 标题」记忆位置；宿主在禁用插件与退出时统一关闭 |
+| `IUiExtensionRegistry.AddControl(slotId, factory, order)` | 往插槽里插控件；`Order` 小的排前面，同序按注册顺序 |
+| `IUiExtensionRegistry.AddLauncherCard(LauncherCard)` | 「新标签页」入口卡片（外观由宿主决定，与内置卡片一套风格） |
+| `PluginSlots` | 插槽 id 常量：`newtab.cards` / `conversation.header` / `conversation.input.side` / `sidebar.below` / `mainwindow.titlebar.right` |
+
+宿主侧：
+
+| 文件 | 职责 |
+| --- | --- |
+| `Services/Plugins/PluginWindowHost.cs` | 窗口参数、拖动、关闭、位置记忆（`plugin-data/<id>/window-state.json`，宿主自己的类型，不会吊住插件） |
+| `Services/Plugins/PluginUiRegistry.cs` | 登记表（`SlotEntry` / `CardEntry`）+ `Changed` 事件 + `PluginUiFacade`（一个插件一个） |
+| `Controls/PluginControlHost.cs` | 插槽安全壳：工厂抛异常 → 换成一行「插件 X 显示失败」；另有 `PluginSlotPanel.Fill/Subscribe` 收口「清空 → 逐个包壳 → 空则隐藏」 |
+
+插槽落在哪：
+
+| 插槽 | 宿主位置 | 空时 |
+| --- | --- | --- |
+| `newtab.cards` | `NewTabPage.CardsPanel`（内置卡片之后） | 无卡片自然不占位 |
+| `conversation.header` | `ConversationView` 新增的第 0 行 | 整行 `IsVisible=false` |
+| `conversation.input.side` | 输入框左侧一列（`Grid ColumnDefinitions="Auto,*"`） | 整列隐藏 |
+| `sidebar.below` | `ConversationPage` 左侧导航第 2 行 | 整行隐藏 |
+| `mainwindow.titlebar.right` | 标题栏右侧，「检查更新」左边 | 整块隐藏 |
+
+**几条设计上的取舍**：
+
+| 取舍 | 为什么 |
+| --- | --- |
+| 登记的是**工厂**不是控件实例 | 视图会被重建（会话窗口缓存淘汰后重进、标签页关掉重开），存控件只会拿到已经脱离可视树的旧对象。代价是工厂会被反复调用 —— 契约里写明了「工厂别存瞬时状态」 |
+| 登记表变化 → `Changed` → 视图重建插槽 | 与 M1 的「数据归 runtime、重绘归视图」同一条原则：登记表只存数据，长什么样由视图决定 |
+| 未知插槽 id 只记警告、返回 no-op | 抛出去会让整个插件加载失败，而「一个插槽名拼错」不该有这么大代价；日志里带着可用 id 列表 |
+| 插件控件外面必须包一层安全壳 | 插件构造函数抛异常如果穿透到布局测量，坏的是整个页面（用户只看到「程序坏了」） |
+| 关窗口放在「撤订阅」那一步 | 保证它一定发生在 `AssemblyLoadContext.Unload()` 之前；也在插件 `ShutdownAsync` 之后，插件不必操心「窗口已经没了」 |
+| 位置记忆用宿主自己的类型 | 复用 `PluginJson`，但序列化的是宿主类型 —— 踩不到坑 2（反射序列化插件类型导致回收不掉） |
+
+**已验证**（无头，`Avalonia.Headless` 真起了一个平台实例，所以窗口是真的建出来了）：
+
+- 登记：五个插槽都能登记、`Order` 升序、单条撤销、整插件撤销后清空、已撤销的门面不再登记新控件
+- 未知插槽不抛、只记警告
+- 安全壳：正常工厂的控件被放进去；抛异常的工厂换成「插件 X 显示失败」，异常没穿透
+- 无头界面冒烟：`CreateStandalone` 的属性（Topmost / 不进任务栏 / 无边框 / 尺寸）正确、
+  `Show()` 后可见、插槽空时容器隐藏 / 有内容时显示并包壳、能走完测量与排布、
+  登记表变化时自动重建、撤销后自动清空、禁用时窗口被关掉、位置文件写出
+- 端到端（真 `PluginManager` + 真示例插件）：插槽与卡片登记成功、工厂能建出控件、
+  禁用后控件与卡片都撤掉，且状态是「已禁用」而不是「需重启」（说明 UI 这一路没有吊住插件程序集）
+
+**没验证**：人眼看界面（卡片外观、插槽边距与视觉）；拖动的真实手感；
+窗口位置在**换显示器 / 改分辨率**后的还原（`IsOnScreen` 只写了逻辑，没有实测）；
+`conversation.input.side` 与 `sidebar.below` 在真实布局里的观感。
+
+> 排查提示：临时工程里如果**在本方法局部变量里攥着插槽条目或插件建的控件**，
+> 禁用插件时一定显示「需重启」—— 那不是 bug，是那份引用还在。
+> 把「取条目 + 建控件 + 读文本」放进一个单独的 `[MethodImpl(NoInlining)]` 方法就干净了。
+
+---
+
 ## 二、M0 踩过的坑（别再踩）
 
 ### 坑 1：`LoadFromAssemblyPath` 会锁死文件
@@ -384,35 +449,32 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
 
 ## 三、待办
 
-M0 / M1 / M2 / M3 / M6 已完成，只剩 M4 与 M5。顺序：M4（插件能建窗口/插控件）→ M5（桌宠本体）。
-桌宠需要的一切底层能力（主动发起、看流式、改上下文）现在都齐了，M4 是最后一块地基。
+M0 / M1 / M2 / M3 / M4 / M6 已完成，只剩 **M5（桌宠插件本体）**。
+它需要的三块地基现在都齐了：
 
-### M4：`IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost`（**下一步**）
+| 桌宠要做的事 | 用哪个出口 |
+| --- | --- |
+| 透明置顶窗口、可拖动、记住位置 | `context.Windows.CreateStandalone(...)` |
+| 显示「思考中 / 等你确认 / 完成」 | `context.Chat.Subscribe(...)` 的 `ActivityChanged` |
+| 气泡显示 AI 输出尾部 | 同上，`ContentDelta`（已经按 50 ms 合并，`Text` 是累积正文） |
+| 点一下就开口 | `context.Sessions.SendAsync(sessionId, text)` |
+| 在会话窗口里加自己的按钮 | `context.Slots.AddControl(PluginSlots.ConversationInputSide, ...)` |
 
-契约要加的东西（设计见 [`plugin-plan.md`](./plugin-plan.md) 的 2.3 e 节）：
+开工要点（M5）：
 
-- `IPluginWindowHost.CreateStandalone(WindowOptions)`：建一个配好的窗口（透明 / 无边框 / 置顶 /
-  可拖 / 记忆位置 / owner 设成主窗口）。**记忆位置按插件 id 存**，否则每个插件作者都要自己造一套。
-- `IUiExtensionRegistry.AddControl(slotId, factory, order)` + `AddLauncherCard(card)`：
-  插槽 id 先定 `newtab.cards` / `conversation.header` / `conversation.input.side` /
-  `sidebar.below` / `mainwindow.titlebar.right`。
-- `PluginControlHost`：每个插槽位置外面包一层 —— 插件名 tooltip、出错时整块换成一行
-  「插件 X 显示失败」而不是让异常穿透到布局测量阶段、禁用时按表逐个移除。
+- **插件 id 用 `htaci.pet`**，目录 `plugins/htaci.pet/`，清单声明
+  `ui.window` + `chat.observe` + `chat.control`（需要注上下文再加 `prompt.contribute`）。
+- **桌宠窗口不要放进任务栏**：`ShowInTaskbar = false`（默认值就是 false，别改）。
+- **气泡要跟着流式刷新，但别自己再做一次节流**：宿主已经 50 ms 合并过，插件里按事件直接更新即可；
+  真正要小心的是「往 UI 上写」——事件投递**不在** UI 线程上，更新控件必须 `Dispatcher.UIThread.Post`。
+- **关窗口别调 `Shutdown()`**，只关自己的窗口；插件被禁用时宿主管窗口。
+- **`ShutdownAsync` 里要停掉自己的定时器 / 动画**，否则禁用后只能「需重启」。
+- 位置记忆按「插件 id + 窗口标题」存，标题变了等于换一个记忆槽。
 
-容易踩的几点：
+验收（`plugin-plan.md` 第 7 节的 M5 那两条）：
+桌宠能显示流式内容尾部；点击能发起一轮；重启后位置被记住；禁用后窗口消失且不再响应事件。
 
-- **控件工厂会被重复调用**：会话视图重建（缓存淘汰后重进）时会重新 ask 一次工厂，
-  所以 **factory 不能持有瞬时状态**，状态放 `IPluginStorage` 或插件自己的对象里。
-- **`ShutdownMode` 已经设成 `OnMainWindowClose`**（`App.OnFrameworkInitializationCompleted`），
-  插件窗口只关自己的窗口不会连带杀死进程，也不要 `Shutdown()`。
-- 禁用插件的顺序已经在 `PluginManager.UnloadAsync` 里（静默 → `ShutdownAsync` → 撤订阅 →
-  冲 Dispatcher → `Unload`），M4 只需要把「关窗口、摘控件」插到第 1.5 步。
-- 插槽宿主是**视图**，所以挂在 `ConversationView` / `NewTabPage` / `MainWindow` 上时要
-  先 `AddControl` 一次，再在视图重建时按插槽 id 重新 ask —— 这与 M1 做的
-  「数据归 runtime、重绘归视图」是同一条原则。
-
-
-### 已验证可复用的测试手法（M1 / M2 / M3 用过三次）
+### 已验证可复用的测试手法（M1 – M4 用过四次）
 
 无头 harness：临时建 csproj（引 `HtaciAI.csproj`），`Main` 里 `AppPaths.Initialize` +
 `DatabaseService.Initialize` + 写测试会话/模型行，然后**直接调服务层**，不建界面。
@@ -426,6 +488,11 @@ M0 / M1 / M2 / M3 / M6 已完成，只剩 M4 与 M5。顺序：M4（插件能建
   凡是「只在 UI 线程上访问」的服务（注册表、运行时），要在 harness 里装一个单线程
   `SynchronizationContext` 并在主线程泵它，否则续体会落到线程池上
 - fixture 要连 `data.db-wal` / `-shm` 一起备份，否则还原后库是半截的
+- **要测界面就用 `Avalonia.Headless`**：`AppBuilder.Configure<Application>()
+  .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = true }).SetupWithoutStarting();`
+  之后窗口、控件、测量排布都真的能跑（窗口会真的 `Show()`），只是不画到屏幕上。
+  临时工程记得写 `<ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>`，
+  否则中央包管理会因为「没在 Directory.Packages.props 里声明版本」直接拒绝还原
 - 临时工程与脚本不要提交（`git status` 确认干净再 commit）；测完把 `data/` 与 `requests.log` 删掉
 
 ---

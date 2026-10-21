@@ -16,6 +16,7 @@ using HtaciAI.Controls;
 using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services;
+using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services.Conversations;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Tools;
@@ -103,6 +104,9 @@ public partial class ConversationPage : UserControl
 
     private DispatcherTimer? _cacheSweeper;
 
+    /// <summary>左侧导航底部插槽的订阅。离开可视树时释放。</summary>
+    private IDisposable? _sidebarSlotSubscription;
+
     /// <summary>
     /// 保留时长。每次淘汰时现读设置，所以改设置立刻生效、不用重启。
     /// 下限 1 分钟：设置里最小的档位就是 1 分钟，防住手改配置文件写进 0 或负数。
@@ -131,6 +135,27 @@ public partial class ConversationPage : UserControl
         _cacheSweeper.Start();
     }
 
+    // ============================================================
+    // 左侧导航底部插槽
+    // ============================================================
+
+    private void HookSidebarSlot()
+    {
+        if (_sidebarSlotSubscription is not null) return;
+
+        RefreshSidebarSlot();
+        _sidebarSlotSubscription = PluginSlotPanel.Subscribe(RefreshSidebarSlot);
+    }
+
+    private void UnhookSidebarSlot()
+    {
+        _sidebarSlotSubscription?.Dispose();
+        _sidebarSlotSubscription = null;
+    }
+
+    private void RefreshSidebarSlot()
+        => PluginSlotPanel.Fill(SidebarBelowSlot, PluginSlots.SidebarBelow);
+
     /// <summary>
     /// 这个窗口不许被淘汰：它的会话还有一轮任务在跑（或在等用户授权 / 作答）。
     ///
@@ -153,6 +178,7 @@ public partial class ConversationPage : UserControl
     {
         base.OnAttachedToVisualTree(e);
         _cacheSweeper?.Start();
+        HookSidebarSlot();
 
         // 切回这个标签页时右侧是空的（见下面 OnDetachedFromVisualTree）：
         // 按会话 id 重新挂一次 —— 缓存命中就把原来那个窗口原样挂回来（滚动位置都还在），
@@ -172,6 +198,7 @@ public partial class ConversationPage : UserControl
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         _cacheSweeper?.Stop();
+        UnhookSidebarSlot();
 
         // 只交回「缓存里的会话窗口」；「新建会话」页与空提示不在缓存里，也不会过期，
         // 清掉它们只会让切回标签页时看到一片空白。

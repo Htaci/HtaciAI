@@ -3,7 +3,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <!-- 插件作者的编译目标。M0 的契约里还没有 UI 类型，所以故意不引用 Avalonia：
-         写一个纯逻辑插件不必拖进整套 UI 依赖（UI 契约在 M4 随实现一起进来）。 -->
+    <!-- 插件作者的编译目标。M4 起契约含 UI 类型（Window / Control），所以引用 Avalonia。
+         插件不需要自带 Avalonia 的 dll：加载器把 Avalonia* 一律解析到默认上下文
+         （见 PluginLoadContext），否则会出现两套 Control 类型与第二份主题状态。 -->
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+  </ItemGroup>
 </Project>

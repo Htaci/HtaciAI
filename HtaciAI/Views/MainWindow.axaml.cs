@@ -6,6 +6,8 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
+using HtaciAI.Controls;
+using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services.Notifications;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Updates;
@@ -19,10 +21,18 @@ public partial class MainWindow : Window
     private readonly List<Border> _tabHeaders = new();
     private readonly List<TextBlock> _tabTitleBlocks = new();
 
+    /// <summary>标题栏右侧插槽的订阅。窗口关掉时释放。</summary>
+    private readonly System.IDisposable _titlebarSlotSubscription;
+
     public MainWindow()
     {
         InitializeComponent();
         DataContext = this;
+
+        // 标题栏右侧插槽：主窗口是单例，订阅活到窗口关掉为止，不用跟着可视树来回挂
+        RefreshTitlebarSlot();
+        _titlebarSlotSubscription = PluginSlotPanel.Subscribe(RefreshTitlebarSlot);
+        Closed += (_, _) => _titlebarSlotSubscription.Dispose();
 
         AddTab("智能对话", new ConversationPage());
 
@@ -41,6 +51,9 @@ public partial class MainWindow : Window
         // 没配置地址时 CheckAsync 直接返回 NotConfigured，不会发请求。
         _ = CheckForUpdatesAsync(manual: false);
     }
+
+    private void RefreshTitlebarSlot()
+        => PluginSlotPanel.Fill(TitlebarRightSlot, PluginSlots.MainWindowTitlebarRight);
 
     /// <summary>按当前窗口状态切换「最大化 / 还原」的图标。</summary>
     private void UpdateMaximizeGlyph()

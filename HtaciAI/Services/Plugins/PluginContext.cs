@@ -15,7 +15,9 @@ namespace HtaciAI.Services.Plugins;
 internal sealed record PluginFacades(
     ISessionFacade? Sessions = null,
     IPromptRegistry? Prompts = null,
-    IChatEventBus? Chat = null);
+    IChatEventBus? Chat = null,
+    IPluginWindowHost? Windows = null,
+    IUiExtensionRegistry? Slots = null);
 
 /// <summary>
 /// <see cref="IPluginContext"/> 的宿主实现。<b>只提供这份清单声明了的能力</b> ——
@@ -35,6 +37,8 @@ internal sealed partial class PluginContext : IPluginContext
         Sessions = facades.Sessions;
         Prompts = facades.Prompts;
         Chat = facades.Chat;
+        Windows = facades.Windows;
+        Slots = facades.Slots;
     }
 
     public string PluginId { get; }
@@ -47,6 +51,8 @@ internal sealed partial class PluginContext : IPluginContext
     public ISessionFacade? Sessions { get; }
     public IPromptRegistry? Prompts { get; }
     public IChatEventBus? Chat { get; }
+    public IPluginWindowHost? Windows { get; }
+    public IUiExtensionRegistry? Slots { get; }
 
     // ---- 日志 ----
 

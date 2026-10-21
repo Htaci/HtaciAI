@@ -199,6 +199,15 @@
                                    VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
+                <!-- 标题栏右侧插槽（插件图标按钮；没内容时不占位） -->
+                <StackPanel x:Name="TitlebarRightSlot"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="4"
+                            Margin="0,0,300,0"
+                            IsVisible="False"/>
+
             </Grid>
         </Border>
 

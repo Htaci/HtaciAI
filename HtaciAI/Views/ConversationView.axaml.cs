@@ -27,6 +27,7 @@ using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services;
 using HtaciAI.Services.Attachments;
+using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services.Conversations;
 using HtaciAI.Services.Diagnostics;
 using HtaciAI.Services.Mcp;
@@ -152,6 +153,9 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     private int _turnToolCount;
     private int _turnThinkingCount;
 
+    /// <summary>插件插槽登记表变化的订阅。只在可见时持有。</summary>
+    private IDisposable? _slotSubscription;
+
     /// <summary>无参构造，仅供 XAML 预览器 / 设计器使用（无真实会话，不会读写数据库）。</summary>
     public ConversationView() : this(new StandaloneProfile("")) { }
 
@@ -169,6 +173,11 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         _runtime = runtime;
         _lease = lease;
         HookRuntime();
+
+        // 插件插槽：可见时才跟着登记表刷新（窗口被缓存挂着时不占这份开销）
+        AttachedToVisualTree += (_, _) => HookPluginSlots();
+        DetachedFromVisualTree += (_, _) => UnhookPluginSlots();
+        HookPluginSlots();
 
         // 只做不依赖会话内容的一次性 UI 装配；依赖会话状态的初始化统一放到 InitializeAsync
         // （普通对话要等 LoadAsync 查库回来才有内容，工作空间会话则由页面先行加载）
@@ -842,6 +851,30 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     }
 
     /// <summary>
+    /// 刷新两个插件插槽（顶部一行、输入区左侧一排）。
+    /// <b>用工厂重建而不是缓存控件</b>：窗口会被缓存淘汰后重进，缓存控件只会拿到已经脱离可视树的旧对象。
+    /// </summary>
+    private void RefreshPluginSlots()
+    {
+        PluginSlotPanel.Fill(HeaderSlot, PluginSlots.ConversationHeader);
+        PluginSlotPanel.Fill(InputSideSlot, PluginSlots.ConversationInputSide);
+    }
+
+    private void HookPluginSlots()
+    {
+        if (_slotSubscription is not null) return;
+
+        RefreshPluginSlots();
+        _slotSubscription = PluginSlotPanel.Subscribe(RefreshPluginSlots);
+    }
+
+    private void UnhookPluginSlots()
+    {
+        _slotSubscription?.Dispose();
+        _slotSubscription = null;
+    }
+
+    /// <summary>
     /// 退订。**必须与 <see cref="HookRuntime"/> 严格对称** ——
     /// runtime 可以比窗口活得久（插件还借着手里的租约），漏退一个订阅，
     /// 这个已经没人显示的窗口就会继续收增量、继续占着整棵消息树的内存。
@@ -878,6 +911,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         _disposed = true;
 
         UnhookRuntime();
+        UnhookPluginSlots();
 
         // runtime 上有两处直接指向本窗口的东西，不清掉就等于把整棵控件树留在 runtime 上
         if (ReferenceEquals(_runtime.Interaction, this)) _runtime.Interaction = null;

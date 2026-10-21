@@ -779,6 +779,28 @@ public sealed partial class PluginManager
             sessions = facade;
         }
 
+        // 窗口宿主：禁用插件时 Dispose 会关掉它所有窗口。
+        // 这一步排在「卸订阅」里而不是别处，是为了保证它一定发生在 ALC 卸载之前。
+        IPluginWindowHost? windows = null;
+        if (HasCapability(manifest, PluginCapabilities.UiWindow))
+        {
+            var host = new PluginWindowHost(manifest.Id);
+            entry.Subscriptions.Add(host);
+            windows = host;
+        }
+
+        IUiExtensionRegistry? slots = null;
+        if (HasCapability(manifest, PluginCapabilities.UiSlot))
+        {
+            var facade = new PluginUiFacade(manifest.Id);
+
+            // 登记进订阅表：禁用插件时它会把该插件的控件与卡片一次性摘掉，
+            // 视图收到 Changed 后重建插槽 —— 控件树里不能再有指向插件程序集的对象，
+            // 否则 ALC 永远回收不掉（表现为「需重启」）。
+            entry.Subscriptions.Add(facade);
+            slots = facade;
+        }
+
         return new PluginFacades(
             Sessions: sessions,
             Prompts: HasCapability(manifest, PluginCapabilities.PromptContribute)
@@ -786,7 +808,9 @@ public sealed partial class PluginManager
                 : null,
             Chat: HasCapability(manifest, PluginCapabilities.ChatObserve)
                 ? new PluginChatFacade(manifest.Id, entry.Subscriptions)
-                : null);
+                : null,
+            Windows: windows,
+            Slots: slots);
     }
 
     // ============================================================

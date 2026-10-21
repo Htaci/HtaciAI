@@ -51,6 +51,20 @@ public interface IPluginContext
     /// <b>只有清单里声明了 <see cref="PluginCapabilities.ChatObserve"/> 时才不是 null。</b>
     /// </summary>
     IChatEventBus? Chat { get; }
+
+    /// <summary>
+    /// 建自己的窗口（透明 / 无边框 / 置顶 / 记忆位置 / 退出时由宿主统一关闭）。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.UiWindow"/> 时才不是 null。</b>
+    /// </summary>
+    IPluginWindowHost? Windows { get; }
+
+    /// <summary>
+    /// 往宿主界面的插槽里插控件、在「新标签页」加入口卡片。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.UiSlot"/> 时才不是 null。</b>
+    /// </summary>
+    IUiExtensionRegistry? Slots { get; }
 }
 
 /// <summary>

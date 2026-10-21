@@ -2,12 +2,15 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Media;
 using HtaciAI.Plugin.Abstractions;
 
 namespace HtaciAI.Plugin.Sample;
 
 /// <summary>
-/// 最小可用插件：日志、私有存储、上下文贡献、会话事件订阅。<b>不做任何界面</b>。
+/// 最小可用插件：日志、私有存储、上下文贡献、会话事件订阅，以及界面插槽与窗口。
 ///
 /// 它的用途是「一个能被照着抄的骨架」和端到端验证：
 /// 加载后能在 <c>&lt;数据根&gt;/logs/plugin.log</c> 里看到它写下的日志，
@@ -102,6 +105,36 @@ public sealed class SamplePlugin : IPlugin
         if (context.Chat is not null)
             context.Log.Info("已订阅会话事件");
 
+        // 界面插槽：同样「声明了才有」。
+        // 注意工厂会被反复调用（界面重建时），所以里面不要存瞬时状态。
+        context.Slots?.AddLauncherCard(new LauncherCard
+        {
+            Title = "示例插件",
+            Description = "打开一个示例窗口，演示插件窗口与位置记忆",
+            Glyph = "\uE9EA",
+            AccentColor = "#7C3AED",
+            OnClick = () => OpenDemoWindow(context),
+        });
+
+        context.Slots?.AddControl(PluginSlots.ConversationHeader, () => new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#F5F3FF")),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(10, 4),
+            Child = new TextBlock
+            {
+                Text = "示例插件：这是 conversation.header 插槽里的内容",
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(Color.Parse("#6D28D9")),
+            },
+        });
+
+        if (context.Slots is not null)
+            context.Log.Info("已登记一张入口卡片与一个会话头部控件");
+
+        if (context.Windows is null)
+            context.Log.Info("未声明 ui.window：不能建自己的窗口");
+
         // 演示「插件必须自己停掉后台任务」：宿主没法从外部停它，
         // 留着运行中的定时器会让程序集无法卸载，禁用后就只能提示「需重启」。
         _timerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -123,6 +156,37 @@ public sealed class SamplePlugin : IPlugin
         }, token);
 
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 演示窗口宿主：透明/无边框/置顶/记忆位置都由宿主配好，插件只放内容。
+    /// <b>不要在 InitializeAsync 里就弹窗</b>——每次启动都弹一个窗口是很打扰的行为。
+    /// </summary>
+    private static void OpenDemoWindow(IPluginContext context)
+    {
+        if (context.Windows is null)
+        {
+            context.Log.Warn("清单里没有声明 ui.window，无法建窗口");
+            return;
+        }
+
+        var window = context.Windows.CreateStandalone(new WindowOptions
+        {
+            Title = "示例插件窗口",
+            Width = 280,
+            Height = 170,
+        });
+
+        window.Content = new TextBlock
+        {
+            Text = "这是插件自己的窗口。\n按住空白处可以拖动，位置会被记住。",
+            Margin = new Thickness(20),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12.5,
+        };
+
+        window.Show();
+        context.Log.Info("打开了一个示例窗口");
     }
 
     public async Task ShutdownAsync(CancellationToken ct)

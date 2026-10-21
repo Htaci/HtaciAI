@@ -6,7 +6,10 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 
+using HtaciAI.Controls;
+using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services;
+using HtaciAI.Services.Plugins;
 
 namespace HtaciAI.Views;
 
@@ -18,10 +21,98 @@ public partial class NewTabPage : UserControl
     public event EventHandler? PluginsSelected;
     public event EventHandler? McpSelected;
 
+    /// <summary>内置卡片的张数。<b>插件卡片永远追加在它们后面</b>，重建时从这里开始删。</summary>
+    private int _builtInCardCount;
+
+    /// <summary>插件登记表变化的订阅。只在可见时持有，切走后释放。</summary>
+    private IDisposable? _pluginCardsSubscription;
+
     public NewTabPage()
     {
         InitializeComponent();
         CreateCards();
+
+        _builtInCardCount = CardsPanel.Children.Count;
+
+        // 标签页切回来时插件可能已经装上/禁用了，需要重建插件卡片
+        AttachedToVisualTree += (_, _) => HookPluginCards();
+        DetachedFromVisualTree += (_, _) => UnhookPluginCards();
+
+        HookPluginCards();
+    }
+
+    private void HookPluginCards()
+    {
+        if (_pluginCardsSubscription is not null) return;
+
+        RefreshPluginCards();
+        _pluginCardsSubscription = PluginSlotPanel.Subscribe(RefreshPluginCards);
+    }
+
+    private void UnhookPluginCards()
+    {
+        _pluginCardsSubscription?.Dispose();
+        _pluginCardsSubscription = null;
+    }
+
+    /// <summary>重建插件卡片（内置卡片保持不动）。</summary>
+    private void RefreshPluginCards()
+    {
+        while (CardsPanel.Children.Count > _builtInCardCount)
+            CardsPanel.Children.RemoveAt(CardsPanel.Children.Count - 1);
+
+        foreach (var entry in PluginUiRegistry.Instance.GetCards())
+            CardsPanel.Children.Add(CreatePluginCard(entry));
+    }
+
+    private Border CreatePluginCard(PluginUiRegistry.CardEntry entry)
+    {
+        var card = entry.Card;
+        var main = ParseColor(card.AccentColor) ?? Color.FromArgb(0xFF, 0x4A, 0x90, 0xD9);
+
+        return CreateCard(new CardData
+        {
+            Title = card.Title,
+
+            // 描述里带上插件 id：用户看到一张陌生卡片时，至少知道是谁放进去的
+            Description = string.IsNullOrWhiteSpace(card.Description)
+                ? $"来自插件 {entry.PluginId}"
+                : $"{card.Description}\n（插件 {entry.PluginId}）",
+
+            IconGlyph = string.IsNullOrEmpty(card.Glyph) ? "\uE9EA" : card.Glyph,
+            Tags = ["插件"],
+            MainColor = main,
+            LightBg = Mix(main, Colors.White, 0.92),
+            GlowAlpha = 0x26,
+            TagBg = Mix(main, Colors.White, 0.90),
+            TagFg = Mix(main, Colors.Black, 0.20),
+
+            // 插件回调抛异常只记日志：一张卡片的点击不该有能力把整个新标签页搞坏
+            OnClick = card.OnClick is null
+                ? null
+                : () =>
+                {
+                    try { card.OnClick(); }
+                    catch (Exception ex) { PluginLog.Error(entry.PluginId, "插件入口卡片点击时抛异常", ex); }
+                },
+        });
+    }
+
+    private static Color? ParseColor(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        return Color.TryParse(text, out var color) ? color : null;
+    }
+
+    /// <summary>把 <paramref name="color"/> 往 <paramref name="target"/> 混 <paramref name="amount"/>（0-1）。</summary>
+    private static Color Mix(Color color, Color target, double amount)
+    {
+        amount = Math.Clamp(amount, 0, 1);
+        return Color.FromArgb(
+            color.A,
+            (byte)(color.R + (target.R - color.R) * amount),
+            (byte)(color.G + (target.G - color.G) * amount),
+            (byte)(color.B + (target.B - color.B) * amount));
     }
 
     private void CreateCards()

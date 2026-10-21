@@ -70,7 +70,7 @@
                     Background="#99F9FAFB"
                     BorderBrush="#E5E7EB"
                     BorderThickness="0,0,1,0">
-                <Grid RowDefinitions="Auto,*"
+                <Grid RowDefinitions="Auto,*,Auto"
                       Margin="12,16">
 
                     <!-- 创建新对话按钮（胶囊形 + 悬停阴影过渡） -->
@@ -113,6 +113,13 @@
                                                  VerticalScrollBarVisibility="Auto">
                         <StackPanel x:Name="NavList" Spacing="2"/>
                     </controls:SmoothScrollViewer>
+
+                    <!-- 左侧导航底部插槽（插件可在这里放状态面板；没内容时整行隐藏） -->
+                    <StackPanel x:Name="SidebarBelowSlot"
+                                Grid.Row="2"
+                                Spacing="6"
+                                Margin="0,12,0,0"
+                                IsVisible="False"/>
                 </Grid>
             </Border>
 
