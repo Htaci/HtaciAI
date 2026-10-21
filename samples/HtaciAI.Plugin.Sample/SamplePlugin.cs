@@ -7,10 +7,10 @@ using HtaciAI.Plugin.Abstractions;
 namespace HtaciAI.Plugin.Sample;
 
 /// <summary>
-/// 最小可用插件：只用到日志与私有存储，不做任何界面或对话改动。
+/// 最小可用插件：日志、私有存储、上下文贡献、会话事件订阅。<b>不做任何界面</b>。
 ///
-/// 它的用途是「一个能被照着抄的骨架」和「M0 的端到端验证」：
-/// 加载后能在 <c>&lt;数据根&gt;/logs/plugin.log</c> 里看到它写下的两行日志，
+/// 它的用途是「一个能被照着抄的骨架」和端到端验证：
+/// 加载后能在 <c>&lt;数据根&gt;/logs/plugin.log</c> 里看到它写下的日志，
 /// 并在 <c>&lt;数据根&gt;/plugin-data/htaci.sample/</c> 里看到 <c>stats.json</c>。
 /// </summary>
 public sealed class SamplePlugin : IPlugin
@@ -18,11 +18,49 @@ public sealed class SamplePlugin : IPlugin
     private CancellationTokenSource? _timerCts;
     private Task? _worker;
 
-    /// <summary>插件私有数据。字段名随便取，宿主只负责按文件存 JSON。</summary>
-    private sealed class Stats
+    /// <summary>上下文贡献者：往 system 末尾追加一行，让模型知道这个插件在。</summary>
+    private sealed class MarkerContributor : IPromptContributor
     {
-        public int LaunchCount { get; set; }
-        public string? LastStartedAt { get; set; }
+        public string Id => "sample-marker";
+
+        // 数字小的先追加。多个插件时按它排序，稳定输出
+        public int Order => 100;
+
+        public ValueTask<string?> BuildAsync(PromptContext context, CancellationToken ct)
+            => ValueTask.FromResult<string?>(
+                $"(示例插件在场：会话 {context.SessionId[..Math.Min(8, context.SessionId.Length)]}，" +
+                $"模型 {context.ModelId})");
+    }
+
+    /// <summary>事件接收方：只记日志，不碰界面。</summary>
+    private sealed class LogSink(IPluginLogger log) : IChatEventSink
+    {
+        public ValueTask OnEventAsync(ChatEvent e, CancellationToken ct)
+        {
+            switch (e.Kind)
+            {
+                case ChatEventKind.RoundStarted:
+                    log.Info($"[{e.SessionId[..Math.Min(8, e.SessionId.Length)]}] 一轮开始");
+                    break;
+
+                case ChatEventKind.ToolCallStarted:
+                    log.Info($"调用工具：{e.ToolName}");
+                    break;
+
+                case ChatEventKind.RoundCompleted:
+                    log.Info("这一轮完成");
+                    break;
+
+                case ChatEventKind.RoundFailed:
+                    log.Info($"这一轮结束（{e.Status}）：{e.Text}");
+                    break;
+
+                // ContentDelta 一个 token 一条，全部记下来会把日志刷爆；
+                // 真正做桌宠气泡时在这里处理（宿主已经按 50 ms 合并过）
+            }
+
+            return ValueTask.CompletedTask;
+        }
     }
 
     /// <summary>从 "次数\n时间" 的文本里取次数；读不出来按 0。</summary>
@@ -53,6 +91,16 @@ public sealed class SamplePlugin : IPlugin
             context.Log.Info("未声明 chat.control：主动发起对话不可用");
         else
             context.Log.Info("已获得会话门面：可以主动向某个会话发起一轮");
+
+        // 上下文贡献：同样「声明了才有」。禁用插件时宿主会自动撤销，不必自己记着。
+        context.Prompts?.Add(new MarkerContributor());
+        if (context.Prompts is not null)
+            context.Log.Info("已登记上下文贡献者（每轮往 system 末尾追加一行）");
+
+        // 会话事件：会话窗口没打开也能收到（事件来自会话运行时，不是界面）。
+        context.Chat?.Subscribe(new LogSink(context.Log));
+        if (context.Chat is not null)
+            context.Log.Info("已订阅会话事件");
 
         // 演示「插件必须自己停掉后台任务」：宿主没法从外部停它，
         // 留着运行中的定时器会让程序集无法卸载，禁用后就只能提示「需重启」。

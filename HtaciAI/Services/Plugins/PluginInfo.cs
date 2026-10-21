@@ -49,7 +49,9 @@ public sealed record PluginInfo(
     bool AutoLoadAfterCrash,
     int CrashCount,
     bool CrashSuspected,
-    string? CrashLogPath)
+    string? CrashLogPath,
+    /// <summary>最近一次往 system 提示词里贡献了多少字（0 = 最近一次没有贡献）。</summary>
+    int ContributionChars)
 {
     /// <summary>把 <see cref="State"/> 翻译成界面文案。</summary>
     public string StateText => State switch

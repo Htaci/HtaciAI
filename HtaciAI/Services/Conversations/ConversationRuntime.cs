@@ -8,6 +8,7 @@ using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services.Mcp;
 using HtaciAI.Services.Notifications;
+using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Tools;
 
@@ -311,7 +312,13 @@ public sealed class ConversationRuntime
         Profile.State.LastMessageAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await PersistSessionAsync();
 
-        var system = Profile.BuildSystemPrompt(Profile.State.Model);
+        // system 提示词 = 档案自己的 + 各插件登记的贡献（后者带配额、带来源标记）。
+        // 包一层而不是改 IConversationProfile：那两个实现只是纯字符串拼接，
+        // 改成异步会把接口与「工作空间的拼装不能与普通对话合流」那套注释一起搅动。
+        // 这里取消源还没建（它在下面压缩之前才建），所以不给令牌：
+        // 单个贡献者本来就有 500 ms 上限，拖不住这一轮。
+        var system = await PromptComposer.ComposeAsync(
+            Profile, Profile.State.Model, SessionId, CancellationToken.None);
         var vision = SupportsVision(request.Settings.Model);
 
         // MCP 是惰性连接的：发消息前确保会话启用的服务都连上并发现了工具。

@@ -447,15 +447,15 @@ public sealed class WindowOptions
 | --- | --- | --- | --- |
 | M0 | `HtaciAI.Plugin.Abstractions` + `PluginManager` + `AppPaths.Plugins` + `state.json` + 空插件能加载/卸载/重启提示 | 无 | ✅ 已完成并通过实测 |
 | M1 | `ConversationRuntime` 拆分 A/B/C 三步 + `ConversationRuntimeRegistry` | 无 | ✅ 已完成 |
-| M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 | ⬜ 未开始 |
+| M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 | ✅ 已完成 |
 | M3 | `ISessionFacade`（主动发起、取消、改权限、读历史；agent 旁注与临时模型未做，理由见交接文档） | M1 | ✅ 已完成 |
 | M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ⬜ 未开始 |
 | M5 | 桌宠插件（先窗口+气泡，后主动发起） | M2、M3、M4 | ⬜ 未开始 |
-| M6 | 「插件」页（新标签页入口）：列表、启用/禁用、能力清单、错误状态、需重启提示、崩溃记录与崩溃日志、崩溃后仍自动加载；与设置页总开关联动 | M0 | ✅ 已完成（「贡献配额」依赖 M2 的贡献模型） |
+| M6 | 「插件」页（新标签页入口）：列表、启用/禁用、能力清单、错误状态、需重启提示、崩溃记录与崩溃日志、崩溃后仍自动加载；与设置页总开关联动 | M0 | ✅ 已完成（含「最近一次贡献字数」） |
 
-**下一步**：M2（`PromptComposer` + `IChatEventBus`）。
-具体开工要点、落点与验收标准已写在
-[`plugin-handoff.md`](./plugin-handoff.md) 的「三、待办 → M2」里，照那份做即可；
+**下一步**：M4（`IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片）。
+具体开工要点与落点已写在
+[`plugin-handoff.md`](./plugin-handoff.md) 的「三、待办 → M4」里，照那份做即可；
 本节只维护设计意图，不再重复步骤。
 
 ---
@@ -487,9 +487,10 @@ public sealed class WindowOptions
 
 
 
-**M2**
+**M2（已达成，见交接文档第 10 节）**
 - 插件贡献出现在 system 末尾，超配额被截断且有日志
 - 每轮 ContentDelta 合并后插件收到的文本与最终回复一致（不丢字、不重复）
+- 撤销（= 禁用插件）后贡献与事件同时停止；插件页显示最近一次贡献字数
 
 **M3**
 - 会话视图未打开时插件 `SendAsync` 能跑完整一轮，消息正常落库

@@ -7,12 +7,23 @@ using HtaciAI.Services.Storage;
 namespace HtaciAI.Services.Plugins;
 
 /// <summary>
-/// <see cref="IPluginContext"/> 的宿主实现。M0 只提供插件自身就需要的那几样能力，
-/// 对话 / UI / 工具等门面随各自里程碑挂进来。
+/// 交给插件的门面集合。哪一项为 null，就说明清单里没声明对应能力。
+///
+/// 打包成一个对象而不是六个构造参数：每加一个里程碑就多一个参数的话，
+/// 调用点会变成一长串 <c>null</c>，看的人根本分不清哪一个是哪一个。
+/// </summary>
+internal sealed record PluginFacades(
+    ISessionFacade? Sessions = null,
+    IPromptRegistry? Prompts = null,
+    IChatEventBus? Chat = null);
+
+/// <summary>
+/// <see cref="IPluginContext"/> 的宿主实现。<b>只提供这份清单声明了的能力</b> ——
+/// 没声明的属性是 null，插件第一行就会炸出来，而不是伪装成「插件就是不工作」。
 /// </summary>
 internal sealed partial class PluginContext : IPluginContext
 {
-    public PluginContext(PluginManifest manifest, string directory, string hostVersion, ISessionFacade? sessions)
+    public PluginContext(PluginManifest manifest, string directory, string hostVersion, PluginFacades facades)
     {
         Manifest = manifest;
         PluginId = manifest.Id;
@@ -21,7 +32,9 @@ internal sealed partial class PluginContext : IPluginContext
         Log = new ScopedLogger(manifest.Id);
         Storage = new StorageImpl(manifest.Id);
         Resources = new ResourcesImpl(directory);
-        Sessions = sessions;
+        Sessions = facades.Sessions;
+        Prompts = facades.Prompts;
+        Chat = facades.Chat;
     }
 
     public string PluginId { get; }
@@ -32,6 +45,8 @@ internal sealed partial class PluginContext : IPluginContext
     public IPluginStorage Storage { get; }
     public IResourceLocator Resources { get; }
     public ISessionFacade? Sessions { get; }
+    public IPromptRegistry? Prompts { get; }
+    public IChatEventBus? Chat { get; }
 
     // ---- 日志 ----
 

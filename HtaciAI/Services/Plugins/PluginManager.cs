@@ -276,16 +276,12 @@ public sealed partial class PluginManager
             // 实测后果是插件永远判成「需重启」，文件也一直锁着。
             plugin = CreatePluginInstance(alc, entry.Manifest!, Path.Combine(entry.Directory, manifest.Entry));
 
-            // 声明了「主动发起对话」才给门面；没声明就是 null，让插件在第一次使用时立刻发现。
-            // 门面登记进 Subscriptions：禁用插件时它会拒绝后续调用，并停掉插件发起、还没跑完的轮次。
-            PluginSessionFacade? sessions = null;
-            if (HasCapability(manifest, PluginCapabilities.ChatControl))
-            {
-                sessions = new PluginSessionFacade(manifest.Id);
-                entry.Subscriptions.Add(sessions);
-            }
-
-            var context = new PluginContext(manifest, entry.Directory, AppVersion.Current, sessions);
+            // 只给声明过的能力：没声明的注入 null，让插件在第一次使用时立刻发现
+            // （空实现会让「我忘了声明」一路伪装成「插件就是不工作」，那种问题最难查）。
+            //
+            // 每个门面都登记进 Subscriptions：禁用插件时宿主统一收掉它们的订阅与贡献，
+            // 不指望插件自己记得撤销。
+            var context = new PluginContext(manifest, entry.Directory, AppVersion.Current, BuildFacades(entry));
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(InitializeTimeout);
@@ -441,6 +437,9 @@ public sealed partial class PluginManager
             try { subscription.Dispose(); } catch { /* 单个失败不影响其余 */ }
         }
         entry.Subscriptions.Clear();
+
+        // 插件页显示的是「最近一次贡献」，禁用之后不该再挂着旧数字
+        PluginPromptUsage.Clear(entry.Id);
 
         await FlushDispatcherAsync();
 
@@ -767,6 +766,29 @@ public sealed partial class PluginManager
     private static bool HasCapability(PluginManifest manifest, string capability)
         => manifest.Capabilities.Any(c => string.Equals(c?.Trim(), capability, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>按声明建门面。<b>没声明就是 null</b>，理由见 <see cref="PluginFacades"/>。</summary>
+    private static PluginFacades BuildFacades(PluginEntry entry)
+    {
+        var manifest = entry.Manifest!;
+
+        ISessionFacade? sessions = null;
+        if (HasCapability(manifest, PluginCapabilities.ChatControl))
+        {
+            var facade = new PluginSessionFacade(manifest.Id);
+            entry.Subscriptions.Add(facade);
+            sessions = facade;
+        }
+
+        return new PluginFacades(
+            Sessions: sessions,
+            Prompts: HasCapability(manifest, PluginCapabilities.PromptContribute)
+                ? new PluginPromptFacade(manifest.Id, entry.Subscriptions)
+                : null,
+            Chat: HasCapability(manifest, PluginCapabilities.ChatObserve)
+                ? new PluginChatFacade(manifest.Id, entry.Subscriptions)
+                : null);
+    }
+
     // ============================================================
     // 杂项
     // ============================================================
@@ -790,7 +812,8 @@ public sealed partial class PluginManager
             AutoLoadAfterCrash: entry.Record.AutoLoadAfterCrash,
             CrashCount: entry.Record.CrashCount,
             CrashSuspected: entry.Record.CrashSuspected,
-            CrashLogPath: entry.Record.LastCrashLog);
+            CrashLogPath: entry.Record.LastCrashLog,
+            ContributionChars: PluginPromptUsage.Get(entry.Id));
     }
 
     private void Raise() => Changed?.Invoke();

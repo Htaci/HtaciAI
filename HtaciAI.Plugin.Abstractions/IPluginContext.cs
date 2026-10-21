@@ -37,6 +37,20 @@ public interface IPluginContext
     /// 一路伪装成「插件就是不工作」，那种问题最难查。
     /// </summary>
     ISessionFacade? Sessions { get; }
+
+    /// <summary>
+    /// 往本轮 system 提示词里追加内容。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.PromptContribute"/> 时才不是 null。</b>
+    /// </summary>
+    IPromptRegistry? Prompts { get; }
+
+    /// <summary>
+    /// 观察会话事件（流式增量、工具调用、轮次完成）。会话窗口没打开也能收到。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.ChatObserve"/> 时才不是 null。</b>
+    /// </summary>
+    IChatEventBus? Chat { get; }
 }
 
 /// <summary>

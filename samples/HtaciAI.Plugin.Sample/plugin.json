@@ -2,9 +2,9 @@
   "id": "htaci.sample",
   "name": "示例插件",
   "version": "1.0.0",
-  "description": "验证插件加载链路的最小实现：只写日志、读一次私有存储。",
+  "description": "验证插件链路的最小实现：日志、私有存储、上下文贡献、会话事件订阅。",
   "minHostVersion": "1.0.0",
   "entry": "HtaciAI.Plugin.Sample.dll",
   "entryType": "HtaciAI.Plugin.Sample.SamplePlugin",
-  "capabilities": ["chat.control"]
+  "capabilities": ["chat.control", "prompt.contribute", "chat.observe"]
 }

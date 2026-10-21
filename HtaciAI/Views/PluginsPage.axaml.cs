@@ -370,6 +370,20 @@ public partial class PluginsPage : UserControl
             body.Children.Add(CreateCapabilityTags(info.Capabilities));
         }
 
+        // ---- 上下文贡献：这个入口能悄悄改变模型行为，字数必须看得见 ----
+        if (info.Capabilities.Any(c => string.Equals(c, PluginCapabilities.PromptContribute, StringComparison.OrdinalIgnoreCase)))
+        {
+            body.Children.Add(new TextBlock
+            {
+                Text = info.ContributionChars > 0
+                    ? $"最近一轮往上下文贡献了 {info.ContributionChars} 字（单插件上限 {PromptComposer.PerPluginLimit} 字）"
+                    : "最近一轮没有往上下文贡献内容。",
+                FontSize = 11.5,
+                Foreground = info.ContributionChars > 0 ? TextMuted : TextFaint,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
         // ---- 操作区 ----
         body.Children.Add(new Border
         {

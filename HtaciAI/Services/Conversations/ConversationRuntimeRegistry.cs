@@ -73,6 +73,21 @@ public sealed class ConversationRuntimeRegistry
     public IReadOnlyList<string> SessionIds => _entries.Keys.ToList();
 
     /// <summary>
+    /// 新生成了一个运行时。插件的事件总线靠它「挂到每个会话上」——
+    /// 不挂的话，插件只能看见自己借过的那几个会话。
+    ///
+    /// <b>在 UI 线程上、于 <see cref="Acquire"/> 返回租约之前发出</b>，
+    /// 订阅方只应该做「转订阅」这类便宜的事。
+    /// </summary>
+    public event Action<ConversationRuntime>? RuntimeCreated;
+
+    /// <summary>
+    /// 一个运行时被回收了（引用归零且没有正在跑的轮次）。
+    /// 订阅方必须在这里退订，否则它手里的委托会把那个运行时（连同它的一份历史）一直吊着。
+    /// </summary>
+    public event Action<ConversationRuntime>? RuntimeRemoved;
+
+    /// <summary>
     /// 借出某个会话的运行时：有就复用，没有就用 <paramref name="profileFactory"/> 新建一份。
     ///
     /// <b>档案只在新建时创建</b>：复用来的运行时里面已经带着档案与全量历史，
@@ -88,6 +103,9 @@ public sealed class ConversationRuntimeRegistry
         {
             entry = new Entry(sessionId, profileFactory, this);
             _entries[sessionId] = entry;
+
+            // 先让订阅方挂上，再交出租约：否则「新建那一刻就开始跑」的第一轮会有事件漏掉
+            RuntimeCreated?.Invoke(entry.Runtime);
         }
 
         entry.RefCount++;
@@ -113,6 +131,9 @@ public sealed class ConversationRuntimeRegistry
     {
         if (_entries.TryGetValue(sessionId, out var entry) && ReferenceEquals(entry.Runtime, runtime))
             _entries.Remove(sessionId);
+
+        // 通知在字典删掉之后发：订阅方这时候应该已经拿不到它了，只剩退订这一件事可做
+        RuntimeRemoved?.Invoke(runtime);
     }
 
     private sealed class Entry

@@ -1,14 +1,14 @@
 # 开发交接快照
 
 > 用途：上下文压缩 / 换人接手时，只读这一份就能接着干。
-> 最后更新：2026-10（对应提交 `M3`）
+> 最后更新：2026-10（对应提交 `M2`）
 
 ---
 
 ## 零、当前状态（读这一段就够开工）
 
 **已完成**：M0（插件加载/卸载/崩溃归因）、M1（`ConversationRuntime` + `ConversationRuntimeRegistry`，
-A/B/C 三步全完）、M3（`ISessionFacade`，插件主动发起/停止/改权限/压缩/读历史）、M6（插件管理页）、
+A/B/C 三步全完）、M2（`PromptComposer` + `IChatEventBus`）、M3（`ISessionFacade`）、M6（插件管理页）、
 工具超时与「继续」那一轮。
 
 **提交线**（从旧到新）：
@@ -21,10 +21,12 @@ b0325ac  M6 插件管理页
 f625c5d  M1-C  重新生成/重试/继续/压缩搬进 runtime
 cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 85f91d8  交接文档更新到 M2 开工点
-（M3）    插件主动发起对话：ISessionFacade
+2209bab  M3：插件能主动发起对话（ISessionFacade）
+（M2）    上下文贡献 + 会话事件总线
 ```
 
-**下一步：M2（`PromptComposer` + `IChatEventBus`）**。开工要点见「三、待办」第一条。
+**下一步：M4（`IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片）**。
+之后只剩 M5（桌宠本体）。开工要点见「三、待办」。
 工作区干净，`dotnet build HtaciAI/HtaciAI.csproj -t:Rebuild` 0 错误、6 个既有告警。
 
 **关键能力现在到哪了**：
@@ -35,8 +37,8 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 | 插件能不能在界面上被看见（列表/启停/崩溃记录） | ✅ M6 |
 | 插件能不能在会话没打开时发起对话 | ✅ M1（runtime）+ M3（`ISessionFacade` 门面） |
 | 插件能不能停止一轮 / 改权限档位 / 压缩 / 读历史 | ✅ M3 |
-| 插件能不能观察会话流（流式增量、轮次完成） | ⬜ M2 |
-| 插件能不能往上下文里加东西 | ⬜ M2 |
+| 插件能不能观察会话流（流式增量、轮次完成） | ✅ M2（`IChatEventBus`） |
+| 插件能不能往上下文里加东西 | ✅ M2（`PromptComposer` + `IPromptRegistry`） |
 | 插件能不能建窗口 / 插控件 | ⬜ M4 |
 | 桌宠插件本体 | ⬜ M5（依赖 M2/M3/M4） |
 
@@ -282,6 +284,61 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 真实应用的 UI 线程有消息循环，路径本身与 `SessionNotifier` 用的是同一套写法。
 示例插件只确认「注入生效」并打日志，不主动发消息（每次启动都往会话塞一句会很打扰）。
 
+### 10. `PromptComposer` + `IChatEventBus`（M2）
+
+**目标**：插件能往上下文里加东西（`prompt.contribute`）、能看会话流（`chat.observe`）。
+两者都接在 M1 的 runtime 上，**没有碰视图**。
+
+契约（`HtaciAI.Plugin.Abstractions`）：
+
+| 接口 | 说明 |
+| --- | --- |
+| `IPromptRegistry` / `IPromptContributor` | `Add(contributor)` 登记；`Order` 决定追加顺序，`BuildAsync(PromptContext, ct)` 返回要追加的文本 |
+| `IChatEventBus` / `IChatEventSink` | `Subscribe(sink, filter)`；`OnEventAsync(ChatEvent, ct)` |
+| `ChatEvent` / `ChatEventKind` / `ChatEventFilter` | 一条事件带全部字段（按 `Kind` 分流）；过滤按 sessionId + 事件种类 |
+
+宿主侧：
+
+| 文件 | 职责 |
+| --- | --- |
+| `Services/Plugins/PromptComposer.cs` | `ComposeAsync(profile, modelId, sessionId, ct)`；另有 `PluginPromptRegistry`（名单）、`PluginPromptUsage`（每插件最近一次字数）、`PluginPromptFacade` |
+| `Services/Plugins/ChatEventBus.cs` | 挂载到每个 runtime、50 ms 合并、有界队列、后台投递；另有 `PluginChatFacade` |
+| `PluginContext` 的 `PluginFacades` | 三个门面打包传进来，按声明注入，没声明就是 **null** |
+
+几个要点：
+
+| 东西 | 做法 | 为什么 |
+| --- | --- | --- |
+| 落点 | `ConversationRuntime.RunTurnAsync` 里原来那行 `Profile.BuildSystemPrompt` 换成 `PromptComposer.ComposeAsync` | 不把 profile 接口改成异步：它只是字符串拼接，改了要动接口、两个实现和「工作空间不能合流」的注释 |
+| 配额 | 每插件 4096 字、单轮合计 8192 字；超了截断 + `PluginLog.Warn`；单贡献者 500 ms 超时；抛异常只跳过它 | 这个入口能悄悄改变模型行为，必须既有上限又有可见性 |
+| 来源标记 | 每段贡献前写 `<!-- plugin: id -->` | 出问题时一眼看出是谁写的 |
+| 挂载 | 注册表加 `RuntimeCreated` / `RuntimeRemoved`，总线订阅这两个事件转订阅 | runtime 是按需创建的，不挂就只能看见插件自己借过的会话 |
+| 合并 | 每 runtime 一份累积缓冲，50 ms `Timer` 冲一次；`Text` = 累积正文，`Delta` = 本次新增 | 空闲时一个 tick 都不该有；插件拿到累积文本才不用自己拼 |
+| 队列 | 256 条上限，满了优先丢最旧的 `ContentDelta` / `ThinkingDelta` | 下一个事件里会重新给出累积文本，丢增量不丢语义 |
+| 投递 | 后台 Task + `SemaphoreSlim`，逐个 `try/catch` | 插件回调慢不能拖住模型输出，也不能把别人带崩 |
+| 撤销 | 门面登记进 `PluginEntry.Subscriptions`；总线在订阅归零时整体卸载 | 「禁用插件能不能干净」的一半 |
+
+**两个踩到的坑**（已修，别再犯）：
+
+1. **`TurnEnded` 不只表示「一轮结束」**：自动话题命名完成后也会发一次
+   （`TurnOutcome.TitleChanged == true`）。照发 `RoundCompleted` 的话插件会看到两次「完成」。
+2. **`Task.WaitAsync(timeout)` 抛的是 `TimeoutException`**，不是 `OperationCanceledException`；
+   只接后者会让「超时」在日志里显示成「贡献者代码抛异常」，误导排查方向。
+
+**已验证**（两套无头 harness，不建界面，本地假 OpenAI 服务）：
+
+- 上下文贡献：落在 system 末尾、带来源标记、字数被记到 `PluginInfo.ContributionChars`；
+  单插件超配额截断到 4096；合计超配额时后来者被跳过 / 截断；抛异常与 500 ms 超时都只是少一段内容，
+  这一轮照常发送成功
+- 会话事件：合并后的增量拼接与最终回复**一字不差**；40 片突发只合并成 1 条事件；
+  按 sessionId 过滤生效；退订后不再收到；runtime 被回收后重建仍能自动挂上；
+  撤销（= 禁用插件）后贡献与事件同时停止
+- 端到端（真 `PluginManager` + 真 `samples/HtaciAI.Plugin.Sample`）：
+  插件贡献进入 system、插件日志里出现「一轮开始 / 这一轮完成」、禁用后既不再贡献也不再收事件、
+  字数清零，并且**禁用后仍是「已禁用」而不是「需重启」**（说明新门面没有吊住插件程序集）
+
+**没验证**：真实界面里插件页那一行字数文案（逻辑层已通）、插件长时间跑的事件量。
+
 
 ---
 
@@ -327,100 +384,49 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
 
 ## 三、待办
 
-M0 / M1 / M3 / M6 已完成，剩下 M2 / M4 / M5。推荐顺序：M2（插件能看能写上下文）
-→ M4（插件能建窗口/插控件）→ M5（桌宠本体）。M3 已插队做完，桌宠「主动发起对话」的前置已经齐了。
+M0 / M1 / M2 / M3 / M6 已完成，只剩 M4 与 M5。顺序：M4（插件能建窗口/插控件）→ M5（桌宠本体）。
+桌宠需要的一切底层能力（主动发起、看流式、改上下文）现在都齐了，M4 是最后一块地基。
 
-### M2：`PromptComposer` + `IChatEventBus`（**下一步**）
+### M4：`IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost`（**下一步**）
 
-目标：插件能往上下文里加东西（`prompt.contribute`）、能看会话流（`chat.observe`）。
-两者都接在 M1 已经做好的 runtime 上，**不需要碰视图**。
+契约要加的东西（设计见 [`plugin-plan.md`](./plugin-plan.md) 的 2.3 e 节）：
 
-#### M2-a `PromptComposer`（上下文贡献）
+- `IPluginWindowHost.CreateStandalone(WindowOptions)`：建一个配好的窗口（透明 / 无边框 / 置顶 /
+  可拖 / 记忆位置 / owner 设成主窗口）。**记忆位置按插件 id 存**，否则每个插件作者都要自己造一套。
+- `IUiExtensionRegistry.AddControl(slotId, factory, order)` + `AddLauncherCard(card)`：
+  插槽 id 先定 `newtab.cards` / `conversation.header` / `conversation.input.side` /
+  `sidebar.below` / `mainwindow.titlebar.right`。
+- `PluginControlHost`：每个插槽位置外面包一层 —— 插件名 tooltip、出错时整块换成一行
+  「插件 X 显示失败」而不是让异常穿透到布局测量阶段、禁用时按表逐个移除。
 
-落点只有一处：`ConversationRuntime.RunTurnAsync` 里的
+容易踩的几点：
 
-```csharp
-var system = Profile.BuildSystemPrompt(Profile.State.Model);   // 现在
-```
+- **控件工厂会被重复调用**：会话视图重建（缓存淘汰后重进）时会重新 ask 一次工厂，
+  所以 **factory 不能持有瞬时状态**，状态放 `IPluginStorage` 或插件自己的对象里。
+- **`ShutdownMode` 已经设成 `OnMainWindowClose`**（`App.OnFrameworkInitializationCompleted`），
+  插件窗口只关自己的窗口不会连带杀死进程，也不要 `Shutdown()`。
+- 禁用插件的顺序已经在 `PluginManager.UnloadAsync` 里（静默 → `ShutdownAsync` → 撤订阅 →
+  冲 Dispatcher → `Unload`），M4 只需要把「关窗口、摘控件」插到第 1.5 步。
+- 插槽宿主是**视图**，所以挂在 `ConversationView` / `NewTabPage` / `MainWindow` 上时要
+  先 `AddControl` 一次，再在视图重建时按插槽 id 重新 ask —— 这与 M1 做的
+  「数据归 runtime、重绘归视图」是同一条原则。
 
-- **不要把 `IConversationProfile.BuildSystemPrompt` 改成异步**（原计划是这么写的）。
-  它只是拼静态文本，两处实现都是纯字符串拼接；改成 `Task<string>` 会把接口、两个实现、
-  以及「工作空间那套三层拼装不能与普通对话合流」的注释一起搅动，收益却为零。
-  改由 `PromptComposer.ComposeAsync(profile, modelId, ct)` 包一层：
-  先拿 `profile.BuildSystemPrompt` 的结果，再按 `Order` 依次追加插件贡献，最后统一截断。
-- 配额：**每插件 4 KB、单次合计 8 KB**（常量放 `PromptComposer`，先不做成设置项）。
-  超限截断并 `PluginLog.Warn`；单个贡献者抛异常就跳过它，绝不因此让本轮发送失败。
-- 每个插件实际贡献了多少字符要能被界面读到 —— M6 里那条「贡献配额要等 M2」就是等这个。
-  最小做法：`PluginManager` 在每次组合后记一份「最近一次贡献长度」到内存，
-  插件页直接显示；不要为此加持久化字段。
-- 分隔与标注：追加内容前写一行来源（`<!-- plugin: htaci.pet -->` 之类），
-  出问题时能一眼看出是谁写的。
 
-#### M2-b `IChatEventBus`（会话事件）
-
-**别重新发明事件**：`ConversationRuntime` 已经有全套——
-
-| runtime 事件 | 映射到插件侧 |
-| --- | --- |
-| `RoundStarted` | `RoundStarted` |
-| `ContentDelta` / `ThinkingDelta` | `ContentDelta` / `ThinkingDelta`（**合并后再投递**） |
-| `ToolCallDelta` | `ToolCallStarted`（首次见到某个 index 时） |
-| `MessageInserted` / `MessageUpdated` | `MessagePersisted` |
-| `TurnEnded`（可 await） | `RoundCompleted` / `RoundFailed` |
-| `RetryScheduled` | 可选，暂不暴露 |
-| `ActivityChanged` | `ActivityChanged` |
-
-要补的是三件宿主自己的事：
-
-1. **挂到每个 runtime 上**。runtime 是由 `ConversationRuntimeRegistry` 按需创建的，
-   总线必须在「新建 Entry」时挂上去，否则插件只能看见自己借过的那些会话。
-   做法：给注册表加一个 `RuntimeCreated` 事件（`Action<ConversationRuntime>`），
-   总线订阅它，在每个 runtime 上转订阅并把 `IDisposable` 收进自己的表。
-2. **节流与不阻塞**。runtime 的事件是同步 `Action`，现在的订阅方是视图，开销可接受；
-   插件不行。每条投递走「有界队列 + 50 ms 合并」：`ContentDelta` 攒够一段时间再发，
-   队列满了丢最旧的增量（合并后的文本不丢语义）。插件回调一律 `try/catch` 吞掉。
-3. **撤销**。`PluginManager.PluginEntry.Subscriptions` 这个字段 M0 就留好了，
-   全是空的 —— 插件登记的每个 `IDisposable`（事件订阅、prompt 贡献者）都塞进去，
-   禁用时统一 Dispose。这是「插件卸载能不能干净」的一半。
-
-`ChatEventFilter`：按 sessionId（null = 全部）+ 按事件类型。默认给「全部会话」，
-桌宠那种只关心当前会话的由插件自己过滤。
-
-#### 契约要动的地方
-
-- `IPluginContext` 加 `Prompts` / `Chat` 两个属性（M0 的注释里已经写明「随各自里程碑实装」）。
-- 只在插件清单声明了 `prompt.contribute` / `chat.observe` 时注入；没声明就给 `null`
-  或空实现（**定成 null** —— 让插件作者在编译期/第一行就发现「我忘了声明」）。
-- 契约程序集是跨项目公开协议，改了要顺手更新 `samples/HtaciAI.Plugin.Sample` 的演示。
-
-#### 验收
-
-- 插件贡献出现在 system 末尾；超配额被截断且写了日志；贡献者抛异常时本轮照常发送。
-- 每轮 `ContentDelta` 合并后，插件收到的累积文本与最终回复**一字不差**（不丢字、不重复）。
-- 禁用插件后不再收到任何事件（`Subscriptions` 生效），且插件页显示它贡献了多少。
-- 插件在会话没打开时（只有 runtime、没有视图）也能收到事件 —— 这是 M1 换来的能力，顺手验证。
-
-#### 已验证可复用的测试手法（M1 用过两次）
+### 已验证可复用的测试手法（M1 / M2 / M3 用过三次）
 
 无头 harness：临时建 csproj（引 `HtaciAI.csproj`），`Main` 里 `AppPaths.Initialize` +
 `DatabaseService.Initialize` + 写测试会话/模型行，然后**直接调服务层**，不建界面。
 模型用本地假 OpenAI 兼容服务（Python `http.server`，几十行）：
 
-- 请求体是 **chunked** 发的（`HttpClient` 默认），服务端要按 chunked 读，不能只看 `Content-Length`
-- 分支按最后一条 user 文本里的关键词走（`tool` / `slow` / `think` / `fail`），一次写好反复用
+- 请求体是 **chunked** 发的（`HttpClient` 默认），服务端要按 chunked 读，不能只看 `Content-Length`；
+  响应用「不给长度 + `Connection: close`」最省事，手写 chunked 帧很容易写错
+- 分支按最后一条 user 文本里的关键词走（`SLOW` / `BURST` / `TOOL` / `以下是需要你压缩的对话内容`），
+  一次写好反复用；需要断言 system 时让它把 system 追加写进 `requests.log`
+- **无头进程没有 Dispatcher 消息循环**：`Dispatcher.UIThread.Post` 排进去的回调永远不会跑。
+  凡是「只在 UI 线程上访问」的服务（注册表、运行时），要在 harness 里装一个单线程
+  `SynchronizationContext` 并在主线程泵它，否则续体会落到线程池上
 - fixture 要连 `data.db-wal` / `-shm` 一起备份，否则还原后库是半截的
-- 临时工程与脚本不要提交（`git status` 确认干净再 commit）
-
-> **M2 做完记得回来改本文件**：开头「零、当前状态」那张能力表里两行 ⬜ 改成 ✅，
-> 提交线追加一条，并把本条待办挪进「一、已完成」。
-
-### M4（只依赖 M0，可先做）
-
-- `IPluginWindowHost`（`CreateStandalone` + 记忆位置）+ `IUiExtensionRegistry` + `PluginControlHost`
-- 插槽 id：`newtab.cards` `conversation.header` `conversation.input.side` `sidebar.below` `mainwindow.titlebar.right`
-
-> M6 已完成（`Views/PluginsPage`）：插件列表、启停、能力清单、崩溃记录与日志入口、
-> 需重启提示、「崩溃后仍自动加载」勾选（默认不勾）。「贡献配额」要等 M2 有贡献模型后再加。
+- 临时工程与脚本不要提交（`git status` 确认干净再 commit）；测完把 `data/` 与 `requests.log` 删掉
 
 ---
 
