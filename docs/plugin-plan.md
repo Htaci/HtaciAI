@@ -440,7 +440,7 @@ public sealed class WindowOptions
 | M3 | `ISessionFacade`（主动发起、取消、改权限、agent 旁注） | M1 | ⬜ 未开始 |
 | M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ⬜ 未开始 |
 | M5 | 桌宠插件（先窗口+气泡，后主动发起） | M2、M3、M4 | ⬜ 未开始 |
-| M6 | 设置页「插件」：列表、启用/禁用、能力清单、贡献配额、错误状态、内存释放状态；`NewTabPage` 里注释掉的入口接上 | M0 | ⬜ 未开始 |
+| M6 | 「插件」页（新标签页入口）：列表、启用/禁用、能力清单、错误状态、需重启提示、崩溃记录与崩溃日志、崩溃后仍自动加载；与设置页总开关联动 | M0 | ✅ 已完成（「贡献配额」依赖 M2 的贡献模型） |
 
 **下一步建议**：M1（`ConversationRuntime` 拆分）是 M2/M3 的前置，也是工作量大头；
 M4/M6 只依赖 M0，可以先做掉以尽快看到插件跑起来。
@@ -472,8 +472,6 @@ M4/M6 只依赖 M0，可以先做掉以尽快看到插件跑起来。
   第二次进入关闭流程不会被自己取消掉
 - 主窗口关闭时进程退出（`ShutdownMode.OnMainWindowClose`）
 
-**M0 待补**
-- 设置页的插件管理页（M6）
 
 
 **M2**

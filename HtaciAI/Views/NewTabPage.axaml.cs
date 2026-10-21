@@ -15,6 +15,7 @@ public partial class NewTabPage : UserControl
     public event EventHandler? SmartChatSelected;
     public event EventHandler? ToolsSelected;
     public event EventHandler? SkillsSelected;
+    public event EventHandler? PluginsSelected;
     public event EventHandler? McpSelected;
 
     public NewTabPage()
@@ -93,17 +94,19 @@ public partial class NewTabPage : UserControl
         //    OnClick = null
         //}));
 
-        //CardsPanel.Children.Add(CreateCard(new CardData
-        //{
-        //    Title = "插件与技能市场",
-        //    Description = "管理和发现新的插件与技能，扩展 AI 的功能。",
-        //    MainColor = Color.FromArgb(0xFF, 0x7B, 0x5E, 0xA7),
-        //    LightBg = Color.FromArgb(0xFF, 0xF3, 0xEF, 0xF8),
-        //    GlowAlpha = 0x26,
-        //    TagBg = Color.FromArgb(0xFF, 0xF1, 0xED, 0xF6),
-        //    TagFg = Color.FromArgb(0xFF, 0x6A, 0x4F, 0x94),
-        //    OnClick = null
-        //}));
+        CardsPanel.Children.Add(CreateCard(new CardData
+        {
+            Title = "插件",
+            Description = "管理扩展程序，按插件声明的能力扩展界面与对话",
+            IconGlyph = "\uE9EA",                          // puzzle_piece
+            Tags = new[] { "Plugins", "扩展" },
+            MainColor = Color.FromArgb(0xFF, 0x63, 0x66, 0xF1),
+            LightBg = Color.FromArgb(0xFF, 0xEE, 0xF0, 0xFE),
+            GlowAlpha = 0x26,
+            TagBg = Color.FromArgb(0xFF, 0xEC, 0xED, 0xFD),
+            TagFg = Color.FromArgb(0xFF, 0x4F, 0x46, 0xE5),
+            OnClick = () => PluginsSelected?.Invoke(this, EventArgs.Empty)
+        }));
 
         CardsPanel.Children.Add(CreateCard(new CardData
         {

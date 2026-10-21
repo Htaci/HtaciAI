@@ -247,6 +247,7 @@ public partial class MainWindow : Window
         newTabPage.SmartChatSelected += OnConversationSelected;
         newTabPage.ToolsSelected += OnToolsSelected;
         newTabPage.SkillsSelected += OnSkillsSelected;
+        newTabPage.PluginsSelected += OnPluginsSelected;
         newTabPage.McpSelected += OnMcpSelected;
         AddTab("新标签页", newTabPage);
     }
@@ -297,6 +298,23 @@ public partial class MainWindow : Window
 
             _tabContents[index] = new SkillsPage();
             _tabTitleBlocks[index].Text = "技能";
+
+            if (index == GetSelectedIndex())
+                TabContent.Content = _tabContents[index];
+        }
+    }
+
+    private void OnPluginsSelected(object? sender, System.EventArgs e)
+    {
+        if (sender is NewTabPage newTabPage)
+        {
+            newTabPage.PluginsSelected -= OnPluginsSelected;
+
+            var index = _tabContents.IndexOf(newTabPage);
+            if (index < 0) return;
+
+            _tabContents[index] = new PluginsPage();
+            _tabTitleBlocks[index].Text = "插件";
 
             if (index == GetSelectedIndex())
                 TabContent.Content = _tabContents[index];

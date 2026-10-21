@@ -50,6 +50,16 @@ public partial class GeneralSettingsPage : UserControl
         _data = AppSettingsStore.Current;
         Build();
         _suppressSave = false;
+
+        // 总开关在「插件」页里也能改，两处必须显示同一个值。
+        // 用「先减再加」保证幂等：设置页的小节之间来回切换会反复触发 attach。
+        AttachedToVisualTree += (_, _) =>
+        {
+            PluginManager.Instance.Changed -= OnPluginsChanged;
+            PluginManager.Instance.Changed += OnPluginsChanged;
+            OnPluginsChanged();
+        };
+        DetachedFromVisualTree += (_, _) => PluginManager.Instance.Changed -= OnPluginsChanged;
     }
 
     private void Build()
@@ -124,6 +134,7 @@ public partial class GeneralSettingsPage : UserControl
             FontSize = 13,
             IsChecked = _data.EnablePlugins,
         };
+        _pluginsToggle = toggle;
         toggle.IsCheckedChanged += async (_, _) =>
         {
             if (_suppressSave) return;
@@ -180,7 +191,8 @@ public partial class GeneralSettingsPage : UserControl
                 {
                     Text = "插件是第三方代码，运行在本程序进程内 —— 它和主程序享有同样的权限，" +
                            "能读写文件、能建自己的窗口。所以默认关闭，打开之前请确认来源可信。\n" +
-                           "疑似导致崩溃的插件会在下次启动时自动跳过加载，并保留崩溃日志。",
+                           "疑似导致崩溃的插件会在下次启动时自动跳过加载，并保留崩溃日志。\n" +
+                           "逐个插件的启停、能力清单与崩溃记录在「插件」页（新标签页 → 插件）。",
                     FontSize = 12,
                     Foreground = TextMuted,
                     TextWrapping = TextWrapping.Wrap,
@@ -193,6 +205,30 @@ public partial class GeneralSettingsPage : UserControl
     }
 
     private TextBlock? _pluginsStatus;
+    private CheckBox? _pluginsToggle;
+
+    /// <summary>
+    /// 插件管理器状态变了：把总开关与状态文字拉回当前值。
+    /// 同步 <see cref="CheckBox.IsChecked"/> 会触发 <c>IsCheckedChanged</c>，
+    /// 必须用 <see cref="_suppressSave"/> 挡住 —— 否则会再存一次盘、再重载一遍插件。
+    /// </summary>
+    private void OnPluginsChanged()
+    {
+        if (_pluginsToggle is null) return;
+
+        var wasSuppressed = _suppressSave;
+        _suppressSave = true;
+        try
+        {
+            _pluginsToggle.IsChecked = _data.EnablePlugins;
+        }
+        finally
+        {
+            _suppressSave = wasSuppressed;
+        }
+
+        RefreshPluginStatus();
+    }
 
     private void RefreshPluginStatus()
     {

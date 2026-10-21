@@ -78,6 +78,16 @@
   `ShutdownRequested` 改成「取消一次 → 收插件 → 收 MCP → 删运行标记 → 再 Shutdown」
 - 示例插件 `samples/HtaciAI.Plugin.Sample`（含 `plugin.json` 与 README）
 
+### 6. 插件管理页（M6）
+
+- `Views/PluginsPage.axaml(.cs)`：新标签页 →「插件」卡片进入；左侧插件列表（状态点 + 短状态），
+  右侧总开关 + 详情（能力清单、错误 / 需重启提示、崩溃记录与「查看崩溃日志」、目录入口）
+- 总开关切走时调 `PluginManager.ReloadAsync()`；页面订阅 `PluginManager.Changed`（attach/detach 成对，
+  切换标签页回来时重新刷新），刷新经 `Dispatcher.Post` 延后一拍，避免在管理器自己的卸载流程中间重建控件
+- 启用疑似崩溃的插件会弹 `Views/PluginCrashWarningDialog.cs`：说明后果 + 「崩溃后仍自动加载」勾选（**默认不勾**）
+- 常规设置页的插件卡片与插件页总开关双向同步（`Changed` → 静默回写 `IsChecked`，用 `_suppressSave` 挡住重入）
+- 新标签页新增「插件」卡片（`puzzle_piece`，U+E9EA），主窗口按会话已有模式把它替换成插件页标签
+
 ---
 
 ## 二、M0 踩过的坑（别再踩）
@@ -137,12 +147,13 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
 
 配套：`ConversationRuntimeRegistry`（按 sessionId 复用，视图关闭不销毁——桌宠后台工作的前提）。
 
-### M4 / M6（只依赖 M0，可先做）
+### M4（只依赖 M0，可先做）
 
 - `IPluginWindowHost`（`CreateStandalone` + 记忆位置）+ `IUiExtensionRegistry` + `PluginControlHost`
 - 插槽 id：`newtab.cards` `conversation.header` `conversation.input.side` `sidebar.below` `mainwindow.titlebar.right`
-- 设置页插件列表：启停、能力清单、崩溃状态、需重启提示、崩溃日志入口、
-  「崩溃后仍自动加载」勾选框（默认不勾，带后果说明）
+
+> M6 已完成（`Views/PluginsPage`）：插件列表、启停、能力清单、崩溃记录与日志入口、
+> 需重启提示、「崩溃后仍自动加载」勾选（默认不勾）。「贡献配额」要等 M2 有贡献模型后再加。
 
 ---
 
@@ -156,7 +167,7 @@ dotnet build samples/HtaciAI.Plugin.Sample/HtaciAI.Plugin.Sample.csproj -c Relea
 
 # 装示例插件（<数据根> 见「设置 → 数据管理」）
 #   plugins/htaci.sample/  →  HtaciAI.Plugin.Sample.dll + plugin.json
-# 设置 → 常规设置 → 插件 → 勾选「启用插件」
+# 新标签页 →「插件」→ 勾选「启用插件」（或 设置 → 常规设置 → 插件）
 # 看 logs/plugin.log、plugin-data/htaci.sample/stats
 # 取消勾选 → 再勾上：应能立即重新加载，不提示需重启
 ```

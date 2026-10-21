@@ -115,5 +115,6 @@ print(hex(rev['ic_fluent_warning_24_regular']))"
 | 警告（配置需补充） | `warning_24_regular` | U+F86A | `Views/Settings/ModelServicePage.axaml.cs` 模型行的黄叹号 |
 | 未知（表里没有） | `question_circle_24_regular` | U+F63E | 同上的灰问号 |
 | 出错（请求失败） | `error_circle_24_regular` | U+F3F2 | `Controls/ErrorCard.cs` 错误卡的标题图标 |
+| 插件 | `puzzle_piece_24_regular` | U+E9EA | `Views/NewTabPage.axaml.cs` 的插件卡 |
 
 这两个提示图标点开都会跳到该模型的编辑页，补完保存即消失（见 `docs/model-table.md`）。
