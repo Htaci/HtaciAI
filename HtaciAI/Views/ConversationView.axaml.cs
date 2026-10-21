@@ -44,7 +44,7 @@ namespace HtaciAI.Views;
 /// 与具体会话模型解耦——所有差异（工具基准目录、system 提示词、落库路径、草稿能力）
 /// 都来自构造时传入的 <see cref="IConversationProfile"/>。消息仍复用 chat_message 表。
 /// </summary>
-public partial class ConversationView : UserControl
+public partial class ConversationView : UserControl, IInteractionHost
 {
     /// <summary>
     /// 会话状态与请求执行上下文（历史、档案、网关、运行标记、取消源）。
@@ -52,7 +52,6 @@ public partial class ConversationView : UserControl
     /// </summary>
     private readonly ConversationRuntime _runtime;
 
-    private readonly ToolExecutorDispatcher _toolExecutor = new();
     private bool _skillEventsHooked;
     private bool _toolEventsHooked;
 
@@ -123,7 +122,7 @@ public partial class ConversationView : UserControl
 
     /// <summary>
     /// 实时轮里已经建出来的工具卡：tool_call_id → 卡。
-    /// 参数分片一到就建卡（见 <see cref="BeginAssistantRound"/> 的 OnToolCall），之后
+    /// 参数分片一到就建卡（见 <see cref="OnToolCallDelta"/>），之后
     /// 「开始执行」「执行完成」都只是更新这一张 —— 不复用的话一次调用会出现两张卡，
     /// 一张永远停在「执行中」。只在一轮内有效，每轮开始清空。
     /// </summary>
@@ -153,9 +152,6 @@ public partial class ConversationView : UserControl
     /// </summary>
     private int? _streamInsertIndex;
 
-    /// <summary>本轮是不是用户主动点「停止」结束的（那种情况不发出错提醒）。</summary>
-    private bool _stoppedByUser;
-
     /// <summary>当前段落在卡外的正文块；一旦后面又出现工具调用，说明它只是过程叙述，就收进聚合卡。</summary>
     private TurnBodyView? _activeTurnBody;
 
@@ -169,6 +165,7 @@ public partial class ConversationView : UserControl
     {
         InitializeComponent();
         _runtime = new ConversationRuntime(profile);
+        HookRuntime();
 
         // 只做不依赖会话内容的一次性 UI 装配；依赖会话状态的初始化统一放到 InitializeAsync
         // （普通对话要等 LoadAsync 查库回来才有内容，工作空间会话则由页面先行加载）
@@ -178,7 +175,7 @@ public partial class ConversationView : UserControl
         // 输入区（附件、粘贴、拖放、回车发送、光标处整体删占位符）全部由 ChatInputControl 自己处理，
         // 这里只接它抛出来的几件事。原因：新建页与对话页原先各有一份实现，于是附件只加在了后者身上。
         Input.SendRequested += (_, submit) => _ = SendMessageAsync(submit.Text, submit.Attachments);
-        Input.StopRequested += (_, _) => _runtime.SendCts?.Cancel();
+        Input.StopRequested += (_, _) => _runtime.Cancel();
 
         // 换模型 = 换上下文上限，占用读数要按新上限重算（用量本身取自历史，不变）
         Input.ModelSelector.SelectedModelChanged += (_, _) => RefreshContextUsage();
@@ -190,9 +187,6 @@ public partial class ConversationView : UserControl
         // 压缩要在「这一轮发出去之前」定下上下文，所以入口放在输入区的更多菜单里。
         // 运行中控件会自己把注入的项禁用掉（中途插一条压缩会让本轮上下文前后不一致）。
         Input.AddMoreItem("压缩上下文", () => _ = CompressContextAsync(manual: true));
-
-        // 连接断了自动重来这件事必须让用户看见：一断就静默地晾十几秒，看起来就是程序卡死。
-        Gateway.RetryScheduled = OnRetryScheduled;
 
         // 滚到接近顶部时补齐更早的历史（长会话首屏只渲染最后一批，见 RenderHistory）
         MessagesScroll.ScrollChanged += OnMessagesScrollChanged;
@@ -336,57 +330,21 @@ public partial class ConversationView : UserControl
         await PersistSessionAsync();
     }
 
-    /// <summary>
-    /// 本次请求下发的工具 = 工具选择器勾选的 + 会话启用的 MCP 服务所发现到的。
-    /// MCP 的单个工具刻意不进入工具选择器：勾一个服务就等于启用它下面全部工具，
-    /// 它们跟随「哪些 MCP 服务被启用」整体生效。
-    /// </summary>
-    private IReadOnlyList<ToolDefinition>? ResolveActiveTools()
-    {
-        var tools = new List<ToolDefinition>();
-
-        if (Input.ToolSelector.SelectedToolIds.Count > 0)
-            tools.AddRange(ToolRegistry.Instance.ResolveByIds(Input.ToolSelector.SelectedToolIds));
-
-        foreach (var serverId in Profile.State.McpServers)
-        {
-            if (McpConnectionManager.Instance.GetTools(serverId) is not { } discovered) continue;
-
-            foreach (var info in discovered)
-            {
-                // 按 id 取（而不是按远端名），因为注册时可能因重名给 Name 加过服务名前缀
-                var tool = ToolRegistry.Instance.ResolveById(McpConnectionManager.BuildToolId(serverId, info.Name));
-                if (tool is not null) tools.Add(tool);
-            }
-        }
-
-        // 「允许 AI 创建工具与技能」关掉时不把这两个工具发给模型。
-        // 只有这一个出口需要过滤：会话存档里可能还留着它们的 id，这里挡掉就等于模型看不见、也调不到。
-        // （执行侧还会再查一次开关，防的是「列表过滤漏了」这类改动。）
-        if (!AppSettingsStore.Current.AllowAgentSelfExtension)
-            tools.RemoveAll(t => t.IsSelfExtension);
-
-        return tools.Count > 0 ? tools : null;
-    }
-
     // ---- 工具执行器 ----
 
+    /// <summary>
+    /// 把交互出口与本会话的权限档位接上。
+    ///
+    /// 工具执行器、工具解析、落库都已经在 <see cref="ConversationRuntime"/> 里；
+    /// 这里只做「视图才做得了」的两件事：审批卡 / 提问卡由一个视图实现
+    /// （<see cref="IInteractionHost"/>），以及权限菜单归输入控件。
+    /// </summary>
     private void ConfigureToolExecutor()
     {
-        _toolExecutor.Context = new BuiltinToolContext
-        {
-            BaseDirectory = Profile.BaseDirectory,
-            GetSessionSkills = () => Task.FromResult<List<SessionSkill>?>(Profile.State.EnabledSkills),
-            SaveSessionSkills = async skills =>
-            {
-                Profile.State.EnabledSkills = skills;
-                await PersistSessionAsync();
-                Input.SkillSelector.SelectedSkills = skills;
-            },
-            AskUser = AskInlineAsync,
-        };
-        _toolExecutor.ApprovalGate = ApproveInlineAsync;
-        _toolExecutor.Mode = Profile.State.PermissionMode;
+        _runtime.Interaction = this;
+
+        // 发请求前的准备：上下文超阈值时先自动压缩一次（实现在视图这边，M1-C 才搬走）
+        _runtime.BeforeRequest = MaybeAutoCompressAsync;
 
         // 权限菜单归输入控件，这里只把「会话存档里的档位」回填进去，
         // 并订阅它的选择结果落库。刷新提醒里点「全部允许」那条路走 SetPermissionModeAsync，
@@ -398,7 +356,7 @@ public partial class ConversationView : UserControl
     /// <summary>
     /// 工具审批入口：审批卡片同样插进当前轮次的正文之间，等用户点「允许执行 / 拒绝」。
     /// </summary>
-    private async Task<bool> ApproveInlineAsync(ChatToolCall call, ToolDefinition tool, CancellationToken ct)
+    public async Task<bool> ApproveAsync(ChatToolCall call, ToolDefinition tool, CancellationToken ct)
     {
         ToolApprovalCard? card = null;
         ReportActivity(SessionActivity.WaitingConfirm);
@@ -445,7 +403,7 @@ public partial class ConversationView : UserControl
     /// （没有活动轮次时兜底挂到消息面板末尾），等用户作答后把结果交回工具。
     /// 答完就把卡片撤掉：重新打开会话本来也不会渲染它，这次询问的记录留在工具卡里。
     /// </summary>
-    private async Task<List<AskAnswer>?> AskInlineAsync(List<AskQuestion> questions, CancellationToken ct)
+    public async Task<List<AskAnswer>?> AskAsync(List<AskQuestion> questions, CancellationToken ct)
     {
         AskUserCard? card = null;
         ReportActivity(SessionActivity.WaitingConfirm);
@@ -503,8 +461,7 @@ public partial class ConversationView : UserControl
 
     private async Task SetPermissionModeAsync(PermissionMode mode)
     {
-        Profile.State.PermissionMode = mode;
-        _toolExecutor.Mode = mode;
+        await _runtime.SetPermissionModeAsync(mode);
 
         // 控件的菜单是唯一入口，所以从这里改（比如提醒里点了「全部允许」）要把它的显示同步过去，
         // 否则盾牌图标会停在旧档位上。
@@ -513,18 +470,9 @@ public partial class ConversationView : UserControl
         await PersistSessionAsync();
     }
 
-
-
-
-    /// <summary>模型是否支持视觉。历史里可能留着 view_image 产生的图片结果。</summary>
-    private static bool SupportsVision(ModelDetails? model)
-        => model?.Capabilities.Contains("vision") == true;
-
-    /// <summary>网关回调：把一条新消息落库并加入内存列表（assistant 的 UI 已在 BeginAssistantRound 中渲染）。</summary>
-    private async Task PersistMessage(ChatMessage m)
+    /// <summary>一条新消息落库后同步界面（assistant 的控件已在 <see cref="OnRoundStarted"/> 里建好）。</summary>
+    private void OnMessageInserted(ChatMessage m)
     {
-        await ChatRepository.InsertAsync(m);
-        Messages.Add(m);
         if (m.Role == "user")
             AddMessage(m);
         else if (m.Role == "assistant")
@@ -538,7 +486,7 @@ public partial class ConversationView : UserControl
     /// <summary>
     /// 把一条 assistant 消息里的 tool_calls 记进入参索引。实时轮的工具卡靠它显示入参 ——
     /// 这个索引原先只在读历史时构建，于是实时轮的调用查不到入参、展开看到的是「{}」，
-    /// 要重开会话才正常。<see cref="BeginAssistantRound"/> 的流式回调也会实时写一遍
+    /// 要重开会话才正常。<see cref="OnToolCallDelta"/> 的流式回调也会实时写一遍
     /// （让卡片在参数还在传时就有内容），这里是流结束后的权威版本。
     /// </summary>
     private void IndexToolCallInputs(ChatMessage assistantMsg)
@@ -549,20 +497,23 @@ public partial class ConversationView : UserControl
     }
 
     /// <summary>
-    /// 网关回调：同一条消息的第二次落库（工具跑完了、重新解析成 invalid、补本轮耗时）。
-    /// 工具行的第二次落库正好就是「卡片从执行中翻成结果」，所以这里要更新界面。
+    /// 同一条消息的第二次落库：工具行正好就是「卡片从执行中翻成结果」，所以要更新界面。
     /// </summary>
-    private async Task UpdatePersistedMessageAsync(ChatMessage m)
+    private void OnMessageUpdated(ChatMessage m)
     {
-        // 写失败不外抛：占位行落的是「被中断」这个合法结果，所以库里留下的历史照样是
-        // 完整可发送的（只是少了这次的真实输出），没必要为一次次要写入把整轮对话打断。
-        try { await ChatRepository.UpdateMessageAsync(m); } catch { /* 忽略 */ }
-
         if (m.Role == "tool")
             UpsertToolCard(m);
         else if (m.Role == "assistant")
             // 未解析的工具会被改写成 invalid（工具名与入参都换了），索引跟着更新
             IndexToolCallInputs(m);
+    }
+
+    /// <summary>工具改了本会话启用的技能：把输入区的技能选择器拉到最新。</summary>
+    public void OnSessionSkillsChanged(IReadOnlyList<SessionSkill>? skills)
+    {
+        // 没有技能传空列表而不是 null：选择器的 SelectedSkills 是只读列表属性，
+        // null 会让它按「别人刚清空」处理，而不是「没有数据」
+        Input.SkillSelector.SelectedSkills = skills is null ? Array.Empty<SessionSkill>() : skills.ToList();
     }
 
     /// <summary>
@@ -729,7 +680,6 @@ public partial class ConversationView : UserControl
     // 上下文压缩
     // ============================================================
 
-
     /// <summary>
     /// 压缩上下文：让模型把「当前分界线之后」的全部内容压成一段摘要，作为一条
     /// <see cref="ContextCompression.CompressRole"/> 消息落库。此后构建请求时以它为界，
@@ -856,9 +806,7 @@ public partial class ConversationView : UserControl
         await CompressContextAsync(manual: false, ct);
     }
 
-
     /// <summary>工具栏上的压缩提示。自动消失定时器会自己停（运行中的 DispatcherTimer 会吊住整个页面）。</summary>
-
 
     /// <summary>手动收起提示（如「正在加载历史」结束后立刻清掉，不必等定时器）。</summary>
 
@@ -965,174 +913,93 @@ public partial class ConversationView : UserControl
             return;
         }
 
-        // 先占住运行标记：下面要 await 一次数据库，不占住的话连点两下会同时发出去两条。
-        // 失败路径上必须自己放开，否则页面会永远卡在「正在运行」。
-        _runtime.IsBusy = true;
         var client = await ResolveSendClientAsync(selected);
-        if (client is null)
-        {
-            _runtime.IsBusy = false;   // 提示已经由 ResolveSendClientAsync 给过
-            return;
-        }
+        if (client is null) return;   // 提示已经由 ResolveSendClientAsync 给过
 
-        Input.SetRunning(true);
-        ReportActivity(SessionActivity.Running);
         Input.Text = "";
 
         // 用户主动发消息：无论刚才在看哪一段，都跟着这一轮走
         _autoScroll = true;
 
-        // 标题还是占位说明此前没定过名：按设置补一个（配了命名模型时先留占位，等首轮回复再生成）
-        if (ConversationTitle.IsPlaceholder(Profile.State.Title))
-            Profile.State.Title = ConversationTitle.InitialTitle(text);
-        Profile.State.Model = selected.ModelName;
-        Profile.State.Thinking = (int)Input.ModelSelector.ThinkingMode;
-        Profile.State.EnabledToolIds = Input.ToolSelector.SelectedToolIds.ToList();
+        var turn = await _runtime.SendAsync(new ConversationTurnRequest
+        {
+            Text = text,
+            Model = selected,
+            Client = client,
+            Attachments = attachments,
+            Thinking = Input.ModelSelector.ThinkingMode,
+            ToolIds = Input.ToolSelector.SelectedToolIds,
+            RequestPreview = text,
+        });
 
-        var isFirstTurn = Messages.Count == 0;
+        // 发送成功后清空输入区（正文 + 附件一起）。空附件栏由控件自己收起。
+        // 没被接受（已有任务在跑）时不动，用户刚贴上的附件还在。
+        if (turn is not null) Input.Clear();
+    }
 
-        // 历史传全量：有压缩记录时由网关路径上的 BuildWireHistory 摘成「最后一条压缩记录 + 之后」
-        var turn = await RunTurnAsync(selected, client, text, Messages.ToList(), attachments: attachments,
-            requestPreview: text);
+    // ============================================================
+    // 订阅 runtime：视图只负责「把它画出来」
+    // ============================================================
 
-        // 自动话题命名只跑首轮一次：首轮之后 Messages 非空，isFirstTurn 恒为假。
-        if (isFirstTurn) _ = ApplyAutoTitleAsync(turn, text);
+    /// <summary>
+    /// 接上 runtime 的事件。请求执行、工具循环、落库、标题、提醒全在
+    /// <see cref="ConversationRuntime"/> 里 —— 这样同一套逻辑在没有窗口时也能跑完（插件后台任务）。
+    ///
+    /// <b>订阅是长久的</b>：视图一直活着（会话窗口缓存会留着它），runtime 与它同生命周期，
+    /// 不会出现「事件发到已销毁的视图上」。将来 runtime 跨视图复用时，
+    /// 这里要改成 attach / detach 成对订阅。
+    /// </summary>
+    private void HookRuntime()
+    {
+        _runtime.RoundStarted += OnRoundStarted;
+        _runtime.ContentDelta += OnContentDelta;
+        _runtime.ThinkingDelta += OnThinkingDelta;
+        _runtime.ToolCallDelta += OnToolCallDelta;
+        _runtime.MessageInserted += OnMessageInserted;
+        _runtime.MessageUpdated += OnMessageUpdated;
+        _runtime.BusyChanged += OnBusyChanged;
+        _runtime.RetryScheduled += OnRetryScheduled;
+        _runtime.ActivityChanged += ReportActivity;
+        _runtime.TurnEnded += OnTurnEnded;
+        _runtime.ToolCallsRepaired += BuildToolCallIndex;
     }
 
     /// <summary>
-    /// 一次请求的公共执行路径（普通发送与重新生成共用）：
-    /// 定位/落库会话状态 → 组装请求 → 流式 → 收尾（聚合卡、操作栏、用量环）。
-    ///
-    /// <paramref name="userText"/> 为 null 表示<b>重新生成</b>：不新建用户消息，
-    /// 新回复按 <paramref name="insertAfterSequence"/> 给出的位置插回历史中间（普通发送传 null，追加到末尾）。
-    /// 调用方负责置位/清掉 <see cref="ConversationRuntime.IsBusy"/>。
+    /// 运行标记变化：切换输入区的发送 / 停止形态，并在本轮结束时收掉两件只在本轮有效的东西。
     /// </summary>
-    /// <param name="attachments">
-    /// 随这一轮发出的附件，只用于<b>新建</b>用户消息时写进它的 metadata。
-    /// 重新生成时传 null：那一次不新建用户消息，附件路径本来就在历史消息的正文里（模型照常读到）。
-    /// </param>
-    /// <param name="requestPreview">
-    /// 这一轮「用户请求」的原文，仅用于任务完成时那条提醒的文案。
-    /// 与 <paramref name="userText"/> 分开传：重新生成时没有 userText，但请求文字要从上下文里取。
-    /// </param>
-    private async Task<ChatTurnResult?> RunTurnAsync(
-        ModelDetails selected,
-        IChatClient client,
-        string? userText,
-        List<ChatMessage> history,
-        IReadOnlyList<ChatAttachment>? attachments,
-        int? insertAfterSequence = null,
-        string? requestPreview = null)
+    private void OnBusyChanged(bool running)
     {
-        // 没显式给就从上下文里取最后一条用户消息（重新生成走的就是这条路）
-        var preview = requestPreview ?? history.LastOrDefault(m => m.Role == "user")?.Content ?? "";
+        Input.SetRunning(running);
+        if (running) return;
 
-        // 本轮是不是用户自己按「停止」结束的：那种情况不发出错提醒
-        _stoppedByUser = false;
+        // 请求已返回（成功 / 停止 / 失败），逐秒计时到此为止。
+        // 放在这里而不是只放在收尾里：请求异常直接抛出去时收尾逻辑不会走到，
+        // 定时器会一直跑下去（运行中的 DispatcherTimer 会吊住页面）。
+        StopTurnTimer();
 
-        // 发送前再修一次：会话是打开着的，但坏消息可能是上一轮刚被强杀时留下的。
-        // 没坏消息时这只是内存里的一遍扫描，不写库。
-        await RepairToolCallPairingAsync();
-
-        Profile.State.LastMessageAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await PersistSessionAsync();
-
-        var system = Profile.BuildSystemPrompt(Profile.State.Model);
-
-        var vision = SupportsVision(selected);
-
-        // MCP 是惰性连接的：发消息前确保会话启用的服务都连上并发现了工具。
-        // 连不上就跳过（内部已记日志），不打断这次对话。
-        await McpConnectionManager.Instance.EnsureToolsAsync(Profile.State.McpServers, CancellationToken.None);
-
-        var options = new ChatRequestOptions
+        // 「正在重试」是临时提示：本轮既然已经有结论了（成功或彻底失败），就把它收掉，
+        // 别让一行「正在重试」留在输入框旁边冒充当前状态。
+        if (_retryHintShown)
         {
-            Thinking = Input.ModelSelector.ThinkingMode,
-            Tools = ResolveActiveTools(),
-            SupportsVision = vision,
-        };
-        // 工具执行与请求构造共用同一个开关：不支持视觉时 view_image 直接报错，
-        // 历史里遗留的图片 tool 结果也降级成文本，避免整轮请求被 API 拒掉
-        _toolExecutor.Context.SupportsVision = vision;
-
-        // 每次发送都现读设置：改完「最大工具循环次数」不用重开会话就生效
-        Gateway.MaxToolRounds = AppDefaults.ResolveMaxToolRounds();
-
-        // 取消源提前到压缩之前建：压缩本身也是一次模型请求，期间点「停止」得能停下来。
-        // 放在后面建的话，压缩阶段那颗按钮是「停止」却没有任何东西可取消。
-        _runtime.SendCts = new CancellationTokenSource();
-        ChatTurnResult? turn = null;
-        var persisted = new List<string>();
-        try
-        {
-            // 上下文超阈值时先自动压缩一次（受设置控制，失败或不满足条件都安静跳过）
-            await MaybeAutoCompressAsync(_runtime.SendCts.Token);
-
-            turn = await Gateway.ChatAsync(
-                Profile.State.SessionId,
-                system,
-                // 有压缩记录时只发「最后一条压缩记录 + 它之后的消息」，更早的历史被摘要在语义上替代
-                ContextCompression.BuildWireHistory(history),
-                // 正文里的占位符（@图片1）已由输入控件在提交时展开成真实路径，
-                // 这里拿到的就是发给模型的内容，不需要再处理一次。
-                userText,
-                attachments,
-                options,
-                client,
-                _toolExecutor,
-                new ChatPersistSink
-                {
-                    Insert = async m => { persisted.Add(m.Id); await PersistMessage(m); },
-                    Update = UpdatePersistedMessageAsync,
-                },
-                BeginAssistantRound,
-                _runtime.SendCts.Token);
-
-            // 流式阶段的停止由网关内部按 interrupted 收尾并<b>正常返回</b>，不会走到下面的 catch。
-            // 按「失败但没有错误信息」识别出来 —— 否则用户自己按的停止也会收到一条「任务出错」提醒。
-            if (turn is { Success: false, Error: null })
-                _stoppedByUser = true;
+            _retryHintShown = false;
+            Input.HideHint();
         }
-        catch (OperationCanceledException)
-        {
-            // 用户点了「停止」：内容已由网关按 interrupted 落库，这里只做收尾
-            _stoppedByUser = true;
-        }
-        finally
-        {
-            _runtime.SendCts.Dispose();
-            _runtime.SendCts = null;
-            // 请求已返回（成功 / 停止 / 失败），逐秒计时到此为止。
-            // 放在 finally 里而不是只放在 FinishActivityCard 里：请求异常直接抛出去时那条路径
-            // 不会走到收尾逻辑，定时器会一直跑下去（运行中的 DispatcherTimer 会吊住页面）。
-            StopTurnTimer();
+    }
 
-            // 「正在重试」是临时提示：本轮既然已经有结论了（成功或彻底失败），就把它收掉，
-            // 别让一行「正在重试」留在输入框旁边冒充当前状态。
-            if (_retryHintShown)
-            {
-                _retryHintShown = false;
-                Input.HideHint();
-            }
+    /// <summary>一轮结束：把这一轮的控件收成终态，再决定要不要整体重排历史。</summary>
+    private async Task OnTurnEnded(TurnOutcome outcome)
+    {
+        if (outcome.TitleChanged)
+        {
+            // 只是自动话题命名完成了：刷新导航列表就够了，不要再收一次尾（会多出一组操作栏）
+            Updated?.Invoke();
+            return;
         }
 
         // 停在半路的工具卡（参数还在接收 / 执行中）不会再有回调，就地收成终态。
         // 两条停止路径都要覆盖：工具执行中被取消（异常上抛）、流式输出中被取消（网关正常返回）。
-        if (_stoppedByUser)
+        if (outcome.StoppedByUser)
             MarkLiveToolCardsInterrupted();
-
-        // 重新生成：新消息落库时拿到的序列号在会话末尾（当下只能拿到「最大值 + 1」），
-        // 这里把它们挪回原位置，否则重生成的回复会跑到最后一轮后面。
-        if (insertAfterSequence is { } after)
-        {
-            try { await ChatRepository.InsertMessagesAtAsync(Profile.State.SessionId, after, persisted); }
-            catch { /* 忽略：位置不对总好过整轮回复丢掉 */ }
-        }
-
-        // 发送成功后清空输入区（正文 + 附件一起）。空附件栏由控件自己收起。
-        // 重新生成时 userText 为 null，那种情况不能动用户正在写的输入框内容。
-        if (userText is not null)
-            Input.Clear();
 
         if (_activeTurnId is not null && _activeTurnRoot is not null && _activeTurnHost is not null)
         {
@@ -1147,39 +1014,17 @@ public partial class ConversationView : UserControl
 
         _streamInsertIndex = null;
 
-        // 重新生成时新回复是插在中间的，流式期间先落在目标位置、生成完统一重排一次
-        if (insertAfterSequence is not null)
-            await ReloadMessagesAsync();
-        else
-            ScrollToEnd();
+        // 重新生成时新回复是插在中间的，流式期间先落在目标位置、生成完统一重排一次。
+        // 这里必须 await：重排会清空并重填 Messages，抢在下一次发送前面才安全。
+        if (outcome.IsRegenerate) await ReloadMessagesAsync();
+        else ScrollToEnd();
+
+        // 这一段的控件归属到此为止：之后不会再有增量，留着只会让迟到的回调写进旧块
+        _round = null;
 
         RefreshContextUsage();
-        _runtime.IsBusy = false;
-        Input.SetRunning(false);
         ReportActivity(SessionActivity.Done);
         Updated?.Invoke();
-
-        // 收尾提醒：跑完和出错都报，措辞避开「失败」，用「出错」。
-        // 用户主动点「停止」不报 —— 那是他自己按的，不需要事后被告知。
-        if (turn is { Success: true })
-            SessionNotifier.Notify(SessionNoticeKind.Done, Profile.State.SessionId, Profile.State.Title,
-                $"任务“{PreviewText(preview)}”已完成",
-                workspaceName: Profile.WorkspaceName);
-        else if (turn is not null && !_stoppedByUser)
-            SessionNotifier.Notify(SessionNoticeKind.Failed, Profile.State.SessionId, Profile.State.Title,
-                $"任务“{PreviewText(preview)}”出错",
-                workspaceName: Profile.WorkspaceName);
-
-        return turn;
-    }
-
-    /// <summary>把用户请求压成一行短文案：取前 10 个字，超出部分用省略号（换行也折成空格）。</summary>
-    private static string PreviewText(string? text)
-    {
-        const int max = 10;
-        var flat = (text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
-        if (flat.Length == 0) return "本轮请求";
-        return flat.Length <= max ? flat : flat[..max] + "...";
     }
 
     /// <summary>
@@ -1280,18 +1125,10 @@ public partial class ConversationView : UserControl
             for (var i = contextEnd; i < Messages.Count && Messages[i].TurnId == replacedTurnId; i++)
                 replaced.Add(Messages[i]);
 
-        _runtime.IsBusy = true;
         var client = await ResolveSendClientAsync(selected);
-        if (client is null)
-        {
-            _runtime.IsBusy = false;
-            return;
-        }
+        if (client is null) return;
 
-        Input.SetRunning(true);
-        ReportActivity(SessionActivity.Running);
-
-        // 用户主动发消息：无论刚才在看哪一段，都跟着这一轮走
+        // 无论刚才在看哪一段，都跟着这一轮走
         _autoScroll = true;
 
         var insertAfter = context[^1].SequenceNumber;
@@ -1309,7 +1146,14 @@ public partial class ConversationView : UserControl
         RenderHistory(keepRendered: context[^1].Id);
         _streamInsertIndex = ComputeInsertIndex(insertAfter);
 
-        await RunTurnAsync(selected, client, null, context, attachments: null, insertAfter);
+        await _runtime.SendAsync(new ConversationTurnRequest
+        {
+            Model = selected,
+            Client = client,
+            Thinking = Input.ModelSelector.ThinkingMode,
+            ToolIds = Input.ToolSelector.SelectedToolIds,
+            InsertAfterSequence = insertAfter,
+        });
     }
 
     /// <summary>
@@ -1357,20 +1201,88 @@ public partial class ConversationView : UserControl
         var context = Messages.Take(start).ToList();
         if (context.Count == 0) return;   // 失败轮前面什么都没有（连用户消息都没有）就没得重试
 
-        _runtime.IsBusy = true;
         var client = await ResolveSendClientAsync(selected);
-        if (client is null)
+        if (client is null) return;
+
+        _autoScroll = true;
+
+        // 不传 InsertAfterSequence：新回复追加在末尾（上一轮的控件与消息都留着）。
+        // 但必须显式给出「发到哪为止」的历史 —— 失败那一轮还留在 Messages 里，
+        // 直接发全量会把刚失败的那几条也带上，模型看到的是半截上下文。
+        await _runtime.SendAsync(new ConversationTurnRequest
         {
-            _runtime.IsBusy = false;
+            Model = selected,
+            Client = client,
+            Thinking = Input.ModelSelector.ThinkingMode,
+            ToolIds = Input.ToolSelector.SelectedToolIds,
+            History = context,
+        });
+    }
+
+    /// <summary>
+    /// 继续被停止 / 打断的那一轮（操作栏上的「继续」）。
+    ///
+    /// 与「重试」只差一件事：<b>中断的那一轮算不算数</b>。重试是「这一轮不算，重来」，
+    /// 所以把它整轮甩在上下文之外；继续是「这一轮算一半」—— 已经跑过的工具结果、
+    /// 已经想出来的思考、已经收到的正文全部原样留在上下文里，模型接着往下做。
+    /// 一次长任务跑到一半被停掉，代价不该是前面那些步骤全部白费。
+    ///
+    /// 末尾补一句 user 提示：<b>只随这一轮发出去，不落库</b>（历史里凭空多出一条用户没打过的
+    /// 消息会很怪）。没有这句话，模型看到的最后一条是它自己的半截回复，多半会直接收尾不动手。
+    /// </summary>
+    private async Task ContinueTurnAsync(string turnId)
+    {
+        if (_runtime.IsBusy)
+        {
+            Input.ShowHint("正在生成回复，先点「停止」再继续", InputHintKind.Info, autoHide: true);
             return;
         }
 
-        Input.SetRunning(true);
-        ReportActivity(SessionActivity.Running);
+        if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
+        {
+            Input.ShowHint("正在加载历史记录，完成后自动继续…", InputHintKind.Info, autoHide: false);
+            await loadTcs.Task;
+            Input.HideHint();
+        }
+
+        var selected = Input.ModelSelector.SelectedModel;
+        if (selected is null)
+        {
+            Input.ShowHint("尚未配置模型：请到「设置 → 模型服务」添加并启用服务商与模型", InputHintKind.Fail, autoHide: false);
+            return;
+        }
+
+        // 按钮的显示条件已经保证过一次，但期间历史可能变了（这一轮后面又跑出了新回复、或那一轮被删了）。
+        // 说清楚为什么不动，别让点了没反应 —— 那颗按钮留在原地是正常的，收掉它反而更奇怪。
+        if (!IsTurnResumable(turnId))
+        {
+            Input.ShowHint("这一轮后面已经有新内容了，不能再接着继续", InputHintKind.Info, autoHide: true);
+            return;
+        }
+
+        var client = await ResolveSendClientAsync(selected);
+        if (client is null) return;
+
         _autoScroll = true;
 
-        // 不传 insertAfterSequence：新回复追加在末尾（上一轮的控件与消息都留着）
-        await RunTurnAsync(selected, client, null, context, attachments: null);
+        // 全量历史（含中断那一轮）+ 一句「接着做」的提示。不传 InsertAfterSequence，新回复追加在末尾。
+        var history = Messages.ToList();
+        history.Add(new ChatMessage
+        {
+            Role = "user",
+            Content = "（上一条回复被中断了。请从断掉的地方接着做，不要重复已经完成的步骤，也不要重新开始。）",
+            Status = "completed",
+        });
+
+        await _runtime.SendAsync(new ConversationTurnRequest
+        {
+            Model = selected,
+            Client = client,
+            Thinking = Input.ModelSelector.ThinkingMode,
+            ToolIds = Input.ToolSelector.SelectedToolIds,
+            History = history,
+            RequestPreview = Messages.LastOrDefault(m => m.Role == "user")?.Content,
+        });
     }
 
     /// <summary>AI 轮的第一条消息在 <c>Messages</c> 里的下标（找不到就退回 <paramref name="fallback"/>）。</summary>
@@ -1402,69 +1314,6 @@ public partial class ConversationView : UserControl
 
         var index = group + 1 - _firstRenderedGroup;
         return Math.Clamp(index, 0, MessagesPanel.Children.Count);
-    }
-
-    /// <summary>
-    /// 首轮回复结束后给会话定标题。三种情形：开关关闭 → 保持占位等用户手动改名；
-    /// 未配置命名模型 → 直接截断首条消息；配置了模型 → 让 AI 总结一个短名。
-    /// 任何失败都静默回退到截断，不打扰已经完成的对话。
-    /// </summary>
-    private async Task ApplyAutoTitleAsync(ChatTurnResult? turn, string firstText)
-    {
-        try
-        {
-            var settings = AppSettingsStore.Current;
-
-            string title;
-            if (!settings.AutoTopicNaming)
-                title = ConversationTitle.Placeholder;
-            else if (string.IsNullOrWhiteSpace(settings.TopicNamingModelId))
-                title = ConversationTitle.Truncate(firstText);
-            else
-                title = ConversationTitle.Truncate(await GenerateTitleAsync(turn) ?? firstText);
-
-            if (string.IsNullOrEmpty(title)) return;
-
-            Profile.State.Title = title;
-            await PersistSessionAsync();
-            Updated?.Invoke();
-        }
-        catch
-        {
-            // 定名失败不该影响对话本身
-        }
-    }
-
-    /// <summary>让「话题命名模型」给这一轮起个短名。任何异常都返回 null，由调用方回退。</summary>
-    private async Task<string?> GenerateTitleAsync(ChatTurnResult? turn)
-    {
-        var modelId = AppSettingsStore.Current.TopicNamingModelId;
-        if (string.IsNullOrWhiteSpace(modelId) || turn is null) return null;
-
-        var details = await Gateway.ResolveModelAsync(modelId);
-        if (details is null) return null;
-
-        var client = Gateway.BuildClient(details);
-
-        const string system =
-            "你是会话标题生成器。根据用户的第一条消息和助手的回复，给出一个简短的会话标题。" +
-            "要求：不超过 12 个字，只输出标题本身，不要引号、标点、序号或任何解释。";
-
-        var body = $"用户：{turn.User?.Content}\n助手：{ConversationTitle.Truncate(turn.FinalAssistant?.Content, 500)}";
-        var history = new List<ChatMessage> { new() { Role = "user", Content = body } };
-
-        var options = new ChatRequestOptions
-        {
-            Thinking = ThinkingMode.NoThink,
-            Tools = null,
-            SupportsVision = false,
-        };
-
-        var builder = new StringBuilder();
-        await client.StreamAsync(history, system, options,
-            new ChatRoundSink { OnContent = chunk => builder.Append(chunk) }, CancellationToken.None);
-
-        return builder.ToString().Trim().Trim('"', '\'', '“', '”', '。', '，', '、', '\r', '\n', ' ');
     }
 
     // 说明：发送按钮 / 回车 / 停止按钮的处理、以及运行态视觉，都在 ChatInputControl 里。
@@ -2088,6 +1937,9 @@ public partial class ConversationView : UserControl
     /// <summary>「重新生成」按钮的字形（Fluent System Icons：Sync）。</summary>
     private const string RegenerateIcon = "\uF191";
 
+    /// <summary>「继续」按钮的字形（Fluent System Icons：Play）。</summary>
+    private const string ContinueIcon = "\uF606";
+
     /// <summary>
     /// 「重新生成」按钮：用户消息与 AI 消息共用同一个入口，
     /// 点哪一条都重新生成「那一轮」的 AI 回复（见 <see cref="RegenerateAsync"/>）。
@@ -2095,6 +1947,44 @@ public partial class ConversationView : UserControl
     private Button RegenerateButton(Func<ChatMessage?> resolveTarget)
         => CreateGlyphButton(RegenerateIcon, "重新生成",
             () => { if (resolveTarget() is { } t) _ = RegenerateAsync(t); });
+
+    /// <summary>
+    /// 「继续」按钮：接上被停止 / 被打断的那一轮，而不是丢掉它重开一轮（见 <see cref="ContinueTurnAsync"/>）。
+    /// 只在「这一轮就是最后一轮、而且它没跑完」时出现在操作栏里。
+    /// </summary>
+    private Button ContinueButton(string turnId)
+        => CreateGlyphButton(ContinueIcon, "继续（接着被中断的那一轮往下做）",
+            () => _ = ContinueTurnAsync(turnId), hoverColor: "#2563EB");
+
+    /// <summary>
+    /// 这一轮是不是「停在半路」：被用户停止、应用中途被杀、或工具还没返回就断了。
+    ///
+    /// 判据只看这一轮的<b>最后一条</b>消息。中途某个工具失败、模型后来接着做完了，
+    /// 那不算 —— 那种轮次给「继续」只会让它把已经做完的事再做一遍。
+    /// 请求失败（后面跟着错误记录）也不走这里，那条路上已经有「重试」。
+    /// </summary>
+    private bool IsTurnResumable(string turnId)
+    {
+        // 只有最后一轮才谈得上继续：后面又聊过了，接上中断的那轮等于把上下文顺序搅乱。
+        // 先看最后一条就能挡掉绝大部分轮次（渲染历史时每个操作栏都会问一次）。
+        if (Messages.Count == 0 || Messages[^1].TurnId != turnId) return false;
+
+        ChatMessage? last = null;
+        foreach (var m in Messages)
+            if (m.TurnId == turnId) last = m;
+
+        if (last is null || last.Role is not ("assistant" or "tool")) return false;
+
+        // 停止在流式输出里（那条 assistant 落库时就是 interrupted），
+        // 或停止在工具执行中（最后剩下的是一条中断占位的 tool 行）
+        if (last.Status == "interrupted") return true;
+
+        // 工具已经落库成失败：只剩这一条结果、后面再没有 assistant，说明网关是被停在那里的
+        if (last.Role == "tool" && last.Status == "failed") return true;
+
+        // 带 tool_calls 的 assistant 后面一条结果都没有：应用在工具跑起来之前就被关掉了
+        return last.Role == "assistant" && ToolCallJson.Deserialize(last.Metadata).Count > 0;
+    }
 
     private static (long Input, long Cache, long Output) ParseUsage(ChatMessage m)
     {
@@ -2171,6 +2061,10 @@ public partial class ConversationView : UserControl
             Children = { copyBtn, RegenerateButton(() => Messages.FirstOrDefault(
                 m => m.TurnId == turnId && m.Role is "assistant" or "tool")), host.CreateModeButtons(), delBtn },
         };
+
+        // 「继续」排在最前面：这一轮停在半路时它就是用户最想要的那个动作
+        if (IsTurnResumable(turnId))
+            left.Children.Insert(0, ContinueButton(turnId));
         var tokens = new TextBlock
         {
             Text = $"Tokens: {total}  ↑{input}  ↑*{cache}  ↓{output}",
@@ -2318,12 +2212,34 @@ public partial class ConversationView : UserControl
         _activeTurnHost = null;
         _activeTurnCard = null;
         _activeTurnBody = null;
+        _round = null;
         RenderHistory();
         ScrollToEnd();
     }
 
-    /// <summary>实时：新一轮 assistant 开始流式时创建 UI 元素并返回流式回调。</summary>
-    private ChatRoundSink BeginAssistantRound(ChatMessage assistantMsg)
+    /// <summary>
+    /// 正在流式渲染的这一段回复。<b>每段 assistant 消息一个</b>（工具循环里会有多段），
+    /// 三条增量事件靠它定位该往哪儿追加。
+    /// </summary>
+    private sealed class RoundRender
+    {
+        public required TurnBodyView Body { get; init; }
+        public required TurnSelectionHost Host { get; init; }
+
+        /// <summary>首个思考分片到达时才建，之后一直往里追加。</summary>
+        public ThinkingCard? ThinkCard { get; set; }
+
+        /// <summary>本轮按 index 累积每个调用的名字与入参（服务端会把一个名字/参数切成多片下发）。</summary>
+        public Dictionary<int, (ToolCallCard Card, StringBuilder Name, StringBuilder Args)> Calls { get; } = new();
+    }
+
+    private RoundRender? _round;
+
+    /// <summary>
+    /// 一段 assistant 回复开始流式：建好这一段要用的控件，并记进 <see cref="_round"/>。
+    /// 之后的三条增量事件（正文 / 思考 / 工具调用）都往这里追加。
+    /// </summary>
+    private void OnRoundStarted(ChatMessage assistantMsg)
     {
         var (displayName, providerName) = ModelInfo(assistantMsg.ModelName ?? "");
 
@@ -2331,9 +2247,6 @@ public partial class ConversationView : UserControl
         // 每轮都要清：不同轮的 index 都从 0 开始，留着上一轮的会串卡。
         _toolCardsById.Clear();
         _unclaimedToolCards.Clear();
-
-        // 本轮按 index 累积每个调用的名字与入参（服务端会把一个名字/参数切成多片下发）
-        var roundCalls = new Dictionary<int, (ToolCallCard Card, StringBuilder Name, StringBuilder Args)>();
 
         // 同一 turn（含多轮工具调用）复用根容器；新 turn 时重建
         if (assistantMsg.TurnId is null || assistantMsg.TurnId != _activeTurnId || _activeTurnRoot is null)
@@ -2378,69 +2291,70 @@ public partial class ConversationView : UserControl
         _activeTurnHost!.AddBody(body);
         _activeTurnBody = body;
 
-        ThinkingCard? thinkCard = null;
-        var turnHost = _activeTurnHost!;
+        _round = new RoundRender { Body = body, Host = _activeTurnHost! };
+    }
 
-        return new ChatRoundSink
+    private void OnContentDelta(string delta)
+    {
+        Input.MarkFirstOutput();
+        _round?.Body.AppendText(delta);
+        ScrollToEnd();
+    }
+
+    private void OnThinkingDelta(string delta)
+    {
+        Input.MarkFirstOutput();
+        if (_round is not { } round) return;
+
+        // 首个思考分片到达时才建卡（此前不显示任何卡片），之后持续累积文本
+        if (round.ThinkCard is null)
         {
-            OnContent = delta =>
-            {
-                Input.MarkFirstOutput();
-                body.AppendText(delta);
-                ScrollToEnd();
-            },
-            OnThinking = delta =>
-            {
-                Input.MarkFirstOutput();
-                // 首个思考分片到达时才建卡（此前不显示任何卡片），之后持续累积文本
-                if (thinkCard is null)
-                {
-                    _activeTurnCard ??= AttachActivityCard(turnHost);
-                    thinkCard = new ThinkingCard();
-                    thinkCard.Show();
-                    _activeTurnCard.Steps.Children.Add(thinkCard.Root);
-                    _turnThinkingCount++;
-                    RefreshActivityHeader();
-                }
-                thinkCard.Append(delta);
-                _activeTurnCard?.ScrollContentToEnd();
-                ScrollToEnd();
-            },
-            OnToolCall = delta =>
-            {
-                Input.MarkFirstOutput();
+            _activeTurnCard ??= AttachActivityCard(round.Host);
+            round.ThinkCard = new ThinkingCard();
+            round.ThinkCard.Show();
+            _activeTurnCard.Steps.Children.Add(round.ThinkCard.Root);
+            _turnThinkingCount++;
+            RefreshActivityHeader();
+        }
+        round.ThinkCard.Append(delta);
+        _activeTurnCard?.ScrollContentToEnd();
+        ScrollToEnd();
+    }
 
-                // 第一次见到这个 index：参数还在传，卡就先立起来。
-                // 等流结束才建卡的话，用户要盯着一个毫无反应的界面直到工具跑完 ——
-                // 而在模型写调用参数的这段时间里，界面上其实什么都不会变。
-                if (!roundCalls.TryGetValue(delta.Index, out var call))
-                {
-                    var card = new ToolCallCard();
-                    card.SetStreaming(delta.Name ?? "工具");
-                    AttachToolCard(card);
-                    _unclaimedToolCards.Add(card);
-                    roundCalls[delta.Index] = call = (card, new StringBuilder(), new StringBuilder());
-                }
+    private void OnToolCallDelta(ToolCallDelta delta)
+    {
+        Input.MarkFirstOutput();
+        if (_round is not { } round) return;
 
-                if (!string.IsNullOrEmpty(delta.Name))
-                    call.Card.SetStreamingName(call.Name.Append(delta.Name).ToString());
+        // 第一次见到这个 index：参数还在传，卡就先立起来。
+        // 等流结束才建卡的话，用户要盯着一个毫无反应的界面直到工具跑完 ——
+        // 而在模型写调用参数的这段时间里，界面上其实什么都不会变。
+        if (!round.Calls.TryGetValue(delta.Index, out var call))
+        {
+            var card = new ToolCallCard();
+            card.SetStreaming(delta.Name ?? "工具");
+            AttachToolCard(card);
+            _unclaimedToolCards.Add(card);
+            round.Calls[delta.Index] = call = (card, new StringBuilder(), new StringBuilder());
+        }
 
-                if (!string.IsNullOrEmpty(delta.ArgumentsDelta))
-                    call.Card.SetStreamingInput(call.Args.Append(delta.ArgumentsDelta).ToString());
+        if (!string.IsNullOrEmpty(delta.Name))
+            call.Card.SetStreamingName(call.Name.Append(delta.Name).ToString());
 
-                if (!string.IsNullOrEmpty(delta.Id))
-                {
-                    // 实时补入参索引：它原先只在读历史时构建，实时轮的调用查不到入参，
-                    // 展开工具卡看到的是「{}」（要重开会话才正常）。落库与渲染都靠它取入参。
-                    _toolCallInputs[delta.Id] = call.Args.ToString();
-                    _toolCardsById[delta.Id] = call.Card;
-                    _unclaimedToolCards.Remove(call.Card);
-                }
+        if (!string.IsNullOrEmpty(delta.ArgumentsDelta))
+            call.Card.SetStreamingInput(call.Args.Append(delta.ArgumentsDelta).ToString());
 
-                _activeTurnCard?.ScrollContentToEnd();
-                ScrollToEnd();
-            },
-        };
+        if (!string.IsNullOrEmpty(delta.Id))
+        {
+            // 实时补入参索引：它原先只在读历史时构建，实时轮的调用查不到入参，
+            // 展开工具卡看到的是「{}」（要重开会话才正常）。落库与渲染都靠它取入参。
+            _toolCallInputs[delta.Id] = call.Args.ToString();
+            _toolCardsById[delta.Id] = call.Card;
+            _unclaimedToolCards.Remove(call.Card);
+        }
+
+        _activeTurnCard?.ScrollContentToEnd();
+        ScrollToEnd();
     }
 
     /// <summary>按消息渲染：实时 user 气泡；历史加载走 RenderHistory 按 turn 分组，工具结果走 ToolCallCard。</summary>

@@ -144,7 +144,26 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
   `Messages` / `Profile` / `Gateway` / `IsBusy` / `SendCts`；视图改用三个只读访问器
   （`Profile` / `Messages` / `Gateway`）加 `_runtime.IsBusy`、`_runtime.SendCts`，行为不变。
   已实测：启动、打开长会话、历史分段渲染、思考卡与 Tokens 汇总均正常。
-- **B** ⬜ 未开始：`SendMessageAsync` + `RunTurnAsync` + 流式渲染改成事件驱动（**风险最高**）。
+- **B** ✅ 已完成：请求执行整体搬进 `ConversationRuntime`（`SendAsync` / `RunTurnAsync` /
+  落库 / 自动话题命名 / 会话提醒），视图只剩订阅渲染：
+
+  | 事件 | 视图侧的用途 |
+  | --- | --- |
+  | `RoundStarted` | 建本段回复的根容器与正文块（`RoundRender`） |
+  | `ContentDelta` / `ThinkingDelta` / `ToolCallDelta` | 追加正文 / 建思考卡 / 建并更新工具卡 |
+  | `MessageInserted` / `MessageUpdated` | 用户气泡、工具卡结果回填、错误卡 |
+  | `BusyChanged` | 切换输入区发送/停止形态、停计时器、收重试提示 |
+  | `TurnEnded`（**可 await**） | 收聚合卡与操作栏；重新生成时整体重排历史 |
+  | `RetryScheduled` / `ActivityChanged` / `ToolCallsRepaired` | 重试提示、左侧列表状态、入参索引重建 |
+
+  交互出口抽成 `IInteractionHost`（审批 / 提问 / 技能变更），视图实现它；
+  没有宿主时按「用户不在」处理：审批拒绝、提问返回 null，工具链如实回给模型。
+  发请求前的自动压缩临时挂在 `BeforeRequest` 钩子上，C 步再搬走。
+
+  已实测（本地假 OpenAI 兼容服务，不花钱）：普通流式、思考卡、工具循环 + 聚合卡、
+  点停止（保留已收正文、无错误卡）、重试（旧轮保留、新轮追加）、
+  重新生成（旧轮替换、位置正确）、自动话题命名。
+
 - **C** ⬜ 未开始：迁 `Regenerate` / `Retry` / `Compress` / 异步审批与提问。
 
 配套：`ConversationRuntimeRegistry`（按 sessionId 复用，视图关闭不销毁——桌宠后台工作的前提）。
