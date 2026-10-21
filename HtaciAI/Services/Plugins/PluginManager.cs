@@ -276,7 +276,16 @@ public sealed partial class PluginManager
             // 实测后果是插件永远判成「需重启」，文件也一直锁着。
             plugin = CreatePluginInstance(alc, entry.Manifest!, Path.Combine(entry.Directory, manifest.Entry));
 
-            var context = new PluginContext(manifest, entry.Directory, AppVersion.Current);
+            // 声明了「主动发起对话」才给门面；没声明就是 null，让插件在第一次使用时立刻发现。
+            // 门面登记进 Subscriptions：禁用插件时它会拒绝后续调用，并停掉插件发起、还没跑完的轮次。
+            PluginSessionFacade? sessions = null;
+            if (HasCapability(manifest, PluginCapabilities.ChatControl))
+            {
+                sessions = new PluginSessionFacade(manifest.Id);
+                entry.Subscriptions.Add(sessions);
+            }
+
+            var context = new PluginContext(manifest, entry.Directory, AppVersion.Current, sessions);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(InitializeTimeout);
@@ -753,6 +762,10 @@ public sealed partial class PluginManager
         entry.Error = error;
         PluginLog.Warn(entry.Id, "无法加载：" + error);
     }
+
+    /// <summary>清单里是否声明了某项能力。大小写不敏感：这不是安全边界，没必要为大小写让插件加载失败。</summary>
+    private static bool HasCapability(PluginManifest manifest, string capability)
+        => manifest.Capabilities.Any(c => string.Equals(c?.Trim(), capability, StringComparison.OrdinalIgnoreCase));
 
     // ============================================================
     // 杂项

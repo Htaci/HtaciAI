@@ -189,6 +189,11 @@ public interface ISessionFacade
 
 约束：`SendAsync` 对同一会话复用 runtime 的 `_busy` 互斥；插件发起的一轮必须有来源标记（`MessageSnapshot.Origin = "plugin:<id>"`），便于日后审计。
 
+> **M3 实装时收缩了这份草案**（详见 [`plugin-handoff.md`](./plugin-handoff.md) 第 9 节）：
+> 去掉 `SendOptions`（一轮发送会写回会话存档，插件指定等于改用户的选择）、
+> `GetRecentMessages` 改异步、`AppendNoticeAsync` 不做（`role=agent` 已被压缩摘要占用）、
+> 来源标记写 `logs/plugin.log` 而不是加数据库列。
+
 **d) 工具注册**
 
 ```csharp
@@ -443,7 +448,7 @@ public sealed class WindowOptions
 | M0 | `HtaciAI.Plugin.Abstractions` + `PluginManager` + `AppPaths.Plugins` + `state.json` + 空插件能加载/卸载/重启提示 | 无 | ✅ 已完成并通过实测 |
 | M1 | `ConversationRuntime` 拆分 A/B/C 三步 + `ConversationRuntimeRegistry` | 无 | ✅ 已完成 |
 | M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 | ⬜ 未开始 |
-| M3 | `ISessionFacade`（主动发起、取消、改权限、agent 旁注） | M1 | ⬜ 未开始 |
+| M3 | `ISessionFacade`（主动发起、取消、改权限、读历史；agent 旁注与临时模型未做，理由见交接文档） | M1 | ✅ 已完成 |
 | M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ⬜ 未开始 |
 | M5 | 桌宠插件（先窗口+气泡，后主动发起） | M2、M3、M4 | ⬜ 未开始 |
 | M6 | 「插件」页（新标签页入口）：列表、启用/禁用、能力清单、错误状态、需重启提示、崩溃记录与崩溃日志、崩溃后仍自动加载；与设置页总开关联动 | M0 | ✅ 已完成（「贡献配额」依赖 M2 的贡献模型） |

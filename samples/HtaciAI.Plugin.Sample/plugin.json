@@ -6,5 +6,5 @@
   "minHostVersion": "1.0.0",
   "entry": "HtaciAI.Plugin.Sample.dll",
   "entryType": "HtaciAI.Plugin.Sample.SamplePlugin",
-  "capabilities": []
+  "capabilities": ["chat.control"]
 }

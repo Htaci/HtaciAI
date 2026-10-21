@@ -12,7 +12,7 @@ namespace HtaciAI.Services.Plugins;
 /// </summary>
 internal sealed partial class PluginContext : IPluginContext
 {
-    public PluginContext(PluginManifest manifest, string directory, string hostVersion)
+    public PluginContext(PluginManifest manifest, string directory, string hostVersion, ISessionFacade? sessions)
     {
         Manifest = manifest;
         PluginId = manifest.Id;
@@ -21,6 +21,7 @@ internal sealed partial class PluginContext : IPluginContext
         Log = new ScopedLogger(manifest.Id);
         Storage = new StorageImpl(manifest.Id);
         Resources = new ResourcesImpl(directory);
+        Sessions = sessions;
     }
 
     public string PluginId { get; }
@@ -30,6 +31,7 @@ internal sealed partial class PluginContext : IPluginContext
     public IPluginLogger Log { get; }
     public IPluginStorage Storage { get; }
     public IResourceLocator Resources { get; }
+    public ISessionFacade? Sessions { get; }
 
     // ---- 日志 ----
 

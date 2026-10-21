@@ -28,6 +28,15 @@ public interface IPluginContext
 
     /// <summary>插件目录内的资源定位（图标、配置模板等）。</summary>
     IResourceLocator Resources { get; }
+
+    /// <summary>
+    /// 主动操作会话：发起一轮、停止、改权限档位、压缩、读最近消息。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.ChatControl"/> 时才不是 null。</b>
+    /// 没声明却用到了，这里会在第一行就炸 —— 这是刻意的：空实现会让「我忘了声明」
+    /// 一路伪装成「插件就是不工作」，那种问题最难查。
+    /// </summary>
+    ISessionFacade? Sessions { get; }
 }
 
 /// <summary>

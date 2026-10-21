@@ -45,6 +45,15 @@ public sealed class SamplePlugin : IPlugin
         context.Storage.SaveText("stats", $"{count}\n{now}");
         context.Log.Info($"这是第 {count} 次启动（上次：{ParseTime(raw)}）");
 
+        // 会话门面：清单里声明了 chat.control 才有，没声明就是 null。
+        // 这个示例只用它确认注入生效，<b>不主动发消息</b> —— 每次启动都往会话里塞一句会很打扰。
+        // 真正要用时（比如有窗口和按钮的桌宠）大致是：
+        //   var result = await context.Sessions!.SendAsync(sessionId, "你好");
+        if (context.Sessions is null)
+            context.Log.Info("未声明 chat.control：主动发起对话不可用");
+        else
+            context.Log.Info("已获得会话门面：可以主动向某个会话发起一轮");
+
         // 演示「插件必须自己停掉后台任务」：宿主没法从外部停它，
         // 留着运行中的定时器会让程序集无法卸载，禁用后就只能提示「需重启」。
         _timerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);

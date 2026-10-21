@@ -1,14 +1,15 @@
 # 开发交接快照
 
 > 用途：上下文压缩 / 换人接手时，只读这一份就能接着干。
-> 最后更新：2026-10（对应提交 `cd7c9c4`）
+> 最后更新：2026-10（对应提交 `M3`）
 
 ---
 
 ## 零、当前状态（读这一段就够开工）
 
 **已完成**：M0（插件加载/卸载/崩溃归因）、M1（`ConversationRuntime` + `ConversationRuntimeRegistry`，
-A/B/C 三步全完）、M6（插件管理页）、工具超时与「继续」那一轮。
+A/B/C 三步全完）、M3（`ISessionFacade`，插件主动发起/停止/改权限/压缩/读历史）、M6（插件管理页）、
+工具超时与「继续」那一轮。
 
 **提交线**（从旧到新）：
 
@@ -19,6 +20,8 @@ b0325ac  M6 插件管理页
 0bdda5f  工具超时与停止（默认 5 分钟，停止时如实写回结果）
 f625c5d  M1-C  重新生成/重试/继续/压缩搬进 runtime
 cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
+85f91d8  交接文档更新到 M2 开工点
+（M3）    插件主动发起对话：ISessionFacade
 ```
 
 **下一步：M2（`PromptComposer` + `IChatEventBus`）**。开工要点见「三、待办」第一条。
@@ -30,11 +33,13 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 | --- | --- |
 | 插件能不能加载/禁用/崩溃归因 | ✅ M0 |
 | 插件能不能在界面上被看见（列表/启停/崩溃记录） | ✅ M6 |
-| 插件能不能在会话没打开时发起对话 | ✅ M1（`ConversationRuntimeRegistry.Acquire` + `runtime.SendAsync`） |
+| 插件能不能在会话没打开时发起对话 | ✅ M1（runtime）+ M3（`ISessionFacade` 门面） |
+| 插件能不能停止一轮 / 改权限档位 / 压缩 / 读历史 | ✅ M3 |
 | 插件能不能观察会话流（流式增量、轮次完成） | ⬜ M2 |
 | 插件能不能往上下文里加东西 | ⬜ M2 |
 | 插件能不能建窗口 / 插控件 | ⬜ M4 |
 | 桌宠插件本体 | ⬜ M5（依赖 M2/M3/M4） |
+
 
 ---
 
@@ -224,6 +229,60 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 > 另外记下了插件清单的字段设想（平台独占、前置依赖、循环依赖与连带停用规则），
 > 见 [`plugin-manifest.md`](./plugin-manifest.md)。清单继续用 JSON，不上 ini。
 
+### 9. `ISessionFacade`（M3）
+
+**目标**：插件能主动发起一轮（桌宠「点一下就开口」），并且能在会话没打开时跑完。
+
+契约 `HtaciAI.Plugin.Abstractions/ISessionFacade.cs`：
+
+| 成员 | 说明 |
+| --- | --- |
+| `SendAsync(sessionId, text, ct)` | 用会话当前配置跑一轮，返回 `SessionSendResult`（`Sent` / `Busy` / `NotFound` / `NoModel` / `Failed`） |
+| `CancelAsync(sessionId)` | 等价于用户按「停止」，返回是否真的停了一轮 |
+| `SetPermissionModeAsync(sessionId, PluginPermissionMode)` | 改挡位并落库 |
+| `CompressAsync(sessionId)` | 等价于点「压缩」，返回是否真的压了 |
+| `GetRecentMessagesAsync(sessionId, take, ct)` | 最近 N 条快照（`SessionMessageSnapshot`），最多 500 |
+
+宿主实现 `HtaciAI/Services/Plugins/PluginSessionFacade.cs`：
+
+1. **按 id 建档案**：先查 `chat_sessions`，再查 `workspace_sessions` + `workspaces`（两种会话共用一套 id 空间）。
+2. **走注册表的租约**：`ConversationRuntimeRegistry.Shared.Acquire(...)` → `EnsureReadyAsync()` → `runtime.SendAsync(...)`。
+   会话窗口开着时用的是同一份运行时，因此插件的这一轮会实时出现在窗口里。
+3. **不改用户的选择**：一轮发送会把模型/思考/工具写回会话存档，所以只沿用 `Profile.State` 里的配置，
+   不提供「临时指定模型」。会话没选过模型、或原模型被删了，才回退到宿主默认模型（`AppDefaults`）。
+4. **禁用它自己的那一轮**：`Dispose` 时对「本插件发起、还在跑」的会话调 `Cancel()`；
+   `_disposed` 之后一切调用返回 `Failed`。门面登记在 `PluginEntry.Subscriptions`，禁用插件时由宿主统一 Dispose。
+5. **线程**：任意线程可调，内部 `CheckAccess()` 为假时 `Dispatcher.UIThread.Post`。
+
+注入方式：`PluginManager.LoadAsync` 里只有清单声明了 `chat.control` 才 `new PluginSessionFacade`，
+否则 `IPluginContext.Sessions` 是 **null**（不是空实现 —— 让作者第一行就发现「我忘了声明」）。
+
+**与 `plugin-plan.md` 草案的差异**（都是主动收缩，理由记在这里）：
+
+| 草案 | 实际 | 为什么 |
+| --- | --- | --- |
+| `SendOptions`（模型/思考/工具） | 不做 | 一轮发送会把 settings 写回会话存档，插件指定等于悄悄改掉用户在界面上的选择 |
+| `GetRecentMessages` 同步 | 改成 `GetRecentMessagesAsync` | 会话可能没读过库，同步签名只能拿到空上下文 |
+| `AppendNoticeAsync`（role=agent 旁注） | 不做 | `role=agent` 已经是上下文压缩摘要（`ContextCompression.CompressRole`），旁注要独立角色 + 视图渲染，等真有需求再做 |
+| `MessageSnapshot.Origin = "plugin:<id>"` | 写 `PluginLog` | 加列要迁移数据库；审计入口是 `logs/plugin.log`（含插件 id 与会话 id） |
+
+**已验证**（无头，不建界面，本地假 OpenAI 服务，15 项全过）：
+
+- 未打开会话也能发起一轮并落库（user + assistant）
+- 历史快照、第二轮追加
+- 同会话并发被拒（`Busy`），竞态情况下也退回 `Busy`
+- `CancelAsync` 停掉慢速流式：这一轮结束、不算成功，库里留下 `interrupted`
+- **无视图时的工具审批**：模型请求 `bash`，审批按「用户不在」拒绝，工具结果如实回给模型，这一轮照常成功结束
+- 权限档位改动落库、压缩生成摘要记录
+- 工作空间会话也能发起一轮（双表解析生效）
+- 会话不存在 → `NotFound`；插件停用后 → `Failed`
+- 插件被禁用时，它发起、还没跑完的那一轮被停掉
+
+**没验证**：插件从**非 UI 线程**调用（`Post` 分支）—— 无头进程没有消息循环，测不了；
+真实应用的 UI 线程有消息循环，路径本身与 `SessionNotifier` 用的是同一套写法。
+示例插件只确认「注入生效」并打日志，不主动发消息（每次启动都往会话塞一句会很打扰）。
+
+
 ---
 
 ## 二、M0 踩过的坑（别再踩）
@@ -268,9 +327,8 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
 
 ## 三、待办
 
-M0 / M1 / M6 已完成，剩下 M2 / M3 / M4 / M5。推荐顺序：M2（本节第一条，插件能看能写上下文）
-→ M4（插件能建窗口/插控件）→ M5（桌宠本体）；M3 是桌宠「主动发起对话」的前置，
-但它依赖的 runtime 能力现在已经在 `ConversationRuntimeRegistry.Acquire` 里了，可以随时插队。
+M0 / M1 / M3 / M6 已完成，剩下 M2 / M4 / M5。推荐顺序：M2（插件能看能写上下文）
+→ M4（插件能建窗口/插控件）→ M5（桌宠本体）。M3 已插队做完，桌宠「主动发起对话」的前置已经齐了。
 
 ### M2：`PromptComposer` + `IChatEventBus`（**下一步**）
 
