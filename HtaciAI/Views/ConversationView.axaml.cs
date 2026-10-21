@@ -46,19 +46,27 @@ namespace HtaciAI.Views;
 /// </summary>
 public partial class ConversationView : UserControl
 {
-    private readonly IConversationProfile _profile;
-    private readonly List<ChatMessage> _messages = new();
-    private readonly ChatGateway _gateway = new();
+    /// <summary>
+    /// 会话状态与请求执行上下文（历史、档案、网关、运行标记、取消源）。
+    /// 之所以不留在视图里：插件要在「会话没打开」时也能读写这些（见 ConversationRuntime 的说明）。
+    /// </summary>
+    private readonly ConversationRuntime _runtime;
+
     private readonly ToolExecutorDispatcher _toolExecutor = new();
-    private bool _busy;
     private bool _skillEventsHooked;
     private bool _toolEventsHooked;
 
     // 草稿的「上次落盘内容」与串行化标志已随草稿逻辑搬进 ChatInputControl
     // （那边有 _lastSavedDraft / _draftSaving / _draftPending 同一套）。
 
-    /// <summary>当前发送的取消源：运行中点发送按钮即取消（按钮此时是「停止」）。</summary>
-    private CancellationTokenSource? _sendCts;
+    /// <summary>会话档案：会话状态、system 提示词、落库路径。</summary>
+    private IConversationProfile Profile => _runtime.Profile;
+
+    /// <summary>全量历史。渲染可以只取其中一段，但发给模型的始终是它全量。</summary>
+    private List<ChatMessage> Messages => _runtime.Messages;
+
+    /// <summary>请求网关：客户端解析、自动重试、工具循环、落库。</summary>
+    private ChatGateway Gateway => _runtime.Gateway;
 
     // ============================================================
     // 历史分段渲染（长会话首屏加速）
@@ -66,7 +74,7 @@ public partial class ConversationView : UserControl
 
     /// <summary>
     /// 全量历史按「轮」分组后的结果，由 <see cref="RenderHistory"/> 算一次。
-    /// <b>注意：这只用于渲染</b>，发给模型的历史始终取 <see cref="_messages"/> 全量。
+    /// <b>注意：这只用于渲染</b>，发给模型的历史始终取 <see cref="Messages"/> 全量。
     /// </summary>
     private List<(string? TurnId, List<ChatMessage> Msgs)> _turnGroups = new();
 
@@ -160,7 +168,7 @@ public partial class ConversationView : UserControl
     public ConversationView(IConversationProfile profile)
     {
         InitializeComponent();
-        _profile = profile;
+        _runtime = new ConversationRuntime(profile);
 
         // 只做不依赖会话内容的一次性 UI 装配；依赖会话状态的初始化统一放到 InitializeAsync
         // （普通对话要等 LoadAsync 查库回来才有内容，工作空间会话则由页面先行加载）
@@ -170,7 +178,7 @@ public partial class ConversationView : UserControl
         // 输入区（附件、粘贴、拖放、回车发送、光标处整体删占位符）全部由 ChatInputControl 自己处理，
         // 这里只接它抛出来的几件事。原因：新建页与对话页原先各有一份实现，于是附件只加在了后者身上。
         Input.SendRequested += (_, submit) => _ = SendMessageAsync(submit.Text, submit.Attachments);
-        Input.StopRequested += (_, _) => _sendCts?.Cancel();
+        Input.StopRequested += (_, _) => _runtime.SendCts?.Cancel();
 
         // 换模型 = 换上下文上限，占用读数要按新上限重算（用量本身取自历史，不变）
         Input.ModelSelector.SelectedModelChanged += (_, _) => RefreshContextUsage();
@@ -184,7 +192,7 @@ public partial class ConversationView : UserControl
         Input.AddMoreItem("压缩上下文", () => _ = CompressContextAsync(manual: true));
 
         // 连接断了自动重来这件事必须让用户看见：一断就静默地晾十几秒，看起来就是程序卡死。
-        _gateway.RetryScheduled = OnRetryScheduled;
+        Gateway.RetryScheduled = OnRetryScheduled;
 
         // 滚到接近顶部时补齐更早的历史（长会话首屏只渲染最后一批，见 RenderHistory）
         MessagesScroll.ScrollChanged += OnMessagesScrollChanged;
@@ -229,7 +237,7 @@ public partial class ConversationView : UserControl
         if (_initialized) return;
         _initialized = true;
 
-        await _profile.LoadAsync();
+        await Profile.LoadAsync();
 
         ConfigureToolExecutor();
         LoadSkills();
@@ -237,7 +245,7 @@ public partial class ConversationView : UserControl
         await LoadMcpSelectionAsync();
 
         // 草稿落库交给控件；这里把存档交过去（为 null 时不落库，控件那边自然处理）
-        Input.DraftStore = _profile.Draft;
+        Input.DraftStore = Profile.Draft;
         Input.RestoreDraft();
 
         // 先立好完成信号：LoadMessagesAsync 读完库会 TrySetResult 放行等待中的发送
@@ -269,7 +277,7 @@ public partial class ConversationView : UserControl
     private void LoadSkills()
     {
         Input.SkillSelector.Skills = SkillRegistry.Instance.GetEnabled();
-        Input.SkillSelector.SelectedSkills = _profile.State.EnabledSkills;
+        Input.SkillSelector.SelectedSkills = Profile.State.EnabledSkills;
         if (_skillEventsHooked) return;
         _skillEventsHooked = true;
         Input.SkillSelector.SelectionChanged += async (_, _) => await SyncSkillsToSessionAsync();
@@ -277,14 +285,14 @@ public partial class ConversationView : UserControl
 
     private async Task SyncSkillsToSessionAsync()
     {
-        _profile.State.EnabledSkills = Input.SkillSelector.SelectedSkills.ToList();
+        Profile.State.EnabledSkills = Input.SkillSelector.SelectedSkills.ToList();
         await PersistSessionAsync();
     }
 
     private void LoadToolsSelection()
     {
         // 无条件回填：空集合也是有意义的状态（「默认工具」里可以选择一个都不开）
-        Input.ToolSelector.SelectedToolIds = _profile.State.EnabledToolIds;
+        Input.ToolSelector.SelectedToolIds = Profile.State.EnabledToolIds;
         if (_toolEventsHooked) return;
         _toolEventsHooked = true;
         Input.ToolSelector.SelectionChanged += async (_, _) => await SyncToolsToSessionAsync();
@@ -292,7 +300,7 @@ public partial class ConversationView : UserControl
 
     private async Task SyncToolsToSessionAsync()
     {
-        _profile.State.EnabledToolIds = Input.ToolSelector.SelectedToolIds.ToList();
+        Profile.State.EnabledToolIds = Input.ToolSelector.SelectedToolIds.ToList();
         await PersistSessionAsync();
     }
 
@@ -315,7 +323,7 @@ public partial class ConversationView : UserControl
             // 忽略：保持空列表
         }
 
-        Input.McpSelector.SelectedServerIds = _profile.State.McpServers;
+        Input.McpSelector.SelectedServerIds = Profile.State.McpServers;
 
         if (_mcpEventsHooked) return;
         _mcpEventsHooked = true;
@@ -324,7 +332,7 @@ public partial class ConversationView : UserControl
 
     private async Task SyncMcpToSessionAsync()
     {
-        _profile.State.McpServers = Input.McpSelector.SelectedServerIds.ToList();
+        Profile.State.McpServers = Input.McpSelector.SelectedServerIds.ToList();
         await PersistSessionAsync();
     }
 
@@ -340,7 +348,7 @@ public partial class ConversationView : UserControl
         if (Input.ToolSelector.SelectedToolIds.Count > 0)
             tools.AddRange(ToolRegistry.Instance.ResolveByIds(Input.ToolSelector.SelectedToolIds));
 
-        foreach (var serverId in _profile.State.McpServers)
+        foreach (var serverId in Profile.State.McpServers)
         {
             if (McpConnectionManager.Instance.GetTools(serverId) is not { } discovered) continue;
 
@@ -367,23 +375,23 @@ public partial class ConversationView : UserControl
     {
         _toolExecutor.Context = new BuiltinToolContext
         {
-            BaseDirectory = _profile.BaseDirectory,
-            GetSessionSkills = () => Task.FromResult<List<SessionSkill>?>(_profile.State.EnabledSkills),
+            BaseDirectory = Profile.BaseDirectory,
+            GetSessionSkills = () => Task.FromResult<List<SessionSkill>?>(Profile.State.EnabledSkills),
             SaveSessionSkills = async skills =>
             {
-                _profile.State.EnabledSkills = skills;
+                Profile.State.EnabledSkills = skills;
                 await PersistSessionAsync();
                 Input.SkillSelector.SelectedSkills = skills;
             },
             AskUser = AskInlineAsync,
         };
         _toolExecutor.ApprovalGate = ApproveInlineAsync;
-        _toolExecutor.Mode = _profile.State.PermissionMode;
+        _toolExecutor.Mode = Profile.State.PermissionMode;
 
         // 权限菜单归输入控件，这里只把「会话存档里的档位」回填进去，
         // 并订阅它的选择结果落库。刷新提醒里点「全部允许」那条路走 SetPermissionModeAsync，
         // 它会反过来同步控件显示。
-        Input.PermissionMode = _profile.State.PermissionMode;
+        Input.PermissionMode = Profile.State.PermissionMode;
         Input.PermissionModeChanged += (_, mode) => _ = SetPermissionModeAsync(mode);
     }
 
@@ -404,9 +412,9 @@ public partial class ConversationView : UserControl
         // 提醒上带三个按钮，可以直接作答，不必先跳到这个会话。
         // 「全部同意」顺带把本会话权限改成自由 —— 之后的工具都不再询问。
         var approvalCard = card;
-        SessionNotifier.Notify(SessionNoticeKind.Approval, _profile.State.SessionId, _profile.State.Title,
+        SessionNotifier.Notify(SessionNoticeKind.Approval, Profile.State.SessionId, Profile.State.Title,
             $"工具（{tool.Name}）待审批",
-            workspaceName: _profile.WorkspaceName,
+            workspaceName: Profile.WorkspaceName,
             onAction: async action =>
             {
                 if (action == NoticeAction.AllowAll)
@@ -448,9 +456,9 @@ public partial class ConversationView : UserControl
         });
         if (card is null) return null;
 
-        SessionNotifier.Notify(SessionNoticeKind.Question, _profile.State.SessionId, _profile.State.Title,
+        SessionNotifier.Notify(SessionNoticeKind.Question, Profile.State.SessionId, Profile.State.Title,
             "需要你的协助，请完成问题回答。",
-            workspaceName: _profile.WorkspaceName);
+            workspaceName: Profile.WorkspaceName);
 
         List<AskAnswer>? answers;
         try
@@ -485,7 +493,7 @@ public partial class ConversationView : UserControl
 
     private async Task PersistSessionAsync()
     {
-        try { await _profile.SaveAsync(); } catch { /* 忽略 */ }
+        try { await Profile.SaveAsync(); } catch { /* 忽略 */ }
     }
 
     // ---- 权限模式（会话级盾牌图标） ----
@@ -495,7 +503,7 @@ public partial class ConversationView : UserControl
 
     private async Task SetPermissionModeAsync(PermissionMode mode)
     {
-        _profile.State.PermissionMode = mode;
+        Profile.State.PermissionMode = mode;
         _toolExecutor.Mode = mode;
 
         // 控件的菜单是唯一入口，所以从这里改（比如提醒里点了「全部允许」）要把它的显示同步过去，
@@ -516,7 +524,7 @@ public partial class ConversationView : UserControl
     private async Task PersistMessage(ChatMessage m)
     {
         await ChatRepository.InsertAsync(m);
-        _messages.Add(m);
+        Messages.Add(m);
         if (m.Role == "user")
             AddMessage(m);
         else if (m.Role == "assistant")
@@ -614,9 +622,9 @@ public partial class ConversationView : UserControl
         try
         {
             Input.ModelSelector.Models = await ModelCatalog.ListEnabledAsync();
-            if (!string.IsNullOrEmpty(_profile.State.Model))
+            if (!string.IsNullOrEmpty(Profile.State.Model))
             {
-                var saved = Input.ModelSelector.Models.FirstOrDefault(m => m.ModelName == _profile.State.Model);
+                var saved = Input.ModelSelector.Models.FirstOrDefault(m => m.ModelName == Profile.State.Model);
                 if (saved is not null)
                     Input.ModelSelector.SelectedModel = saved;
             }
@@ -626,7 +634,7 @@ public partial class ConversationView : UserControl
             // 数据库未就绪时选择器保持空（显示「未配置模型」），发送侧会拦下并提示
         }
         // 恢复会话保存的思考模式
-        Input.ModelSelector.ThinkingMode = (ThinkingMode)_profile.State.Thinking;
+        Input.ModelSelector.ThinkingMode = (ThinkingMode)Profile.State.Thinking;
     }
 
     /// <summary>
@@ -648,16 +656,16 @@ public partial class ConversationView : UserControl
 
     private async Task LoadMessagesAsync()
     {
-        _messages.Clear();
+        Messages.Clear();
         // 窗口实例会被缓存复用，切回会话时恢复「跟着最新内容走」
         _autoScroll = true;
-        PerfTrace.Begin($"会话 {_profile.State.SessionId}");
+        PerfTrace.Begin($"会话 {Profile.State.SessionId}");
         try
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            _messages.AddRange(await ChatRepository.GetBySessionAsync(_profile.State.SessionId));
+            Messages.AddRange(await ChatRepository.GetBySessionAsync(Profile.State.SessionId));
             PerfTrace.Note("① 读库（全部消息）", sw.Elapsed.TotalMilliseconds);
-            PerfTrace.Info($"消息 {_messages.Count} 条");
+            PerfTrace.Info($"消息 {Messages.Count} 条");
         }
         finally
         {
@@ -706,7 +714,7 @@ public partial class ConversationView : UserControl
     public event Action<SessionActivity>? ActivityChanged;
 
     /// <summary>本视图对应的会话 id（宿主页面按它把状态落到左侧列表）。</summary>
-    public string SessionId => _profile.State.SessionId;
+    public string SessionId => Profile.State.SessionId;
 
     private void ReportActivity(SessionActivity activity)
     {
@@ -740,13 +748,13 @@ public partial class ConversationView : UserControl
     {
         if (_compressing) return false;
 
-        if (!ContextCompression.HasCompressibleContent(_messages))
+        if (!ContextCompression.HasCompressibleContent(Messages))
         {
             if (manual) Input.ShowHint("还没有可压缩的内容", InputHintKind.Info, autoHide: true);
             return false;
         }
 
-        var slice = ContextCompression.SliceForSummary(_messages);
+        var slice = ContextCompression.SliceForSummary(Messages);
         if (slice.Count == 0) return false;
 
         _compressing = true;
@@ -756,7 +764,7 @@ public partial class ConversationView : UserControl
         {
             // 摘要用当前会话选中的模型：不额外引入设置项，质量也是这里最好的。
             // 没有可用模型就没法压缩：手动触发要说明原因，自动触发（发请求前的那次）安静跳过。
-            var client = await _gateway.ResolveClientAsync(Input.ModelSelector.SelectedModel?.ModelId);
+            var client = await Gateway.ResolveClientAsync(Input.ModelSelector.SelectedModel?.ModelId);
             if (client is null)
                 return FailCompress(manual, "尚未配置可用的模型，请到「设置 → 模型服务」添加并启用服务商与模型");
 
@@ -787,9 +795,9 @@ public partial class ConversationView : UserControl
             await ChatRepository.InsertAsync(new ChatMessage
             {
                 Id = Guid.NewGuid().ToString("N"),
-                SessionId = _profile.State.SessionId,
-                TurnId = await ChatRepository.GetNextTurnIdAsync(_profile.State.SessionId),
-                SequenceNumber = await ChatRepository.GetNextSequenceAsync(_profile.State.SessionId),
+                SessionId = Profile.State.SessionId,
+                TurnId = await ChatRepository.GetNextTurnIdAsync(Profile.State.SessionId),
+                SequenceNumber = await ChatRepository.GetNextSequenceAsync(Profile.State.SessionId),
                 Role = ContextCompression.CompressRole,
                 Content = summary,
                 Metadata = ContextCompression.SerializeMetadata(),
@@ -837,7 +845,7 @@ public partial class ConversationView : UserControl
     {
         var settings = AppSettingsStore.Current;
         if (!settings.AutoCompressContext) return;
-        if (!ContextCompression.HasCompressibleContent(_messages)) return;
+        if (!ContextCompression.HasCompressibleContent(Messages)) return;
         if (!TryGetContextUsage(out var used, out var total)) return;
 
         var threshold = Math.Clamp(settings.AutoCompressThresholdPercent, 1, 100);
@@ -864,9 +872,9 @@ public partial class ConversationView : UserControl
         total = Input.ModelSelector.SelectedModel?.ContextWindow ?? -1;
         if (total <= 0) return false;
 
-        for (var i = _messages.Count - 1; i >= 0; i--)
+        for (var i = Messages.Count - 1; i >= 0; i--)
         {
-            var m = _messages[i];
+            var m = Messages[i];
             if (m.Role != "assistant" || string.IsNullOrWhiteSpace(m.UsageJson)) continue;
             if (TokenUsage.FromStoredJson(m.UsageJson) is not { } usage) continue;
 
@@ -901,7 +909,7 @@ public partial class ConversationView : UserControl
             "删除压缩记录");
         if (!confirmed) return;
 
-        try { await ChatRepository.SoftDeleteMessageAsync(_profile.State.SessionId, message.Id); }
+        try { await ChatRepository.SoftDeleteMessageAsync(Profile.State.SessionId, message.Id); }
         catch { /* 忽略 */ }
 
         await ReloadMessagesAsync();
@@ -912,16 +920,16 @@ public partial class ConversationView : UserControl
 
     /// <summary>
     /// 发送前解析模型客户端。返回 null 表示这一轮发不出去，<b>并且提示已经在这里给过了</b>，
-    /// 调用方只要放开 _busy 并放弃即可。
+    /// 调用方只要放开运行标记并放弃即可。
     ///
-    /// 解析失败（数据库异常）也必须收成 null 并给出提示：让它抛出去会让 _busy 永远停在 true，
+    /// 解析失败（数据库异常）也必须收成 null 并给出提示：让它抛出去会让运行标记永远停在 true，
     /// 页面卡在「正在运行」状态上，连输入框都用不了。
     /// </summary>
     private async Task<IChatClient?> ResolveSendClientAsync(ModelDetails selected)
     {
         try
         {
-            var client = await _gateway.ResolveClientAsync(selected.ModelId);
+            var client = await Gateway.ResolveClientAsync(selected.ModelId);
             if (client is not null) return client;
 
             Input.ShowHint("所选模型已停用或被删除，请到「设置 → 模型服务」重新启用", InputHintKind.Fail, autoHide: false);
@@ -936,7 +944,7 @@ public partial class ConversationView : UserControl
 
     public async Task SendMessageAsync(string text, IReadOnlyList<ChatAttachment>? attachments = null)
     {
-        if (_busy || string.IsNullOrWhiteSpace(text)) return;
+        if (_runtime.IsBusy || string.IsNullOrWhiteSpace(text)) return;
 
         // 历史还没读完就先等它。界面为了快速进窗只渲染了最后一批，但「读库」是另一回事：
         // 这时发送会把残缺历史交给模型，上下文静默丢一段 —— 所以宁可让用户等这一下。
@@ -957,13 +965,13 @@ public partial class ConversationView : UserControl
             return;
         }
 
-        // 先占住 _busy：下面要 await 一次数据库，不占住的话连点两下会同时发出去两条。
+        // 先占住运行标记：下面要 await 一次数据库，不占住的话连点两下会同时发出去两条。
         // 失败路径上必须自己放开，否则页面会永远卡在「正在运行」。
-        _busy = true;
+        _runtime.IsBusy = true;
         var client = await ResolveSendClientAsync(selected);
         if (client is null)
         {
-            _busy = false;   // 提示已经由 ResolveSendClientAsync 给过
+            _runtime.IsBusy = false;   // 提示已经由 ResolveSendClientAsync 给过
             return;
         }
 
@@ -975,19 +983,19 @@ public partial class ConversationView : UserControl
         _autoScroll = true;
 
         // 标题还是占位说明此前没定过名：按设置补一个（配了命名模型时先留占位，等首轮回复再生成）
-        if (ConversationTitle.IsPlaceholder(_profile.State.Title))
-            _profile.State.Title = ConversationTitle.InitialTitle(text);
-        _profile.State.Model = selected.ModelName;
-        _profile.State.Thinking = (int)Input.ModelSelector.ThinkingMode;
-        _profile.State.EnabledToolIds = Input.ToolSelector.SelectedToolIds.ToList();
+        if (ConversationTitle.IsPlaceholder(Profile.State.Title))
+            Profile.State.Title = ConversationTitle.InitialTitle(text);
+        Profile.State.Model = selected.ModelName;
+        Profile.State.Thinking = (int)Input.ModelSelector.ThinkingMode;
+        Profile.State.EnabledToolIds = Input.ToolSelector.SelectedToolIds.ToList();
 
-        var isFirstTurn = _messages.Count == 0;
+        var isFirstTurn = Messages.Count == 0;
 
         // 历史传全量：有压缩记录时由网关路径上的 BuildWireHistory 摘成「最后一条压缩记录 + 之后」
-        var turn = await RunTurnAsync(selected, client, text, _messages.ToList(), attachments: attachments,
+        var turn = await RunTurnAsync(selected, client, text, Messages.ToList(), attachments: attachments,
             requestPreview: text);
 
-        // 自动话题命名只跑首轮一次：首轮之后 _messages 非空，isFirstTurn 恒为假。
+        // 自动话题命名只跑首轮一次：首轮之后 Messages 非空，isFirstTurn 恒为假。
         if (isFirstTurn) _ = ApplyAutoTitleAsync(turn, text);
     }
 
@@ -997,7 +1005,7 @@ public partial class ConversationView : UserControl
     ///
     /// <paramref name="userText"/> 为 null 表示<b>重新生成</b>：不新建用户消息，
     /// 新回复按 <paramref name="insertAfterSequence"/> 给出的位置插回历史中间（普通发送传 null，追加到末尾）。
-    /// 调用方负责置位/清掉 <see cref="_busy"/>。
+    /// 调用方负责置位/清掉 <see cref="ConversationRuntime.IsBusy"/>。
     /// </summary>
     /// <param name="attachments">
     /// 随这一轮发出的附件，只用于<b>新建</b>用户消息时写进它的 metadata。
@@ -1026,16 +1034,16 @@ public partial class ConversationView : UserControl
         // 没坏消息时这只是内存里的一遍扫描，不写库。
         await RepairToolCallPairingAsync();
 
-        _profile.State.LastMessageAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        Profile.State.LastMessageAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await PersistSessionAsync();
 
-        var system = _profile.BuildSystemPrompt(_profile.State.Model);
+        var system = Profile.BuildSystemPrompt(Profile.State.Model);
 
         var vision = SupportsVision(selected);
 
         // MCP 是惰性连接的：发消息前确保会话启用的服务都连上并发现了工具。
         // 连不上就跳过（内部已记日志），不打断这次对话。
-        await McpConnectionManager.Instance.EnsureToolsAsync(_profile.State.McpServers, CancellationToken.None);
+        await McpConnectionManager.Instance.EnsureToolsAsync(Profile.State.McpServers, CancellationToken.None);
 
         var options = new ChatRequestOptions
         {
@@ -1048,20 +1056,20 @@ public partial class ConversationView : UserControl
         _toolExecutor.Context.SupportsVision = vision;
 
         // 每次发送都现读设置：改完「最大工具循环次数」不用重开会话就生效
-        _gateway.MaxToolRounds = AppDefaults.ResolveMaxToolRounds();
+        Gateway.MaxToolRounds = AppDefaults.ResolveMaxToolRounds();
 
         // 取消源提前到压缩之前建：压缩本身也是一次模型请求，期间点「停止」得能停下来。
         // 放在后面建的话，压缩阶段那颗按钮是「停止」却没有任何东西可取消。
-        _sendCts = new CancellationTokenSource();
+        _runtime.SendCts = new CancellationTokenSource();
         ChatTurnResult? turn = null;
         var persisted = new List<string>();
         try
         {
             // 上下文超阈值时先自动压缩一次（受设置控制，失败或不满足条件都安静跳过）
-            await MaybeAutoCompressAsync(_sendCts.Token);
+            await MaybeAutoCompressAsync(_runtime.SendCts.Token);
 
-            turn = await _gateway.ChatAsync(
-                _profile.State.SessionId,
+            turn = await Gateway.ChatAsync(
+                Profile.State.SessionId,
                 system,
                 // 有压缩记录时只发「最后一条压缩记录 + 它之后的消息」，更早的历史被摘要在语义上替代
                 ContextCompression.BuildWireHistory(history),
@@ -1078,7 +1086,7 @@ public partial class ConversationView : UserControl
                     Update = UpdatePersistedMessageAsync,
                 },
                 BeginAssistantRound,
-                _sendCts.Token);
+                _runtime.SendCts.Token);
 
             // 流式阶段的停止由网关内部按 interrupted 收尾并<b>正常返回</b>，不会走到下面的 catch。
             // 按「失败但没有错误信息」识别出来 —— 否则用户自己按的停止也会收到一条「任务出错」提醒。
@@ -1092,8 +1100,8 @@ public partial class ConversationView : UserControl
         }
         finally
         {
-            _sendCts.Dispose();
-            _sendCts = null;
+            _runtime.SendCts.Dispose();
+            _runtime.SendCts = null;
             // 请求已返回（成功 / 停止 / 失败），逐秒计时到此为止。
             // 放在 finally 里而不是只放在 FinishActivityCard 里：请求异常直接抛出去时那条路径
             // 不会走到收尾逻辑，定时器会一直跑下去（运行中的 DispatcherTimer 会吊住页面）。
@@ -1117,7 +1125,7 @@ public partial class ConversationView : UserControl
         // 这里把它们挪回原位置，否则重生成的回复会跑到最后一轮后面。
         if (insertAfterSequence is { } after)
         {
-            try { await ChatRepository.InsertMessagesAtAsync(_profile.State.SessionId, after, persisted); }
+            try { await ChatRepository.InsertMessagesAtAsync(Profile.State.SessionId, after, persisted); }
             catch { /* 忽略：位置不对总好过整轮回复丢掉 */ }
         }
 
@@ -1131,7 +1139,7 @@ public partial class ConversationView : UserControl
             // 回复结束：聚合卡翻为用时统计并折叠；操作栏（含原文按钮）追加到蓝框外
             FinishActivityCard();
 
-            var turnAssistants = _messages
+            var turnAssistants = Messages
                 .Where(m => m.Role == "assistant" && m.TurnId == _activeTurnId)
                 .ToList();
             _activeTurnRoot.Children.Add(CreateAiReplyOps(_activeTurnId, turnAssistants, _activeTurnHost));
@@ -1146,7 +1154,7 @@ public partial class ConversationView : UserControl
             ScrollToEnd();
 
         RefreshContextUsage();
-        _busy = false;
+        _runtime.IsBusy = false;
         Input.SetRunning(false);
         ReportActivity(SessionActivity.Done);
         Updated?.Invoke();
@@ -1154,13 +1162,13 @@ public partial class ConversationView : UserControl
         // 收尾提醒：跑完和出错都报，措辞避开「失败」，用「出错」。
         // 用户主动点「停止」不报 —— 那是他自己按的，不需要事后被告知。
         if (turn is { Success: true })
-            SessionNotifier.Notify(SessionNoticeKind.Done, _profile.State.SessionId, _profile.State.Title,
+            SessionNotifier.Notify(SessionNoticeKind.Done, Profile.State.SessionId, Profile.State.Title,
                 $"任务“{PreviewText(preview)}”已完成",
-                workspaceName: _profile.WorkspaceName);
+                workspaceName: Profile.WorkspaceName);
         else if (turn is not null && !_stoppedByUser)
-            SessionNotifier.Notify(SessionNoticeKind.Failed, _profile.State.SessionId, _profile.State.Title,
+            SessionNotifier.Notify(SessionNoticeKind.Failed, Profile.State.SessionId, Profile.State.Title,
                 $"任务“{PreviewText(preview)}”出错",
-                workspaceName: _profile.WorkspaceName);
+                workspaceName: Profile.WorkspaceName);
 
         return turn;
     }
@@ -1183,7 +1191,7 @@ public partial class ConversationView : UserControl
     /// </summary>
     private async Task EditUserMessageAsync(ChatMessage msg)
     {
-        if (_busy)
+        if (_runtime.IsBusy)
         {
             Input.ShowHint("正在生成回复，先点「停止」再编辑", InputHintKind.Info, autoHide: true);
             return;
@@ -1231,7 +1239,7 @@ public partial class ConversationView : UserControl
     /// </summary>
     private async Task RegenerateAsync(ChatMessage trigger)
     {
-        if (_busy)
+        if (_runtime.IsBusy)
         {
             Input.ShowHint("正在生成回复，先点「停止」再重新生成", InputHintKind.Info, autoHide: true);
             return;
@@ -1252,7 +1260,7 @@ public partial class ConversationView : UserControl
             return;
         }
 
-        var triggerIndex = _messages.FindIndex(m => m.Id == trigger.Id);
+        var triggerIndex = Messages.FindIndex(m => m.Id == trigger.Id);
         if (triggerIndex < 0) return;
 
         // 上下文末尾：点用户消息含自己；点 AI 消息则退到这个 AI 轮的第一条消息之前
@@ -1260,23 +1268,23 @@ public partial class ConversationView : UserControl
             ? triggerIndex + 1
             : IndexOfTurnStart(trigger.TurnId, triggerIndex);
 
-        var context = _messages.Take(contextEnd).ToList();
+        var context = Messages.Take(contextEnd).ToList();
         if (context.Count == 0) return;
 
         // 要被替换掉的旧 AI 轮：上下文之后、下一条用户/压缩消息之前，且同一个 turn_id
         var replaced = new List<ChatMessage>();
-        var replacedTurnId = contextEnd < _messages.Count && _messages[contextEnd].Role is "assistant" or "tool"
-            ? _messages[contextEnd].TurnId
+        var replacedTurnId = contextEnd < Messages.Count && Messages[contextEnd].Role is "assistant" or "tool"
+            ? Messages[contextEnd].TurnId
             : null;
         if (replacedTurnId is not null)
-            for (var i = contextEnd; i < _messages.Count && _messages[i].TurnId == replacedTurnId; i++)
-                replaced.Add(_messages[i]);
+            for (var i = contextEnd; i < Messages.Count && Messages[i].TurnId == replacedTurnId; i++)
+                replaced.Add(Messages[i]);
 
-        _busy = true;
+        _runtime.IsBusy = true;
         var client = await ResolveSendClientAsync(selected);
         if (client is null)
         {
-            _busy = false;
+            _runtime.IsBusy = false;
             return;
         }
 
@@ -1291,9 +1299,9 @@ public partial class ConversationView : UserControl
         // 让旧回复先消失：直接改内存 + 重渲染，比原地找控件删更简单，也顺带把插入位置算出来
         if (replaced.Count > 0)
         {
-            try { await ChatRepository.SoftDeleteTurnAsync(_profile.State.SessionId, replacedTurnId!); } catch { /* 忽略 */ }
+            try { await ChatRepository.SoftDeleteTurnAsync(Profile.State.SessionId, replacedTurnId!); } catch { /* 忽略 */ }
             var ids = replaced.Select(m => m.Id).ToHashSet();
-            _messages.RemoveAll(m => ids.Contains(m.Id));
+            Messages.RemoveAll(m => ids.Contains(m.Id));
         }
 
         // 至少渲染到「上下文末尾那条消息」所在的分组：被点在很旧的轮次上时，
@@ -1319,7 +1327,7 @@ public partial class ConversationView : UserControl
     /// <param name="anchor">失败那一轮里的任意一条消息（错误记录 / 失败的 assistant / 中断的工具行）。</param>
     private async Task RetryTurnAsync(ChatMessage anchor)
     {
-        if (_busy)
+        if (_runtime.IsBusy)
         {
             Input.ShowHint("正在生成回复，先点「停止」再重试", InputHintKind.Info, autoHide: true);
             return;
@@ -1339,21 +1347,21 @@ public partial class ConversationView : UserControl
             return;
         }
 
-        var anchorIndex = _messages.FindIndex(m => m.Id == anchor.Id);
+        var anchorIndex = Messages.FindIndex(m => m.Id == anchor.Id);
         if (anchorIndex < 0) return;
 
         // 这一轮的起点。错误记录与失败的 assistant 都带着同一个 turn_id，
         // 按它退回轮次开头，才能把「这一轮之前」的上下文完整取出来。
         var start = anchor.TurnId is null ? anchorIndex : IndexOfTurnStart(anchor.TurnId, anchorIndex);
 
-        var context = _messages.Take(start).ToList();
+        var context = Messages.Take(start).ToList();
         if (context.Count == 0) return;   // 失败轮前面什么都没有（连用户消息都没有）就没得重试
 
-        _busy = true;
+        _runtime.IsBusy = true;
         var client = await ResolveSendClientAsync(selected);
         if (client is null)
         {
-            _busy = false;
+            _runtime.IsBusy = false;
             return;
         }
 
@@ -1365,11 +1373,11 @@ public partial class ConversationView : UserControl
         await RunTurnAsync(selected, client, null, context, attachments: null);
     }
 
-    /// <summary>AI 轮的第一条消息在 <c>_messages</c> 里的下标（找不到就退回 <paramref name="fallback"/>）。</summary>
+    /// <summary>AI 轮的第一条消息在 <c>Messages</c> 里的下标（找不到就退回 <paramref name="fallback"/>）。</summary>
     private int IndexOfTurnStart(string? turnId, int fallback)
     {
-        for (var i = 0; i <= fallback && i < _messages.Count; i++)
-            if (_messages[i].TurnId == turnId && _messages[i].Role is "assistant" or "tool")
+        for (var i = 0; i <= fallback && i < Messages.Count; i++)
+            if (Messages[i].TurnId == turnId && Messages[i].Role is "assistant" or "tool")
                 return i;
         return fallback;
     }
@@ -1389,7 +1397,7 @@ public partial class ConversationView : UserControl
     /// </summary>
     private int ComputeInsertIndex(int afterSequence)
     {
-        var group = FindGroupIndex(_messages.FirstOrDefault(m => m.SequenceNumber == afterSequence)?.Id ?? "");
+        var group = FindGroupIndex(Messages.FirstOrDefault(m => m.SequenceNumber == afterSequence)?.Id ?? "");
         if (group < 0) return MessagesPanel.Children.Count;
 
         var index = group + 1 - _firstRenderedGroup;
@@ -1417,7 +1425,7 @@ public partial class ConversationView : UserControl
 
             if (string.IsNullOrEmpty(title)) return;
 
-            _profile.State.Title = title;
+            Profile.State.Title = title;
             await PersistSessionAsync();
             Updated?.Invoke();
         }
@@ -1433,10 +1441,10 @@ public partial class ConversationView : UserControl
         var modelId = AppSettingsStore.Current.TopicNamingModelId;
         if (string.IsNullOrWhiteSpace(modelId) || turn is null) return null;
 
-        var details = await _gateway.ResolveModelAsync(modelId);
+        var details = await Gateway.ResolveModelAsync(modelId);
         if (details is null) return null;
 
-        var client = _gateway.BuildClient(details);
+        var client = Gateway.BuildClient(details);
 
         const string system =
             "你是会话标题生成器。根据用户的第一条消息和助手的回复，给出一个简短的会话标题。" +
@@ -1528,9 +1536,9 @@ public partial class ConversationView : UserControl
         // 覆盖条数在这里顺手统计：从上一个压缩记录（不含）数到这一条。
         var lastCompression = -1;
 
-        for (var i = 0; i < _messages.Count; i++)
+        for (var i = 0; i < Messages.Count; i++)
         {
-            var m = _messages[i];
+            var m = Messages[i];
 
             if (ContextCompression.IsCompression(m))
             {
@@ -1577,7 +1585,7 @@ public partial class ConversationView : UserControl
         if (_loadingEarlier || _restoringScroll) return;
         if (_firstRenderedGroup <= 0) return;
 
-        PerfTrace.Begin($"会话 {_profile.State.SessionId} — 向上加载一批");
+        PerfTrace.Begin($"会话 {Profile.State.SessionId} — 向上加载一批");
         PerfTrace.Info($"此前已渲染 {_turnGroups.Count - _firstRenderedGroup} 轮");
 
         using (PerfTrace.Measure("① 向上加载：构造本批"))
@@ -1908,7 +1916,7 @@ public partial class ConversationView : UserControl
     {
         var stored = _activeTurnId is null
             ? 0
-            : _messages.Where(m => m.Role == "assistant" && m.TurnId == _activeTurnId)
+            : Messages.Where(m => m.Role == "assistant" && m.TurnId == _activeTurnId)
                        .Max(m => m.DurationMs ?? 0);
         return stored > 0 ? TimeSpan.FromMilliseconds(stored) : ElapsedSinceTurnStart();
     }
@@ -1940,7 +1948,7 @@ public partial class ConversationView : UserControl
     private string BuildFullRawText(string? turnId)
     {
         var sb = new StringBuilder();
-        foreach (var m in _messages)
+        foreach (var m in Messages)
         {
             if (m.TurnId != turnId) continue;
 
@@ -2037,7 +2045,7 @@ public partial class ConversationView : UserControl
     /// </summary>
     private async Task RepairToolCallPairingAsync()
     {
-        var touched = ToolCallRepair.RepairInPlace(_messages);
+        var touched = ToolCallRepair.RepairInPlace(Messages);
         if (touched.Count == 0) return;
 
         foreach (var message in touched)
@@ -2064,7 +2072,7 @@ public partial class ConversationView : UserControl
     private void BuildToolCallIndex()
     {
         _toolCallInputs = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var m in _messages)
+        foreach (var m in Messages)
         {
             if (m.Role != "assistant") continue;
             foreach (var call in ToolCallJson.Deserialize(m.Metadata))
@@ -2160,7 +2168,7 @@ public partial class ConversationView : UserControl
         {
             Orientation = Orientation.Horizontal,
             Spacing = 2,
-            Children = { copyBtn, RegenerateButton(() => _messages.FirstOrDefault(
+            Children = { copyBtn, RegenerateButton(() => Messages.FirstOrDefault(
                 m => m.TurnId == turnId && m.Role is "assistant" or "tool")), host.CreateModeButtons(), delBtn },
         };
         var tokens = new TextBlock
@@ -2280,7 +2288,7 @@ public partial class ConversationView : UserControl
     {
         var owner = TopLevel.GetTopLevel(this) as Window;
         if (!await ConfirmDialog.ShowAsync(owner, "确定删除这段回复吗？")) return;
-        try { await ChatRepository.SoftDeleteTurnAsync(_profile.State.SessionId, turnId); } catch { /* 忽略 */ }
+        try { await ChatRepository.SoftDeleteTurnAsync(Profile.State.SessionId, turnId); } catch { /* 忽略 */ }
         await ReloadMessagesAsync();
     }
 
@@ -2288,16 +2296,16 @@ public partial class ConversationView : UserControl
     {
         var owner = TopLevel.GetTopLevel(this) as Window;
         if (!await ConfirmDialog.ShowAsync(owner, "确定删除这条消息吗？")) return;
-        try { await ChatRepository.SoftDeleteMessageAsync(_profile.State.SessionId, messageId); } catch { /* 忽略 */ }
+        try { await ChatRepository.SoftDeleteMessageAsync(Profile.State.SessionId, messageId); } catch { /* 忽略 */ }
         await ReloadMessagesAsync();
     }
 
     private async Task ReloadMessagesAsync()
     {
-        _messages.Clear();
+        Messages.Clear();
         try
         {
-            _messages.AddRange(await ChatRepository.GetBySessionAsync(_profile.State.SessionId));
+            Messages.AddRange(await ChatRepository.GetBySessionAsync(Profile.State.SessionId));
         }
         finally
         {
@@ -2599,7 +2607,7 @@ public partial class ConversationView : UserControl
     //   * Controls/ChatInputControl.axaml(.cs) —— 控件把逻辑接到 Avalonia 事件上
     //   * Services/Attachments/AttachmentDraft.cs —— 纯逻辑（token 碰撞 / 光标处整体删除 / 孤儿清理 / 序列化）
     //
-    // 视图这边只需在装配时把 _profile.Draft 交给控件（见 InitializeAsync 与构造函数）。
+    // 视图这边只需在装配时把 Profile.Draft 交给控件（见 InitializeAsync 与构造函数）。
 
     // ============================================================
     // 可折叠「已深度思考」卡片

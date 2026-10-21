@@ -81,7 +81,8 @@ ConversationView               （纯渲染 + 输入）
 
 ### 1.4 迁移分三步，每步都能单独构建、单独回归
 
-- **A**：建 `ConversationRuntime` 壳，把 `_messages`/`_busy`/`_gateway`/`_profile` 迁进去，视图改为通过 runtime 访问。行为完全不变。
+- **A**（✅ 已完成）：建 `ConversationRuntime` 壳，把 `_messages`/`_busy`/`_gateway`/`_profile`/`_sendCts` 迁进去，
+  视图改为通过 runtime 访问。行为完全不变。**未接 registry**，理由见 `plugin-handoff.md` 第三节。
 - **B**：把 `SendMessageAsync` + `RunTurnAsync` + 流式渲染改成事件驱动。这是风险最高的一步，回归清单最重。
 - **C**：迁 `Regenerate`/`Retry`/`Compress`/异步入审批与提问。
 
@@ -435,7 +436,7 @@ public sealed class WindowOptions
 | 里程碑 | 内容 | 依赖 | 状态 |
 | --- | --- | --- | --- |
 | M0 | `HtaciAI.Plugin.Abstractions` + `PluginManager` + `AppPaths.Plugins` + `state.json` + 空插件能加载/卸载/重启提示 | 无 | ✅ 已完成并通过实测 |
-| M1 | `ConversationRuntime` 拆分 A/B/C 三步 | 无 | ⬜ 未开始 |
+| M1 | `ConversationRuntime` 拆分 A/B/C 三步 | 无 | 🔶 A 已完成，B/C 未开始 |
 | M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 | ⬜ 未开始 |
 | M3 | `ISessionFacade`（主动发起、取消、改权限、agent 旁注） | M1 | ⬜ 未开始 |
 | M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ⬜ 未开始 |

@@ -140,12 +140,20 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
 
 分三步，每步单独构建 + 单独回归：
 
-- **A**：建 `ConversationRuntime` 壳（`_messages` / `_busy` / `_sendCts` / `_gateway` / `_profile`），
-  视图改为通过它访问，行为不变。
-- **B**：`SendMessageAsync` + `RunTurnAsync` + 流式渲染改成事件驱动（**风险最高**）。
-- **C**：迁 `Regenerate` / `Retry` / `Compress` / 异步审批与提问。
+- **A** ✅ 已完成：`Services/Conversations/ConversationRuntime.cs` 收拢了
+  `Messages` / `Profile` / `Gateway` / `IsBusy` / `SendCts`；视图改用三个只读访问器
+  （`Profile` / `Messages` / `Gateway`）加 `_runtime.IsBusy`、`_runtime.SendCts`，行为不变。
+  已实测：启动、打开长会话、历史分段渲染、思考卡与 Tokens 汇总均正常。
+- **B** ⬜ 未开始：`SendMessageAsync` + `RunTurnAsync` + 流式渲染改成事件驱动（**风险最高**）。
+- **C** ⬜ 未开始：迁 `Regenerate` / `Retry` / `Compress` / 异步审批与提问。
 
 配套：`ConversationRuntimeRegistry`（按 sessionId 复用，视图关闭不销毁——桌宠后台工作的前提）。
+**A 步刻意没接 registry**：一旦 runtime 跨视图复用，`LoadMessagesAsync` 就会在「视图重建」时
+把库里的历史再灌一遍（重复消息），或者干脆不读（历史为空）。这件事必须与 B 步的
+「事件驱动 + 是否已初始化」判断一起做，单独提前接只会引入难查的状态错乱。
+
+> 另外记下了插件清单的字段设想（平台独占、前置依赖、循环依赖与连带停用规则），
+> 见 [`plugin-manifest.md`](./plugin-manifest.md)。清单继续用 JSON，不上 ini。
 
 ### M4（只依赖 M0，可先做）
 
