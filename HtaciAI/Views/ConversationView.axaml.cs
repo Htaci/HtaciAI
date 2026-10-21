@@ -44,7 +44,7 @@ namespace HtaciAI.Views;
 /// 与具体会话模型解耦——所有差异（工具基准目录、system 提示词、落库路径、草稿能力）
 /// 都来自构造时传入的 <see cref="IConversationProfile"/>。消息仍复用 chat_message 表。
 /// </summary>
-public partial class ConversationView : UserControl, IInteractionHost
+public partial class ConversationView : UserControl, IInteractionHost, IDisposable
 {
     /// <summary>
     /// 会话状态与请求执行上下文（历史、档案、网关、运行标记、取消源）。
@@ -105,13 +105,13 @@ public partial class ConversationView : UserControl, IInteractionHost
     private int _historyBatchTurns = 10;
 
     /// <summary>
-    /// 全量历史是否已从库里读完。<b>发消息必须等它为 true</b> ——
-    /// 历史没读完就发送，模型会收到一段残缺的上下文，而且这种丢失是静默的。
+    /// 这个窗口从注册表借来的那一份租约。窗口被丢掉时还回去；
+    /// 自己 new 出来给设计器 / 测试用的窗口没有租约（<see cref="ConversationView(IConversationProfile)"/>）。
     /// </summary>
-    private bool _historyLoaded;
+    private readonly IDisposable? _lease;
 
-    /// <summary>历史读取完成信号；<see cref="SendMessageAsync"/> 在没读完时 await 它。</summary>
-    private TaskCompletionSource? _historyLoadTcs;
+    /// <summary>已经 Dispose 过（防止退订 / 还租约被重复执行）。</summary>
+    private bool _disposed;
 
     /// <summary>
     /// tool_call_id → 该调用的 arguments 文本。
@@ -155,10 +155,19 @@ public partial class ConversationView : UserControl, IInteractionHost
     /// <summary>无参构造，仅供 XAML 预览器 / 设计器使用（无真实会话，不会读写数据库）。</summary>
     public ConversationView() : this(new StandaloneProfile("")) { }
 
-    public ConversationView(IConversationProfile profile)
+    /// <summary>
+    /// 自建运行时（不经过注册表）。设计器与「一个窗口独占一份数据的场景」用它；
+    /// 正常打开会话走 <see cref="ConversationView(ConversationRuntime, IDisposable?)"/>。
+    /// </summary>
+    public ConversationView(IConversationProfile profile) : this(new ConversationRuntime(profile)) { }
+
+    /// <param name="runtime">从 <see cref="ConversationRuntimeRegistry"/> 借来的运行时（可能已被插件用过）。</param>
+    /// <param name="lease">对应的租约；窗口丢掉时由 <see cref="Dispose"/> 还回去。</param>
+    public ConversationView(ConversationRuntime runtime, IDisposable? lease = null)
     {
         InitializeComponent();
-        _runtime = new ConversationRuntime(profile);
+        _runtime = runtime;
+        _lease = lease;
         HookRuntime();
 
         // 只做不依赖会话内容的一次性 UI 装配；依赖会话状态的初始化统一放到 InitializeAsync
@@ -222,7 +231,13 @@ public partial class ConversationView : UserControl, IInteractionHost
         if (_initialized) return;
         _initialized = true;
 
-        await Profile.LoadAsync();
+        // 会话存档与全量历史都由 runtime 读一次：插件可能先于视图把它读完了，
+        // 那种情况下这里不会重复读库。
+        var alreadyLoaded = _runtime.IsHistoryLoaded;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await _runtime.EnsureReadyAsync();
+        if (!alreadyLoaded && sw.ElapsedMilliseconds > 0)
+            PerfTrace.Note("① 读库（含配对修复）", sw.Elapsed.TotalMilliseconds);
 
         ConfigureToolExecutor();
         LoadSkills();
@@ -233,11 +248,8 @@ public partial class ConversationView : UserControl, IInteractionHost
         Input.DraftStore = Profile.Draft;
         Input.RestoreDraft();
 
-        // 先立好完成信号：LoadMessagesAsync 读完库会 TrySetResult 放行等待中的发送
-        _historyLoadTcs = new TaskCompletionSource();
-
         await LoadModelsAsync();
-        await LoadMessagesAsync();
+        RenderLoadedHistory();
     }
 
     /// <summary>当前思考模式：透传模型选择器。</summary>
@@ -596,30 +608,17 @@ public partial class ConversationView : UserControl, IInteractionHost
         }
     }
 
-    private async Task LoadMessagesAsync()
+    /// <summary>
+    /// 渲染 runtime 里已有的历史。<b>不读库</b> —— 读库是 <see cref="ConversationRuntime.EnsureReadyAsync"/>
+    /// 的事，这里只负责把它画出来（插件可能已经把历史读好了，再读一遍是白花时间）。
+    /// </summary>
+    private void RenderLoadedHistory()
     {
-        Messages.Clear();
         // 窗口实例会被缓存复用，切回会话时恢复「跟着最新内容走」
         _autoScroll = true;
-        PerfTrace.Begin($"会话 {Profile.State.SessionId}");
-        try
-        {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            Messages.AddRange(await ChatRepository.GetBySessionAsync(Profile.State.SessionId));
-            PerfTrace.Note("① 读库（全部消息）", sw.Elapsed.TotalMilliseconds);
-            PerfTrace.Info($"消息 {Messages.Count} 条");
-        }
-        finally
-        {
-            // 无论读成功还是失败都必须放行：否则读库一旦抛异常，
-            // 等在 _historyLoadTcs 上的发送会永远卡住（连错误提示都看不到）。
-            _historyLoaded = true;
-            _historyLoadTcs?.TrySetResult();
-        }
 
-        // 打开会话时懒修一次：只碰这个会话，不做全库扫描
-        using (PerfTrace.Measure("①.5 工具调用配对修复"))
-            await RepairToolCallPairingAsync();
+        PerfTrace.Begin($"会话 {Profile.State.SessionId}");
+        PerfTrace.Info($"消息 {Messages.Count} 条");
 
         using (PerfTrace.Measure("② 首屏渲染（含分组）"))
         {
@@ -737,6 +736,22 @@ public partial class ConversationView : UserControl, IInteractionHost
     // ---- 发送 ----
 
     /// <summary>
+    /// 历史没读完就先等它。界面为了快速进窗只渲染了最后一批，但「读库」是另一回事：
+    /// 这时发送会把残缺历史交给模型，上下文静默丢一段 —— 所以宁可让用户等这一下。
+    ///
+    /// 正常情况这里早就完成了（打开会话时就读完了），立刻返回；
+    /// 只有「刚打开窗口就抢着发」、或者「会话只被插件用过、刚被借回来」才会真的等。
+    /// </summary>
+    private async Task WaitForHistoryAsync(string action)
+    {
+        if (_runtime.IsHistoryLoaded) return;
+
+        Input.ShowHint($"正在加载历史记录，完成后自动{action}…", InputHintKind.Info, autoHide: false);
+        await _runtime.EnsureReadyAsync();
+        Input.HideHint();
+    }
+
+    /// <summary>
     /// 发送前解析模型客户端。返回 null 表示这一轮发不出去，<b>并且提示已经在这里给过了</b>，
     /// 调用方直接放弃即可。
     ///
@@ -764,15 +779,7 @@ public partial class ConversationView : UserControl, IInteractionHost
     {
         if (_runtime.IsBusy || string.IsNullOrWhiteSpace(text)) return;
 
-        // 历史还没读完就先等它。界面为了快速进窗只渲染了最后一批，但「读库」是另一回事：
-        // 这时发送会把残缺历史交给模型，上下文静默丢一段 —— 所以宁可让用户等这一下。
-        // 正常情况这里早就完成了，await 直接过；只有「刚打开窗口就抢着发」才会真的等。
-        if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
-        {
-            Input.ShowHint("正在加载历史记录，完成后自动发送…", InputHintKind.Info, autoHide: false);
-            await loadTcs.Task;
-            Input.HideHint();
-        }
+        await WaitForHistoryAsync("发送");
 
         // 没有可用模型就挡在这里，输入内容原样保留 —— 用户去配好模型回来还能接着发。
         // 这一步必须在清空输入框之前：失败一次就要人重打一遍，那是很糟的体验。
@@ -813,9 +820,9 @@ public partial class ConversationView : UserControl, IInteractionHost
     /// 接上 runtime 的事件。请求执行、工具循环、落库、标题、提醒全在
     /// <see cref="ConversationRuntime"/> 里 —— 这样同一套逻辑在没有窗口时也能跑完（插件后台任务）。
     ///
-    /// <b>订阅是长久的</b>：视图一直活着（会话窗口缓存会留着它），runtime 与它同生命周期，
-    /// 不会出现「事件发到已销毁的视图上」。将来 runtime 跨视图复用时，
-    /// 这里要改成 attach / detach 成对订阅。
+    /// <b>订阅活到窗口被丢弃为止</b>（<see cref="Dispose"/> 里退订），而不是「离开可视树就退订」：
+    /// 用户切到别的会话时这个窗口只是从可视树上摘下来，缓存还留着它，
+    /// 这一轮如果还在跑，后续增量必须继续画进它——退订的话切回来会缺一大段。
     /// </summary>
     private void HookRuntime()
     {
@@ -832,6 +839,51 @@ public partial class ConversationView : UserControl, IInteractionHost
         _runtime.ToolCallsRepaired += BuildToolCallIndex;
         _runtime.HistoryRebuildRequested += OnHistoryRebuildRequested;
         _runtime.CompressingChanged += OnCompressingChanged;
+    }
+
+    /// <summary>
+    /// 退订。**必须与 <see cref="HookRuntime"/> 严格对称** ——
+    /// runtime 可以比窗口活得久（插件还借着手里的租约），漏退一个订阅，
+    /// 这个已经没人显示的窗口就会继续收增量、继续占着整棵消息树的内存。
+    /// </summary>
+    private void UnhookRuntime()
+    {
+        _runtime.RoundStarted -= OnRoundStarted;
+        _runtime.ContentDelta -= OnContentDelta;
+        _runtime.ThinkingDelta -= OnThinkingDelta;
+        _runtime.ToolCallDelta -= OnToolCallDelta;
+        _runtime.MessageInserted -= OnMessageInserted;
+        _runtime.MessageUpdated -= OnMessageUpdated;
+        _runtime.BusyChanged -= OnBusyChanged;
+        _runtime.RetryScheduled -= OnRetryScheduled;
+        _runtime.ActivityChanged -= ReportActivity;
+        _runtime.TurnEnded -= OnTurnEnded;
+        _runtime.ToolCallsRepaired -= BuildToolCallIndex;
+        _runtime.HistoryRebuildRequested -= OnHistoryRebuildRequested;
+        _runtime.CompressingChanged -= OnCompressingChanged;
+    }
+
+    /// <summary>
+    /// 扔掉这个窗口：退订 runtime、断开它对本窗口的两处引用，再把租约还回去。
+    ///
+    /// <b>由 <see cref="SessionViewCache"/> 在淘汰时调用</b>，不是「离开可视树」时调用 ——
+    /// 缓存里的窗口只是暂时没显示，还要继续接收正在跑的那一轮的增量。
+    ///
+    /// 还掉租约之后，如果没人再借这个会话的运行时、且当前没有轮次在跑，
+    /// 注册表会把它一并丢掉；插件还借着的则照常活着，继续跑它的任务。
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        UnhookRuntime();
+
+        // runtime 上有两处直接指向本窗口的东西，不清掉就等于把整棵控件树留在 runtime 上
+        if (ReferenceEquals(_runtime.Interaction, this)) _runtime.Interaction = null;
+        _runtime.SummaryModelIdProvider = null;
+
+        _lease?.Dispose();
     }
 
     /// <summary>
@@ -909,10 +961,21 @@ public partial class ConversationView : UserControl, IInteractionHost
             _activeTurnRoot.Children.Add(CreateAiReplyOps(_activeTurnId, turnAssistants, _activeTurnHost));
         }
 
-        // 重新生成时新回复是插在中间的，流式期间先落在目标位置、生成完统一重排一次。
-        // 这里必须 await：重排会清空并重填 Messages，抢在下一次发送前面才安全。
-        if (outcome.IsRegenerate) await ReloadMessagesAsync();
-        else ScrollToEnd();
+        if (outcome.IsRegenerate)
+        {
+            // 重新生成：runtime 已经把库里的新顺序读回来了，重绘也随 HistoryRebuildRequested 做过了
+            ScrollToEnd();
+        }
+        else if (_activeTurnRoot is null)
+        {
+            // 这一轮没有对应的控件（视图是它跑到一半才挂上来的，或者它由插件在后台发起）：
+            // 流式增量没有落点，内容只在 Messages 里，不重绘就永远看不见
+            await ReloadMessagesAsync();
+        }
+        else
+        {
+            ScrollToEnd();
+        }
 
         // 这一段的控件归属到此为止：之后不会再有增量，留着只会让迟到的回调写进旧块
         _round = null;
@@ -986,12 +1049,7 @@ public partial class ConversationView : UserControl, IInteractionHost
         }
 
         // 历史没读完不能重生成：上下文会缺一段
-        if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
-        {
-            Input.ShowHint("正在加载历史记录，完成后自动重新生成…", InputHintKind.Info, autoHide: false);
-            await loadTcs.Task;
-            Input.HideHint();
-        }
+        await WaitForHistoryAsync("重新生成");
 
         var settings = await BuildTurnSettingsAsync("重新生成");
         if (settings is null) return;
@@ -1023,12 +1081,7 @@ public partial class ConversationView : UserControl, IInteractionHost
             return;
         }
 
-        if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
-        {
-            Input.ShowHint("正在加载历史记录，完成后自动重试…", InputHintKind.Info, autoHide: false);
-            await loadTcs.Task;
-            Input.HideHint();
-        }
+        await WaitForHistoryAsync("重试");
 
         var settings = await BuildTurnSettingsAsync("重试");
         if (settings is null) return;
@@ -1056,12 +1109,7 @@ public partial class ConversationView : UserControl, IInteractionHost
             return;
         }
 
-        if (!_historyLoaded && _historyLoadTcs is { } loadTcs)
-        {
-            Input.ShowHint("正在加载历史记录，完成后自动继续…", InputHintKind.Info, autoHide: false);
-            await loadTcs.Task;
-            Input.HideHint();
-        }
+        await WaitForHistoryAsync("继续");
 
         // 按钮的显示条件已经保证过一次，但期间历史可能变了（这一轮后面又跑出了新回复、或那一轮被删了）。
         // 说清楚为什么不动，别让点了没反应 —— 那颗按钮留在原地是正常的，收掉它反而更奇怪。
@@ -1970,28 +2018,12 @@ public partial class ConversationView : UserControl, IInteractionHost
         await ReloadMessagesAsync();
     }
 
-    private async Task ReloadMessagesAsync()
-    {
-        Messages.Clear();
-        try
-        {
-            Messages.AddRange(await ChatRepository.GetBySessionAsync(Profile.State.SessionId));
-        }
-        finally
-        {
-            // 同 LoadMessagesAsync：失败也要放行，不能让等待中的发送永远悬着
-            _historyLoaded = true;
-            _historyLoadTcs?.TrySetResult();
-        }
-        _activeTurnId = null;
-        _activeTurnRoot = null;
-        _activeTurnHost = null;
-        _activeTurnCard = null;
-        _activeTurnBody = null;
-        _round = null;
-        RenderHistory();
-        ScrollToEnd();
-    }
+    /// <summary>
+    /// 从库里重读并重绘。数据在 <see cref="ConversationRuntime.ReloadMessagesAsync"/> 里，
+    /// 重绘走 <see cref="OnHistoryRebuildRequested"/> —— 两边共用同一条路，
+    /// 不会出现「重读了但没重绘」或者反过来。
+    /// </summary>
+    private Task ReloadMessagesAsync() => _runtime.ReloadMessagesAsync();
 
     /// <summary>
     /// 正在流式渲染的这一段回复。<b>每段 assistant 消息一个</b>（工具循环里会有多段），

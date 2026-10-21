@@ -30,6 +30,27 @@ public sealed class SessionViewCache
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// 缓存键 → 正在显示这个窗口的宿主（页面实例）。
+    ///
+    /// <b>为什么需要它</b>：缓存是<b>全进程</b>共用的，但「正在显示」是<b>每个页面</b>各自知道的。
+    /// 开两个「智能对话」标签页时，A 页显示会话 X、B 页显示会话 Y，
+    /// 各自的淘汰器只知道自己手上那一个 —— B 的淘汰器看到 X「很久没显示」就会把它清掉，
+    /// 而 X 此刻正挂在 A 页上。清掉的后果不是「下次重新加载」，是 A 页那个窗口当场退订、
+    /// 还掉租约，界面从此不再更新。
+    /// </summary>
+    private readonly Dictionary<string, object> _holders = new(StringComparer.Ordinal);
+
+    /// <summary>登记「这个窗口正被某个宿主显示着」，淘汰时跳过。一个窗口同时只可能被一个宿主显示。</summary>
+    public void Claim(string key, object holder) => _holders[key] = holder;
+
+    /// <summary>放弃某个宿主持有的全部登记（切到新建页、关标签页、被别的页面抢走时）。</summary>
+    public void ReleaseHolder(object holder)
+    {
+        foreach (var key in _holders.Where(kv => ReferenceEquals(kv.Value, holder)).Select(kv => kv.Key).ToList())
+            _holders.Remove(key);
+    }
+
+    /// <summary>
     /// 全进程共用的一份缓存。
     ///
     /// <b>必须共用，不能每个页面一份。</b>每个标签页都有自己的 <c>ConversationPage</c>，
@@ -106,14 +127,35 @@ public sealed class SessionViewCache
                 entry.LastShownUtc = utcNow;
     }
 
-    /// <summary>移除一条（会话被删除、工作空间被删除时调用，否则删了还能从缓存切回来）。</summary>
-    public bool Evict(string key) => _entries.Remove(key);
+    /// <summary>
+    /// 移除一条（保留期到了、会话被删除、工作空间被删除时调用，否则删了还能从缓存切回来）。
+    ///
+    /// <b>顺带把窗口扔掉</b>（<see cref="ConversationView.Dispose"/>）：它退了 runtime 的订阅、
+    /// 还掉租约，这样「缓存里没有的东西」就真的没人再引用它了。只从字典里删键而不扔窗口，
+    /// 那个窗口会被 runtime 的事件一直吊着 —— 缓存看着是空的，内存其实还在涨。
+    /// </summary>
+    public bool Evict(string key)
+    {
+        if (!_entries.TryGetValue(key, out var entry)) return false;
+
+        // 还有宿主在显示它：键可以带走（下次按需重建），但窗口<b>不能</b>扔 ——
+        // 扔了就是把人家正看着的那个界面退订掉
+        if (_holders.ContainsKey(key))
+        {
+            _entries.Remove(key);
+            return true;
+        }
+
+        _entries.Remove(key);
+        entry.View.Dispose();
+        return true;
+    }
 
     /// <summary>按前缀批量移除，例如删掉一个工作空间时要带走它下面所有会话的窗口。</summary>
     public void EvictWhere(Func<string, bool> predicate)
     {
         foreach (var key in _entries.Keys.Where(predicate).ToList())
-            _entries.Remove(key);
+            Evict(key);
     }
 
     /// <summary>
@@ -128,8 +170,8 @@ public sealed class SessionViewCache
     }
 
     /// <summary>
-    /// 挑出超过保留期的键。<paramref name="keepKey"/> 是当前正在显示的那个——
-    /// 它的「最后显示时间」就是现在，本来也不会过期，但显式排除掉可以防住时钟回拨之类的意外。
+    /// 挑出超过保留期的键。<b>有宿主正在显示的一律跳过</b>（见 <see cref="Claim"/>）——
+    /// 包括本页正在看的那个，所以调用方不必再传「别动我手上这个」。
     /// </summary>
     /// <param name="retention">保留时长；传 <see cref="Timeout.InfiniteTimeSpan"/> 表示一直保留（永远返回空）。</param>
     /// <param name="isPinned">
@@ -139,14 +181,14 @@ public sealed class SessionViewCache
     /// 所以只要任务没结束，窗口就不许走。
     /// </param>
     public IReadOnlyList<string> CollectExpired(
-        DateTime utcNow, TimeSpan retention, string? keepKey = null, Func<string, bool>? isPinned = null)
+        DateTime utcNow, TimeSpan retention, Func<string, bool>? isPinned = null)
     {
         if (retention == Timeout.InfiniteTimeSpan) return Array.Empty<string>();
 
         var expired = new List<string>();
         foreach (var (key, entry) in _entries)
         {
-            if (key == keepKey) continue;
+            if (_holders.ContainsKey(key)) continue;
             if (isPinned?.Invoke(key) == true) continue;
             if (utcNow - entry.LastShownUtc > retention) expired.Add(key);
         }

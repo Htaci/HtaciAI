@@ -122,9 +122,10 @@ public partial class ConversationPage : UserControl
             // 正在显示的这一个每轮都刷新：用户可能停在这一页读了一小时，
             // 期间没有任何「切回」动作，不刷新就会被按「上次显示时间」淘汰掉 ——
             // 而淘汰掉正在看的窗口，下次进来就是一个重新读库的新窗口。
+            // （「不许淘汰正在显示的」由缓存里的持有者登记保证，跨标签页也成立。）
             if (_cacheKey is not null) _viewCache.Touch(_cacheKey, now);
 
-            foreach (var key in _viewCache.CollectExpired(now, CacheRetention(), _cacheKey, IsPinned))
+            foreach (var key in _viewCache.CollectExpired(now, CacheRetention(), IsPinned))
                 _viewCache.Evict(key);
         };
         _cacheSweeper.Start();
@@ -153,15 +154,34 @@ public partial class ConversationPage : UserControl
         base.OnAttachedToVisualTree(e);
         _cacheSweeper?.Start();
 
-        // 切回这个标签页时右侧可能是空的：窗口是全进程共用的，别的标签页打开同一个会话时
-        // 会把它从这里摘走（一个会话只允许一个窗口）。按会话 id 重新挂一次，缓存命中就原样回来。
+        // 切回这个标签页时右侧是空的（见下面 OnDetachedFromVisualTree）：
+        // 按会话 id 重新挂一次 —— 缓存命中就把原来那个窗口原样挂回来（滚动位置都还在），
+        // 已过期就用注册表里可能还活着的运行时重绘，都没了才重新读库。
         if (_activeSessionId is { } id && RightPanel.Content is null)
             _ = OpenSessionAsync(id);
     }
 
+    /// <summary>
+    /// 离开可视树（切标签页 / 关标签页）：停掉淘汰定时器，并且<b>把窗口交回缓存</b>。
+    ///
+    /// 必须交回：隐藏起来的标签页没人看着，它的窗口在缓存里就可能过期被清
+    /// （另一个标签页的淘汰器并不知道这一页还攥着一个）。清掉之后如果把 Content 留着，
+    /// 切回来看到的就是一个已经退订、不再更新的死窗口。
+    /// 交回去之后，切回来按会话 id 重新取：命中就原样挂上，没命中就重建 —— 两种情况都正确。
+    /// </summary>
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         _cacheSweeper?.Stop();
+
+        // 只交回「缓存里的会话窗口」；「新建会话」页与空提示不在缓存里，也不会过期，
+        // 清掉它们只会让切回标签页时看到一片空白。
+        if (_cacheKey is not null)
+        {
+            _viewCache.Touch(_cacheKey, DateTime.UtcNow);
+            _viewCache.ReleaseHolder(this);
+            RightPanel.Content = null;
+        }
+
         base.OnDetachedFromVisualTree(e);
     }
 
@@ -181,9 +201,14 @@ public partial class ConversationPage : UserControl
 
         if (isNew)
         {
+            // 运行时按会话复用：插件（桌宠之类）可能早就借着一份在后台跑了，
+            // 这时窗口挂上来直接用同一份 —— 既有历史、也接得上正在跑的那一轮。
+            var sessionId = SessionViewCache.SessionIdOf(key);
+
             view = _viewCache.GetOrAdd(key, () =>
             {
-                var created = new ConversationView(createProfile());
+                var lease = ConversationRuntimeRegistry.Shared.Acquire(sessionId, createProfile);
+                var created = new ConversationView(lease.Runtime, lease);
                 configure?.Invoke(created);
                 created.Updated += OnConversationUpdated;
                 var createdView = created;
@@ -202,6 +227,10 @@ public partial class ConversationPage : UserControl
         // 一个会话只能有一份窗口：缓存是共用的一份，这个窗口可能正挂在别的标签页上。
         // 先把它从原来的宿主摘下来，否则把它塞进本页的 ContentControl 会撞上「已有父级」。
         DetachFromOtherHost(view!);
+
+        // 登记「这个窗口在本页显示着」：别的标签页的淘汰器据此跳过它
+        _viewCache.ReleaseHolder(this);
+        _viewCache.Claim(key, this);
 
         _cacheKey = key;
         RightPanel.Content = view;
@@ -938,6 +967,7 @@ public partial class ConversationPage : UserControl
         _activeSessionId = null;
         _activeWorkspaceId = null;
         _cacheKey = null;             // 「新建」页不是某个会话的窗口，别让它挡住缓存淘汰
+        _viewCache.ReleaseHolder(this);
 
         var view = new NewChatView();
         view.SendRequested += OnNewChatSend;
@@ -1122,6 +1152,7 @@ public partial class ConversationPage : UserControl
             _activeSessionId = null;
             _activeWorkspaceId = null;
             _cacheKey = null;
+            _viewCache.ReleaseHolder(this);
             RightPanel.Content = EmptyHint("选择左侧会话，或点击「创建新会话」");
         }
 
@@ -1184,6 +1215,7 @@ public partial class ConversationPage : UserControl
             _activeSessionId = null;
             _activeWorkspaceId = null;
             _cacheKey = null;
+            _viewCache.ReleaseHolder(this);
             RightPanel.Content = EmptyHint("选择左侧会话，或点击「创建新会话」");
         }
 

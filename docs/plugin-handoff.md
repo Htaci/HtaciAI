@@ -184,18 +184,53 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
   手动压缩（摘要落库）与「刚压过再压」的收敛。
   这一轮同时证明了 M1 的目的：**跑一轮对话不再需要打开的视图**。
 
-配套（**唯一剩下的一步**）：`ConversationRuntimeRegistry`（按 sessionId 复用，视图关闭不销毁——
-桌宠后台工作的前提）。现在仍是一个视图一个 runtime。
+### 7. `ConversationRuntimeRegistry`（M1 收尾）
 
-接 registry 时要一并解决的几件事（别只做「字典复用」）：
+`Services/Conversations/ConversationRuntimeRegistry.cs`：一个会话一份运行时，视图关掉也不销毁。
 
-1. **谁负责读历史**：runtime 已经能自己 `ReloadMessagesAsync`，但视图的 `LoadMessagesAsync`
-   还带着首屏分段渲染的计时与 `_historyLoaded` 门闩。复用后要改成「runtime 只读一次，
-   视图重新挂上时只重绘」。
-2. **事件订阅成对**：视图现在是「构造即订阅、永不退订」。跨视图复用后必须
-   `AttachedToVisualTree` 订阅 / `DetachedFromVisualTree` 退订，否则两个视图会同时收到增量。
-3. **回收**：引用计数（视图 + 插件订阅）归零且没有活跃轮次时才允许回收，运行中的会话不许回收
-   —— 与 `SessionViewCache` 的钉住逻辑同款。
+| 东西 | 说明 |
+| --- | --- |
+| `Acquire(sessionId, profileFactory)` | 借出运行时，返回 `ConversationRuntimeLease`（`IDisposable`）。有就复用，没有才用工厂新建——工厂只在新建时调用一次 |
+| 引用计数 | 视图借一次、插件订阅时借一次；租约 `Dispose` 减一，重复 `Dispose` 安全 |
+| 回收 | 归零**且没有正在跑的轮次**时立即丢掉。不设空闲计时器：数据比控件树便宜，但「什么时候会消失」必须可预测 |
+| 跑着不丢 | 归零但 `IsBusy` 时先留着，等 `BusyChanged(false)` 再收。半路丢掉等于让调用方攥着一个之后再也找不到的会话 |
+
+配套改动：
+
+1. **读库交给 runtime**：`EnsureReadyAsync()`（载入档案 + 读一次全量历史 + 修一次残缺工具消息，幂等）
+   搬进 `ConversationRuntime`；`SendAsync` / `RegenerateAsync` / `RetryAsync` / `ContinueAsync` /
+   `CompressAsync` 进门先 `await` 它。视图的 `LoadMessagesAsync` 与 `_historyLoaded` / `_historyLoadTcs`
+   全部删掉，改成 `RenderLoadedHistory()`（只画，不读）。插件在会话没打开时发起对话也不会拿到空上下文。
+2. **视图可被丢弃**：`ConversationView` 实现 `IDisposable`，`Dispose` 里退订 runtime、清掉
+   runtime 上指向本视图的两处（`Interaction` / `SummaryModelIdProvider`）、还租约。
+   **订阅活到丢弃为止，而不是「离开可视树就退订」** —— 切到别的会话时窗口只是被摘下来，
+   这一轮如果还在跑，后续增量必须继续画进它。
+3. **`SessionViewCache.Evict` 顺带丢弃窗口**：只从字典删键而不丢窗口，那个窗口会被 runtime 的
+   事件一直吊着 —— 缓存看着是空的，内存其实还在涨。
+4. **跨标签页的「正在显示」登记**：缓存是**全进程**共用的，但「正在显示」是每个页面各自知道的。
+   两个「智能对话」标签页各显示一个会话时，B 页的淘汰器会把 A 页正看着的那个当「很久没显示」清掉，
+   清掉的后果不是「下次重新加载」，是那个窗口当场退订、界面从此不再更新。
+   所以 `CollectExpired` 的 `keepKey` 参数换成了 `Claim(key, holder)` / `ReleaseHolder(holder)` 登记。
+   页面离开可视树时把窗口交回缓存（`RightPanel.Content = null`），切回来按会话 id 重新挂
+   —— 命中就原样挂上（滚动位置都在），没命中就重建。
+5. **重新生成后的重排由 runtime 自己做**：`InsertMessagesAtAsync` 之后立即 `ReloadMessagesAsync()`。
+   内存里的 `Messages` 原本还是「追加在末尾」的顺序，与库不一致；等宿主重绘的话，
+   插件在后台重新生成时没有宿主，顺序错了就再没人纠正。
+6. **一轮没有控件时补渲染**：`OnTurnEnded` 发现 `_activeTurnRoot` 为空（视图是这一轮跑到一半
+   才挂上来的，或者它由插件在后台发起）就整体重绘 —— 否则流式增量没有落点，内容只在
+   `Messages` 里，永远看不见。
+
+已验证（无头，不建界面）：
+
+- 同一会话两次借到同一份运行时；读库只读一次
+- 没有视图也能跑完一轮并落库
+- 还有租约时保留、归零即回收、重新借是新实例且重读历史
+- 运行中归还时不回收，跑完才消失
+- 两个会话互不影响；重复 `Dispose` 不会误减别人的引用
+
+界面侧另验证：打开会话 → 切到另一个会话 → 切回来（历史与窗口都在）；
+慢速流式跑到一半切走再切回（流式继续画进同一个窗口，跑完后操作栏与 Tokens 正常）；
+切到「设置」标签页再切回来（窗口交回缓存后按 id 重新挂上，会话完整恢复）。
 
 > 另外记下了插件清单的字段设想（平台独占、前置依赖、循环依赖与连带停用规则），
 > 见 [`plugin-manifest.md`](./plugin-manifest.md)。清单继续用 JSON，不上 ini。

@@ -114,6 +114,12 @@ public sealed class ConversationRuntime
     /// <summary>下一段回复要插进历史的哪个位置之后（重新生成用）。取一次就清，见 <see cref="TakePendingInsertSequence"/>。</summary>
     private int? _pendingInsertSequence;
 
+    /// <summary>会话存档与全量历史是否已就绪（读过一次库）。</summary>
+    public bool IsHistoryLoaded { get; private set; }
+
+    /// <summary>就绪过程本身。<b>并发调用共用一份</b>：视图与插件可能同时刚上手。</summary>
+    private Task? _readyTask;
+
     // ============================================================
     // 事件（都在 UI 线程上发出；没人订阅也能正常跑完一轮）
     // ============================================================
@@ -175,6 +181,13 @@ public sealed class ConversationRuntime
     {
         if (IsBusy) return null;
 
+        // 历史没读完就发，模型收到的是一段残缺的上下文，而且这种丢失是静默的。
+        // 放在这里而不是交给各个调用方：插件也可能在会话没打开时发起对话。
+        await EnsureReadyAsync();
+
+        // 等读库期间别人可能已经开跑了（连点两下、插件与视图同时发）
+        if (IsBusy) return null;
+
         IsBusy = true;
         BusyChanged?.Invoke(true);
         ActivityChanged?.Invoke(SessionActivity.Running);
@@ -207,6 +220,48 @@ public sealed class ConversationRuntime
         {
             IsBusy = false;
             BusyChanged?.Invoke(false);
+        }
+    }
+
+    /// <summary>
+    /// 准备好这个会话：载入档案、读一次全量历史、修一次残缺的工具消息。<b>幂等</b>。
+    ///
+    /// 这件事从视图搬到了这里 —— 谁先上手谁触发（视图、插件都行），
+    /// 之后所有人共用同一份历史。否则插件在会话没打开时发起对话，模型收到的是空上下文。
+    ///
+    /// 读库失败也会置为「已就绪」：不这么做的话，每个等待方都会永远挂在这里，
+    /// 用户看到的是「点了发送但什么都不会发生」—— 那是最难查的一类故障。
+    /// </summary>
+    public Task EnsureReadyAsync()
+    {
+        if (IsHistoryLoaded) return Task.CompletedTask;
+
+        _readyTask ??= ReadyCoreAsync();
+        return _readyTask;
+    }
+
+    private async Task ReadyCoreAsync()
+    {
+        try
+        {
+            await Profile.LoadAsync();
+
+            Messages.Clear();
+            try
+            {
+                Messages.AddRange(await ChatRepository.GetBySessionAsync(SessionId));
+            }
+            catch
+            {
+                // 忽略：见 EnsureReadyAsync 的说明
+            }
+
+            // 打开会话时懒修一次：只碰这个会话，不做全库扫描
+            await RepairToolCallPairingAsync();
+        }
+        finally
+        {
+            IsHistoryLoaded = true;
         }
     }
 
@@ -332,10 +387,16 @@ public sealed class ConversationRuntime
 
         // 重新生成：新消息落库时拿到的序列号在会话末尾（当下只能拿到「最大值 + 1」），
         // 这里把它们挪回原位置，否则重生成的回复会跑到最后一轮后面。
+        //
+        // 挪完必须重读一次：内存里的 Messages 还是「追加在末尾」的顺序，与库不一致。
+        // 这件事放在 runtime 里而不是等宿主重绘 —— 插件在后台重新生成时没有宿主，
+        // 顺序错了之后就再没人会去纠正它。
         if (request.InsertAfterSequence is { } after)
         {
             try { await ChatRepository.InsertMessagesAtAsync(SessionId, after, persisted); }
             catch { /* 忽略：位置不对总好过整轮回复丢掉 */ }
+
+            await ReloadMessagesAsync();
         }
 
         await RaiseTurnEndedAsync(new TurnOutcome(
@@ -404,6 +465,7 @@ public sealed class ConversationRuntime
     public async Task<ChatTurnResult?> RegenerateAsync(ChatMessage trigger, TurnSettings settings)
     {
         if (IsBusy) return null;
+        await EnsureReadyAsync();
 
         var triggerIndex = Messages.FindIndex(m => m.Id == trigger.Id);
         if (triggerIndex < 0) return null;
@@ -464,6 +526,7 @@ public sealed class ConversationRuntime
     public async Task<ChatTurnResult?> RetryAsync(ChatMessage anchor, TurnSettings settings)
     {
         if (IsBusy) return null;
+        await EnsureReadyAsync();
 
         var anchorIndex = Messages.FindIndex(m => m.Id == anchor.Id);
         if (anchorIndex < 0) return null;
@@ -499,6 +562,8 @@ public sealed class ConversationRuntime
     public async Task<ChatTurnResult?> ContinueAsync(string turnId, TurnSettings settings)
     {
         if (IsBusy) return null;
+        await EnsureReadyAsync();
+
         if (!IsTurnResumable(turnId)) return null;
 
         var history = Messages.ToList();
@@ -598,6 +663,8 @@ public sealed class ConversationRuntime
     public async Task<CompressResult> CompressAsync(bool manual, CancellationToken ct = default)
     {
         if (IsCompressing) return CompressResult.Skipped;
+
+        await EnsureReadyAsync();
 
         if (!ContextCompression.HasCompressibleContent(Messages))
             return manual ? CompressResult.Empty : CompressResult.Skipped;

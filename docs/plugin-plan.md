@@ -50,9 +50,9 @@ ConversationRuntime            （每会话一个，无 UI 依赖）
 ├─ 事件：见 2.3 的 ChatEvent
 └─ 交互出口：IInteractionHost（审批 / 提问）
 
-ConversationRuntimeRegistry    （进程内，按 sessionId）
-├─ GetOrCreate(profileFactory)
-├─ 引用计数：视图 + 插件订阅 == 0 且无活跃轮次时，空闲 N 分钟后回收
+ConversationRuntimeRegistry    （进程内，按 sessionId）— ✅ 已实现
+├─ Acquire(sessionId, profileFactory) → 租约（IDisposable）
+├─ 引用计数：视图 + 插件订阅 == 0 且无活跃轮次时立即回收（运行中的等它跑完）
 └─ 视图关闭不销毁 runtime —— 这是桌宠能在后台工作的前提
 
 ConversationView               （纯渲染 + 输入）
@@ -441,7 +441,7 @@ public sealed class WindowOptions
 | 里程碑 | 内容 | 依赖 | 状态 |
 | --- | --- | --- | --- |
 | M0 | `HtaciAI.Plugin.Abstractions` + `PluginManager` + `AppPaths.Plugins` + `state.json` + 空插件能加载/卸载/重启提示 | 无 | ✅ 已完成并通过实测 |
-| M1 | `ConversationRuntime` 拆分 A/B/C 三步 | 无 | ✅ A/B/C 已完成；`ConversationRuntimeRegistry` 待接 |
+| M1 | `ConversationRuntime` 拆分 A/B/C 三步 + `ConversationRuntimeRegistry` | 无 | ✅ 已完成 |
 | M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 | ⬜ 未开始 |
 | M3 | `ISessionFacade`（主动发起、取消、改权限、agent 旁注） | M1 | ⬜ 未开始 |
 | M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ⬜ 未开始 |
