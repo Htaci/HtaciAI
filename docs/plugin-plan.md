@@ -1,7 +1,10 @@
 # 插件系统实施计划
 
 > 目标：让第三方扩展能参与 UI、上下文构建与会话生命周期，首个验证案例是「AI 对话桌宠」。
-> 本文只做计划，不含实现。所有路径相对仓库根目录。
+> 所有路径相对仓库根目录。
+>
+> **进度交接请看 [`plugin-handoff.md`](./plugin-handoff.md)** —— 那一份记录已完成项、
+> 踩过的坑与下一步，本文只保留设计与验收标准。
 
 ## 0. 范围
 
@@ -16,7 +19,6 @@
 **不做（明确排除）**
 - 安全沙箱。插件在宿主进程 UI 线程上跑，能读写任意文件、执行任意代码。能提供的只有「声明 + 启用前展示 + 故障隔离」，不承诺隔离。
 - 在线分发 / 插件商店。只从 `<数据根>/plugins/` 加载。
-- 内存级热卸载。禁用 = 停止投递 + 收窗口 + 撤销注册，不回收程序集。
 - 跨进程 / 跨语言插件。
 
 **前置结论**：第一步必须先做一次内部重构（第 1 节），否则「插件在会话未打开时也能发起对话」无法成立。
@@ -430,15 +432,18 @@ public sealed class WindowOptions
 
 ## 6. 里程碑
 
-| 里程碑 | 内容 | 依赖 |
-| --- | --- | --- |
-| M0 | `HtaciAI.Plugin.Abstractions` + `PluginManager` + `AppPaths.Plugins` + `state.json` + 空插件能加载/卸载/重启提示 | 无 |
-| M1 | `ConversationRuntime` 拆分 A/B/C 三步 | 无 |
-| M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 |
-| M3 | `ISessionFacade`（主动发起、取消、改权限、agent 旁注） | M1 |
-| M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 |
-| M5 | 桌宠插件（先窗口+气泡，后主动发起） | M2、M3、M4 |
-| M6 | 设置页「插件」：列表、启用/禁用、能力清单、贡献配额、错误状态、内存释放状态；`NewTabPage` 里注释掉的入口接上 | M0 |
+| 里程碑 | 内容 | 依赖 | 状态 |
+| --- | --- | --- | --- |
+| M0 | `HtaciAI.Plugin.Abstractions` + `PluginManager` + `AppPaths.Plugins` + `state.json` + 空插件能加载/卸载/重启提示 | 无 | ✅ 已完成并通过实测 |
+| M1 | `ConversationRuntime` 拆分 A/B/C 三步 | 无 | ⬜ 未开始 |
+| M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 | ⬜ 未开始 |
+| M3 | `ISessionFacade`（主动发起、取消、改权限、agent 旁注） | M1 | ⬜ 未开始 |
+| M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ⬜ 未开始 |
+| M5 | 桌宠插件（先窗口+气泡，后主动发起） | M2、M3、M4 | ⬜ 未开始 |
+| M6 | 设置页「插件」：列表、启用/禁用、能力清单、贡献配额、错误状态、内存释放状态；`NewTabPage` 里注释掉的入口接上 | M0 | ⬜ 未开始 |
+
+**下一步建议**：M1（`ConversationRuntime` 拆分）是 M2/M3 的前置，也是工作量大头；
+M4/M6 只依赖 M0，可以先做掉以尽快看到插件跑起来。
 
 ---
 
