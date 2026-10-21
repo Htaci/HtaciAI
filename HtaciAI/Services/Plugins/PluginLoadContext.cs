@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 
@@ -60,8 +59,36 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
         // 插件自带的依赖：只从插件目录取，绝不回落到程序目录 ——
         // 回落到程序目录会让「插件想用某个库的特定版本」这件事失效。
         var candidate = Path.Combine(_directory, name + ".dll");
-        return File.Exists(candidate) ? LoadFromAssemblyPath(candidate) : null;
+        return File.Exists(candidate) ? ReadIntoMemory(candidate) : null;
     }
+
+    /// <summary>
+    /// 把程序集读成字节流再加载，<b>不用 <c>LoadFromAssemblyPath</c></b>。
+    ///
+    /// 那个 API 在 Windows 上会把 dll 映射成映像节（image section），映射一旦建立，
+    /// 文件就一直不能以写方式打开 —— 即使 ALC 已经卸载、引用也断干净了。
+    /// 实测：`LoadFromAssemblyPath` 加载过的插件，禁用后 10 轮 GC 之后文件依旧不可写，
+    /// 用户没法更新插件、也没法删除它。走流加载则只读一次文件就关闭句柄，
+    /// 卸载后文件立刻可以替换。
+    ///
+    /// 代价是 <see cref="Assembly.Location"/> 为空（依赖解析因此只能靠这里的手工查找，
+    /// 不能用 <c>AssemblyDependencyResolver</c>），且原生 dll 需要插件自己处理。
+    /// 对插件这种「自带依赖放在同目录」的形态来说，这两条都可以接受。
+    /// </summary>
+    private Assembly ReadIntoMemory(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+
+        // 有 pdb 就一起读进去，异常栈里才有行号；没有就只加载本体。
+        var pdbPath = Path.ChangeExtension(path, ".pdb");
+        if (File.Exists(pdbPath))
+            return LoadFromStream(new MemoryStream(bytes), new MemoryStream(File.ReadAllBytes(pdbPath)));
+
+        return LoadFromStream(new MemoryStream(bytes));
+    }
+
+    /// <summary>加载入口程序集（<c>plugin.json</c> 里 entry 指定的那个）。</summary>
+    public Assembly LoadPluginAssembly(string path) => ReadIntoMemory(path);
 
     private static bool ShouldUseDefaultContext(string name)
     {

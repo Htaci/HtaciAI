@@ -338,7 +338,9 @@ public sealed partial class PluginManager
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static IPlugin CreatePluginInstance(PluginLoadContext alc, PluginManifest manifest, string entryPath)
     {
-        var assembly = alc.LoadFromAssemblyPath(entryPath);
+        // 入口程序集也走流加载：LoadFromAssemblyPath 会把 dll 映射成映像节，
+        // 之后文件就一直不能写（插件没法更新、也没法删）。原因见 PluginLoadContext.ReadIntoMemory。
+        var assembly = alc.LoadPluginAssembly(entryPath);
 
         var type = assembly.GetType(manifest.EntryType, throwOnError: false)
             ?? throw new InvalidOperationException($"程序集里找不到类型 {manifest.EntryType}");
@@ -526,61 +528,47 @@ public sealed partial class PluginManager
     /// 断开引用并尝试卸载。
     ///
     /// <b>必须是两个独立的栈帧</b>：<c>Unload()</c> 要在一个「之后立刻返回」的帧里做，
-    /// GC 在另一个帧里做。实测过：在同一个方法里 Unload 完就地 <c>GC.Collect</c>，
-    /// 那个仍然存着 ALC 的局部变量会让回收永远失败，判定就永远偏向「需重启」——
-    /// 表现为所有插件都提示需要重启，而其实它们都能卸掉。
+    /// GC 在另一个帧里做。在同一个方法里 Unload 完就地 <c>GC.Collect</c> 时，
+    /// 那个仍然存着 ALC 的局部变量会让回收永远失败 —— 表现为所有插件都提示需要重启。
     /// </summary>
-    /// <returns>true = 插件文件仍被占用 / 程序集仍在内存里（没能卸载）。</returns>
+    /// <returns>true = 程序集仍在内存里（没能卸载）。</returns>
     private static bool UnloadLoadContext(PluginEntry entry)
     {
-        // 注意：这里【不能】有 alc 的局部变量。它必须只在 DetachAndUnload 那一帧里存在，
-        // 而那一帧在返回前就结束了 —— 这是实测出来的可靠写法。
+        // 这里【不能】有 alc 的局部变量：它必须只在 DetachAndUnload 那一帧里存在，
+        // 而那一帧在返回前就结束了。
         var weak = DetachAndUnload(entry);
         if (weak is null) return false;
 
-        var collected = IsCollected(weak);
+        Collect();
 
-        // 判定以「插件文件还能不能被替换」为准，而不是「ALC 对象有没有被回收」。
-        // 用户真正在意的就是这件事：需不需要重启才能更新文件。
-        // 而且它比 GC 判定稳定 —— 实测过一种情况：GC 已经收掉了 ALC 对象，
-        // 程序集映射却还在，此时按 GC 判会说「可以重载了」，实际却会再映射一份。
-        return !collected || IsPluginFileLocked(entry);
+        // 对象被回收 = 最彻底的卸载
+        if (!weak.IsAlive) return false;
+
+        // 对象还活着，但可能只是宿主某处留了引用（比如日志里存过异常、某个缓存按 Type 建过表）。
+        // 只要它的<b>程序集都卸掉了</b>，重新加载就是安全的 —— 那时已经不存在两份静态状态。
+        return weak.Target is not PluginLoadContext alc || !IsFullyUnloaded(alc);
     }
 
     /// <summary>
-    /// 插件目录里的 dll 是否仍被映射在进程里。
+    /// 这个上下文里的程序集是否都已卸载。
     ///
-    /// 用一个「独占读」去试探：已加载的程序集会一直握着文件句柄，
-    /// 此时任何 <see cref="FileShare.None"/> 的打开都会抛 <see cref="IOException"/>；
-    /// 没加载过则能正常打开。
-    ///
-    /// 只读打开就够了，不要求写权限 —— 插件装在只读目录里时也不该被误判成「已加载」。
+    /// 卸载完成后 <see cref="AssemblyLoadContext.Assemblies"/> 为空；
+    /// 对它调这个属性在已卸载状态下可能抛 <see cref="InvalidOperationException"/>，
+    /// 那种情况同样算「已卸完」。
     /// </summary>
-    private static bool IsPluginFileLocked(PluginEntry entry)
+    private static bool IsFullyUnloaded(PluginLoadContext alc)
     {
         try
         {
-            if (Directory.Exists(entry.Directory))
-            {
-                foreach (var file in Directory.EnumerateFiles(entry.Directory, "*.dll"))
-                {
-                    try
-                    {
-                        using var probe = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
-                    }
-                    catch (IOException)
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
+            return !alc.Assemblies.Any();
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
         }
         catch
         {
-            // 探测本身失败时按「没锁」处理：这种情况多半是目录权限问题，
-            // 报「需重启」会误导用户。
+            // 读不出来时不冒险：按「还有东西没卸掉」处理，宁可提示重启
             return false;
         }
     }
@@ -612,21 +600,17 @@ public sealed partial class PluginManager
     }
 
     /// <summary>
-    /// 收集若干轮：卸载的回收要跨多轮 GC —— 先回收外壳，再跑 ALC 自己的终结器，
-    /// 然后才轮到这个对象本身被回收。实测三轮不够（判定会误报「需重启」，
-    /// 但紧接着的一次 GC 又能把它收掉），所以这里多给几轮。
+    /// 强制 GC 若干轮。程序集卸载不是同步完成的：先标记、再跑终结器、
+    /// 最后在下一轮 GC 里真正释放，单轮不够。
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static bool IsCollected(WeakReference weak)
+    private static void Collect()
     {
-        for (var i = 0; i < 6; i++)
+        for (var i = 0; i < 4; i++)
         {
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
             GC.WaitForPendingFinalizers();
-            if (!weak.IsAlive) return true;
         }
-
-        return !weak.IsAlive;
     }
 
     // ============================================================

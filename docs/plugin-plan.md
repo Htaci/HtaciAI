@@ -307,31 +307,39 @@ public sealed class WindowOptions
   3. 关窗口、摘控件、撤销全部 `IDisposable`；
   4. `await Dispatcher.UIThread.InvokeAsync(() => { }, Background)` 冲掉 Dispatcher 队列；
   5. `alc.Unload()` + 多轮 `GC.Collect`；
-  6. **判定依据是「插件 dll 是否还能被独占打开」**，不是 `WeakReference.IsAlive`。
-     两条都查：文件仍被映射 → 「需重启」；文件可替换且引用已断 → 「已卸载」。
-  - 为什么以文件占用为准：用户真正在意的是「能不能更新文件、能不能再加载一次」，
-    而 GC 判定会受调用栈残留引用的干扰，出现「GC 说还活着、其实已经能卸」或反过来。
-    文件句柄是确定信号。
-  - 第 6 步判定为「需重启」后**不再尝试第二次 `Unload`**（重复卸载只会让状态更混乱）。
+  6. 判定：ALC 对象被回收 → 已卸载；对象还活着但 `alc.Assemblies` 已空 → 也算已卸载
+     （说明程序集卸干净了，重新加载不会出现两套静态状态）；否则 → 「需重启」。
+  - 判定为「需重启」后**不再尝试第二次 `Unload`**（重复卸载只会让状态更混乱）。
 
 **M0 实测结论（2026-10，Windows / .NET 10）**
 
-按上面流程跑下来，示例插件在 `Unload()` 后**文件始终处于被映射状态**，因此判定为「需重启」。
-已排除的原因（都单独写探针验证过，均能正常回收）：
+排查过程与最终结论（每条都用独立探针跑过）：
 
-| 已排除 | 结论 |
+| 变量 | 结果 |
 | --- | --- |
-| ALC 未加载任何东西 | 能回收 |
-| 只 `Activator.CreateInstance` | 能回收 |
-| 实例化 + 调 `InitializeAsync`/`ShutdownAsync`（同步等待） | 能回收 |
-| 带 `Load` 覆盖的 ALC 子类 | 能回收 |
-| `Assembly` / `Type` 局部变量留在 async 状态机里 | 已改为同步帧内加载，仍不行 |
-| 插件自己起的后台 `Task` | 关掉后仍不行 |
-| `await` 插件返回的 Task 挂在宿主 awaiter 上 | 已改为 detached 执行，仍不行 |
+| `LoadFromAssemblyPath` 加载 | 文件被映射成映像节，禁用后**始终不可写**，10 轮 GC 也不释放 |
+| 改用 `LoadFromStream`（读字节再加载） | 加载期间文件就可写；禁用后立刻可替换 ✅ |
+| 仅加载 / 仅实例化 / 实例化并调用 | 三种都能回收 |
+| 用真实的 `PluginContext` | **回收不掉** |
+| `PluginContext` 只构造、不交给插件 | 能回收 |
+| 把 `PluginContext` 拆成 Log / Storage / Resources 逐个真实化 | 只有 **Storage 真实实现**导致回收失败 |
+| Storage 只做文本读写（不序列化） | 能回收 |
+| Storage 用 `JsonSerializer.Serialize<T>` | **回收不掉** |
+| 改用非泛型 `Serialize(object, Type, options)` | **回收不掉** |
+| 每次新建 Options + 新建 `DefaultJsonTypeInfoResolver` | **回收不掉** |
+| 再调 `options.MakeReadOnly()` 冻结 | **回收不掉** |
 
-→ 说明还有一处宿主持有的引用没找到。**兜底行为是正确的**（禁用生效、提示需重启），
-但"禁用后立即重新启用"目前实际不可用。后续排查方向：
-`PluginContext` 实例被插件闭包持有、`Activator` 内部缓存、接口派发缓存。
+→ 根因有两条，都已修：
+1. **`LoadFromAssemblyPath` 会把 dll 映射成映像节**，禁用后文件不可写、程序集也不释放。
+   改为 `LoadFromStream`（读字节 → 流加载），文件不再被映射，卸载后立刻可替换。
+   代价是 `Assembly.Location` 为空、原生 dll 需插件自理（见 `PluginLoadContext.ReadIntoMemory`）。
+2. **用反射式 JSON 序列化处理插件自己的类型会让 ALC 回收不掉。**
+   System.Text.Json 把类型元数据缓存进运行时静态结构，而那个类型定义在插件程序集里，
+   于是永远被持有。换 options、换 resolver、冻结 options 都无效 —— 这是运行时的行为。
+   所以 `IPluginStorage` 新增 `LoadText` / `SaveText`（宿主只当字符串），作为推荐用法；
+   泛型 `Load<T>` / `Save<T>` 保留但明确标注「会导致需要重启才能卸载」。
+
+修完之后示例插件的加载 → 禁用 → 重新启用 → 再禁用**全程无需重启**。
 
 
 - **宿主持有插件状态，插件不许碰**：崩溃标记、崩溃计数、
@@ -450,7 +458,9 @@ public sealed class WindowOptions
 - 加载成功后在 `logs/plugin.log` 留下记录；插件私有存储落在 `plugin-data/<id>/`
 - 插件目录里带 `Avalonia*.dll` / `HtaciAI*.dll` 时被忽略并记警告
 - 禁用插件后：`ShutdownAsync` 被调用、订阅撤销、状态变为「已禁用」
-- 插件 dll 仍被映射时显示「需重启才能完全更新启用状态」，且不再尝试第二次卸载
+- **禁用 → 重新启用 → 再禁用，全程无需重启**（示例插件实测）
+- 加载期间与禁用之后，插件 dll 都可以被替换/删除（流加载，不建立映像节）
+- 用了泛型存储 API（序列化插件自身类型）的插件，禁用后显示「需重启」并说明原因
 - 崩溃归因：非正常退出 + 面包屑 → 下次启动跳过该插件、写 `logs/crash-*.log`、
   列表标「疑似导致上次崩溃」；确认启用后清标记并正常加载；`autoLoadAfterCrash` 勾上则崩溃后仍加载
 - 正常退出（`ShutdownRequested`）时：插件收尾 → 删运行标记 → 退出；
@@ -458,7 +468,6 @@ public sealed class WindowOptions
 - 主窗口关闭时进程退出（`ShutdownMode.OnMainWindowClose`）
 
 **M0 待补**
-- 禁用后立即重新启用：当前一律提示需重启（见 3.x 实测结论）
 - 设置页的插件管理页（M6）
 
 

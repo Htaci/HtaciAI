@@ -56,16 +56,45 @@ internal sealed partial class PluginContext : IPluginContext
 
         public string DataDirectory { get; }
 
+        public string? LoadText(string name)
+        {
+            if (!TryPath(name, out var path)) return null;
+            try
+            {
+                return File.Exists(path) ? File.ReadAllText(path) : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public bool SaveText(string name, string text)
+        {
+            if (!TryPath(name, out var path)) return false;
+            try
+            {
+                var temp = path + ".tmp";
+                File.WriteAllText(temp, text);
+                File.Move(temp, path, overwrite: true);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public T? Load<T>(string name) where T : class
         {
             if (!TryPath(name, out var path)) return null;
-            return JsonFileStore.Load<T>(path);
+            return PluginJson.Load<T>(path);
         }
 
         public bool Save<T>(string name, T value) where T : class
         {
             if (!TryPath(name, out var path)) return false;
-            return JsonFileStore.Save(path, value);
+            return PluginJson.Save(path, value);
         }
 
         private bool TryPath(string name, out string path)

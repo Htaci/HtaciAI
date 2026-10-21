@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Plugin.Abstractions;
@@ -24,17 +25,25 @@ public sealed class SamplePlugin : IPlugin
         public string? LastStartedAt { get; set; }
     }
 
+    /// <summary>从 "次数\n时间" 的文本里取次数；读不出来按 0。</summary>
+    private static int ParseCount(string? raw)
+        => int.TryParse(raw?.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(), out var n) ? n : 0;
+
+    private static string ParseTime(string? raw)
+        => raw?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault() ?? "(无)";
+
     public async Task InitializeAsync(IPluginContext context, CancellationToken ct)
     {
         context.Log.Info($"启动：宿主 {context.HostVersion}，插件目录 {context.PluginDirectory}");
 
-        // 演示私有存储：与插件目录分开，插件被替换时这里的数据不会丢
-        var stats = context.Storage.Load<Stats>("stats") ?? new Stats();
-        stats.LaunchCount++;
-        stats.LastStartedAt = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss");
-        context.Storage.Save("stats", stats);
-
-        context.Log.Info($"这是第 {stats.LaunchCount} 次启动（上次：{stats.LastStartedAt}）");
+        // 演示私有存储。用文本接口而不是泛型接口：
+        // 泛型版会用反射式 JSON 序列化处理插件自己的类型，而运行时会把那些类型永久缓存住，
+        // 结果就是这个插件禁用后无法卸载、必须重启程序。存成自己约定的文本就没这问题。
+        var raw = context.Storage.LoadText("stats");
+        var count = ParseCount(raw) + 1;
+        var now = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        context.Storage.SaveText("stats", $"{count}\n{now}");
+        context.Log.Info($"这是第 {count} 次启动（上次：{ParseTime(raw)}）");
 
         // 演示「插件必须自己停掉后台任务」：宿主没法从外部停它，
         // 留着运行中的定时器会让程序集无法卸载，禁用后就只能提示「需重启」。
