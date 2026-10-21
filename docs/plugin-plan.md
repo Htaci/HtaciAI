@@ -87,7 +87,9 @@ ConversationView               （纯渲染 + 输入）
   视图订阅 `RoundStarted` / `ContentDelta` / `ThinkingDelta` / `ToolCallDelta` /
   `MessageInserted` / `MessageUpdated` / `BusyChanged` / `TurnEnded` 渲染；
   交互出口抽成 `IInteractionHost`。这是风险最高的一步，已用本地假服务逐项回归。
-- **C**：迁 `Regenerate`/`Retry`/`Compress`/异步入审批与提问。
+- **C**（✅ 已完成）：迁 `Regenerate`/`Retry`/`Continue`/`Compress`（含自动压缩）与
+  历史重读、可继续判定、上下文用量口径。交互出口已抽成 `IInteractionHost`（B 步完成）。
+  这一步结束后，跑一轮对话不再需要打开的视图 —— 已用无头回归验证。
 
 每步验收见第 7 节。
 
@@ -439,7 +441,7 @@ public sealed class WindowOptions
 | 里程碑 | 内容 | 依赖 | 状态 |
 | --- | --- | --- | --- |
 | M0 | `HtaciAI.Plugin.Abstractions` + `PluginManager` + `AppPaths.Plugins` + `state.json` + 空插件能加载/卸载/重启提示 | 无 | ✅ 已完成并通过实测 |
-| M1 | `ConversationRuntime` 拆分 A/B/C 三步 | 无 | 🔶 A、B 已完成，C 未开始 |
+| M1 | `ConversationRuntime` 拆分 A/B/C 三步 | 无 | ✅ A/B/C 已完成；`ConversationRuntimeRegistry` 待接 |
 | M2 | `PromptComposer` + `IChatEventBus`（接在 runtime 上） | M1 | ⬜ 未开始 |
 | M3 | `ISessionFacade`（主动发起、取消、改权限、agent 旁注） | M1 | ⬜ 未开始 |
 | M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ⬜ 未开始 |

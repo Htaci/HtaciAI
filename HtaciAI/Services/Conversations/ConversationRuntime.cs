@@ -24,6 +24,18 @@ public sealed record TurnOutcome(
     bool IsRegenerate,
     bool TitleChanged = false);
 
+/// <summary>一次压缩的结果。<see cref="MessageCount"/> 只在真的压了时才有意义。</summary>
+public sealed record CompressResult(bool Compressed, int MessageCount, string? Error, bool NothingToCompress)
+{
+    /// <summary>没压（不满足条件，或已经在压了）。自动压缩走的就是这条。</summary>
+    public static CompressResult Skipped { get; } = new(false, 0, null, false);
+
+    /// <summary>手动触发，但没有可压的内容。</summary>
+    public static CompressResult Empty { get; } = new(false, 0, null, true);
+
+    public static CompressResult Failed(string reason) => new(false, 0, reason, false);
+}
+
 /// <summary>
 /// 一次对话的<b>状态与请求执行</b>：全量历史、会话档案、请求网关、运行标记、取消源，
 /// 以及「跑一轮」这件事本身。
@@ -86,10 +98,21 @@ public sealed class ConversationRuntime
     public IInteractionHost? Interaction { get; set; }
 
     /// <summary>
-    /// 发请求前的准备钩子。当前唯一用途是「上下文超阈值时先自动压缩一次」——
-    /// 压缩逻辑还在视图里（M1-C 才搬），所以这里留个钩子而不是让 runtime 反过来依赖视图。
+    /// 当前模型的上下文窗口（token）。每轮发送时按请求里的模型刷新；
+    /// 宿主换模型时也可以直接赋值 —— 用量环要在还没发过一轮时就显示。
     /// </summary>
-    public Func<CancellationToken, Task>? BeforeRequest { get; set; }
+    public long ContextWindow { get; set; } = -1;
+
+    /// <summary>
+    /// 压缩摘要用哪个模型。为 null 时退回会话存档里的模型（<c>Profile.State.Model</c>）。
+    /// </summary>
+    public Func<string?>? SummaryModelIdProvider { get; set; }
+
+    /// <summary>压缩是否在进行中。防重入：自动压缩与手动点击可能撞上。</summary>
+    public bool IsCompressing { get; private set; }
+
+    /// <summary>下一段回复要插进历史的哪个位置之后（重新生成用）。取一次就清，见 <see cref="TakePendingInsertSequence"/>。</summary>
+    private int? _pendingInsertSequence;
 
     // ============================================================
     // 事件（都在 UI 线程上发出；没人订阅也能正常跑完一轮）
@@ -132,6 +155,15 @@ public sealed class ConversationRuntime
     /// <summary>发请求前修过残缺的工具消息（视图据此重建入参索引）。</summary>
     public event Action? ToolCallsRepaired;
 
+    /// <summary>
+    /// 历史整体换了（压缩后重读、重新生成后重排、删了轮次）。参数是「至少渲染到这条消息
+    /// 所在的分组」，null = 照常渲染最后一批。runtime 只负责数据，重绘归宿主。
+    /// </summary>
+    public event Action<string?>? HistoryRebuildRequested;
+
+    /// <summary>压缩开始 / 结束（宿主据此显示「正在压缩上下文…」）。</summary>
+    public event Action<bool>? CompressingChanged;
+
     // ============================================================
     // 入口
     // ============================================================
@@ -153,9 +185,13 @@ public sealed class ConversationRuntime
             if (ConversationTitle.IsPlaceholder(Profile.State.Title) && request.Text is not null)
                 Profile.State.Title = ConversationTitle.InitialTitle(request.Text);
 
-            Profile.State.Model = request.Model.ModelName;
-            Profile.State.Thinking = (int)request.Thinking;
-            Profile.State.EnabledToolIds = request.ToolIds?.ToList() ?? new List<string>();
+            Profile.State.Model = request.Settings.Model.ModelName;
+            Profile.State.Thinking = (int)request.Settings.Thinking;
+            Profile.State.EnabledToolIds = request.Settings.ToolIds?.ToList() ?? new List<string>();
+
+            // 上下文窗口跟着这一轮的模型走：自动压缩的阈值判定要用它，
+            // 而插件在后台跑时没人替它把「当前模型的上限」塞进来。
+            ContextWindow = request.Settings.Model.ContextWindow;
 
             var isFirstTurn = Messages.Count == 0;
             var firstText = request.Text ?? "";
@@ -221,7 +257,7 @@ public sealed class ConversationRuntime
         await PersistSessionAsync();
 
         var system = Profile.BuildSystemPrompt(Profile.State.Model);
-        var vision = SupportsVision(request.Model);
+        var vision = SupportsVision(request.Settings.Model);
 
         // MCP 是惰性连接的：发消息前确保会话启用的服务都连上并发现了工具。
         // 连不上就跳过（内部已记日志），不打断这次对话。
@@ -229,8 +265,8 @@ public sealed class ConversationRuntime
 
         var options = new ChatRequestOptions
         {
-            Thinking = request.Thinking,
-            Tools = ResolveActiveTools(request.ToolIds),
+            Thinking = request.Settings.Thinking,
+            Tools = ResolveActiveTools(request.Settings.ToolIds),
             SupportsVision = vision,
         };
 
@@ -251,7 +287,7 @@ public sealed class ConversationRuntime
         try
         {
             // 上下文超阈值时先自动压缩一次（受设置控制，失败或不满足条件都安静跳过）
-            if (BeforeRequest is { } before) await before(ct);
+            await MaybeAutoCompressAsync(ct);
 
             turn = await Gateway.ChatAsync(
                 SessionId,
@@ -263,7 +299,7 @@ public sealed class ConversationRuntime
                 request.Text,
                 request.Attachments,
                 options,
-                request.Client,
+                request.Settings.Client,
                 _toolExecutor,
                 new ChatPersistSink
                 {
@@ -340,6 +376,345 @@ public sealed class ConversationRuntime
                 // 订阅方自己的问题，不影响这一轮的结论
             }
         }
+    }
+
+    // ============================================================
+    // 轮次入口：重新生成 / 重试 / 继续
+    // ============================================================
+
+    /// <summary>
+    /// 取走「下一段回复要插在哪之后」，取一次就清。
+    /// 宿主在建这一轮的容器时问一次：<b>不能在发起前就算好下标</b>，
+    /// 因为从发起那一刻到建控件之间，历史可能已经被重排过一次。
+    /// </summary>
+    public int? TakePendingInsertSequence()
+    {
+        var value = _pendingInsertSequence;
+        _pendingInsertSequence = null;
+        return value;
+    }
+
+    /// <summary>
+    /// 重新生成：把触发位置之后的那个 AI 轮整轮软删掉，再按它前面的上下文重跑。
+    ///
+    /// <paramref name="trigger"/> 可以是用户消息（含自己为上下文），也可以是 AI 轮里的任意一条
+    /// （退到这轮开头之前）。已经被删掉的 AI 轮没有可点的 AI 消息，从它前面那条用户消息点即可。
+    /// </summary>
+    /// <returns>null 表示没跑（已有任务在跑，或这一轮没有可用的上下文）。</returns>
+    public async Task<ChatTurnResult?> RegenerateAsync(ChatMessage trigger, TurnSettings settings)
+    {
+        if (IsBusy) return null;
+
+        var triggerIndex = Messages.FindIndex(m => m.Id == trigger.Id);
+        if (triggerIndex < 0) return null;
+
+        // 上下文末尾：点用户消息含自己；点 AI 消息则退到这个 AI 轮的第一条消息之前
+        var contextEnd = trigger.Role == "user"
+            ? triggerIndex + 1
+            : IndexOfTurnStart(trigger.TurnId, triggerIndex);
+
+        var context = Messages.Take(contextEnd).ToList();
+        if (context.Count == 0) return null;
+
+        // 要被替换掉的旧 AI 轮：上下文之后、且同一个 turn_id
+        var replaced = new List<ChatMessage>();
+        var replacedTurnId = contextEnd < Messages.Count && Messages[contextEnd].Role is "assistant" or "tool"
+            ? Messages[contextEnd].TurnId
+            : null;
+        if (replacedTurnId is not null)
+            for (var i = contextEnd; i < Messages.Count && Messages[i].TurnId == replacedTurnId; i++)
+                replaced.Add(Messages[i]);
+
+        var insertAfter = context[^1].SequenceNumber;
+
+        // 让旧回复先消失：直接改内存 + 让宿主重渲染，比原地找控件删更简单，也顺带把插入位置算出来
+        if (replaced.Count > 0)
+        {
+            try { await ChatRepository.SoftDeleteTurnAsync(SessionId, replacedTurnId!); } catch { /* 忽略 */ }
+            var ids = replaced.Select(m => m.Id).ToHashSet();
+            Messages.RemoveAll(m => ids.Contains(m.Id));
+        }
+
+        // 至少渲染到「上下文末尾那条消息」所在的分组：被点在很旧的轮次上时，
+        // 不能因为「首屏只渲染最后一批」而把它所在的区域整个丢掉。
+        HistoryRebuildRequested?.Invoke(context[^1].Id);
+
+        _pendingInsertSequence = insertAfter;
+
+        var result = await SendAsync(new ConversationTurnRequest
+        {
+            Settings = settings,
+            InsertAfterSequence = insertAfter,
+        });
+
+        // 没发出去（并发抢先了）就别把插入位置留在那儿，否则下一次普通发送会插到上一轮的位置上
+        if (result is null) _pendingInsertSequence = null;
+        return result;
+    }
+
+    /// <summary>
+    /// 重试某一轮失败 / 中断的请求（错误卡上的「重试」）。
+    ///
+    /// 与「重新生成」只差一件事：<b>怎么对待上一轮</b>。重新生成是「不满意，删掉重来」；
+    /// 重试是「没跑完，接着跑」—— 所以这里一条消息都不删。上一轮已经产生的思考与正文
+    /// 留在原地（网关在失败时也把它们落进那条 failed 消息里了），用户想回看还能看，
+    /// 否则一次断网就把好不容易等出来的思考链抹掉，等于白等。
+    /// </summary>
+    /// <param name="anchor">失败那一轮里的任意一条消息（错误记录 / 失败的 assistant / 中断的工具行）。</param>
+    public async Task<ChatTurnResult?> RetryAsync(ChatMessage anchor, TurnSettings settings)
+    {
+        if (IsBusy) return null;
+
+        var anchorIndex = Messages.FindIndex(m => m.Id == anchor.Id);
+        if (anchorIndex < 0) return null;
+
+        // 这一轮的起点。错误记录与失败的 assistant 都带着同一个 turn_id，
+        // 按它退回轮次开头，才能把「这一轮之前」的上下文完整取出来。
+        var start = anchor.TurnId is null ? anchorIndex : IndexOfTurnStart(anchor.TurnId, anchorIndex);
+
+        var context = Messages.Take(start).ToList();
+        if (context.Count == 0) return null;   // 失败轮前面什么都没有（连用户消息都没有）就没得重试
+
+        // 不传 InsertAfterSequence：新回复追加在末尾（上一轮的控件与消息都留着）。
+        // 但必须显式给出「发到哪为止」的历史 —— 失败那一轮还留在 Messages 里，
+        // 直接发全量会把刚失败的那几条也带上，模型看到的是半截上下文。
+        return await SendAsync(new ConversationTurnRequest
+        {
+            Settings = settings,
+            History = context,
+        });
+    }
+
+    /// <summary>
+    /// 继续被停止 / 打断的那一轮（操作栏上的「继续」）。
+    ///
+    /// 与「重试」只差一件事：<b>中断的那一轮算不算数</b>。重试是「这一轮不算，重来」，
+    /// 所以把它整轮甩在上下文之外；继续是「这一轮算一半」—— 已经跑过的工具结果、
+    /// 已经想出来的思考、已经收到的正文全部原样留在上下文里，模型接着往下做。
+    /// 一次长任务跑到一半被停掉，代价不该是前面那些步骤全部白费。
+    ///
+    /// 末尾补一句 user 提示：<b>只随这一轮发出去，不落库</b>（历史里凭空多出一条用户没打过的
+    /// 消息会很怪）。没有这句话，模型看到的最后一条是它自己的半截回复，多半会直接收尾不动手。
+    /// </summary>
+    public async Task<ChatTurnResult?> ContinueAsync(string turnId, TurnSettings settings)
+    {
+        if (IsBusy) return null;
+        if (!IsTurnResumable(turnId)) return null;
+
+        var history = Messages.ToList();
+        history.Add(new ChatMessage
+        {
+            Role = "user",
+            Content = "（上一条回复被中断了。请从断掉的地方接着做，不要重复已经完成的步骤，也不要重新开始。）",
+            Status = "completed",
+        });
+
+        return await SendAsync(new ConversationTurnRequest
+        {
+            Settings = settings,
+            History = history,
+            RequestPreview = Messages.LastOrDefault(m => m.Role == "user")?.Content,
+        });
+    }
+
+    /// <summary>
+    /// 这一轮是不是「停在半路」：被用户停止、应用中途被杀、或工具还没返回就断了。
+    ///
+    /// 判据只看这一轮的<b>最后一条</b>消息。中途某个工具失败、模型后来接着做完了，
+    /// 那不算 —— 那种轮次给「继续」只会让它把已经做完的事再做一遍。
+    /// 请求失败（后面跟着错误记录）也不走这里，那条路上已经有「重试」。
+    /// </summary>
+    public bool IsTurnResumable(string turnId)
+    {
+        // 只有最后一轮才谈得上继续：后面又聊过了，接上中断的那轮等于把上下文顺序搅乱。
+        // 先看最后一条就能挡掉绝大部分轮次（渲染历史时每个操作栏都会问一次）。
+        if (Messages.Count == 0 || Messages[^1].TurnId != turnId) return false;
+
+        ChatMessage? last = null;
+        foreach (var m in Messages)
+            if (m.TurnId == turnId) last = m;
+
+        if (last is null || last.Role is not ("assistant" or "tool")) return false;
+
+        // 停止在流式输出里（那条 assistant 落库时就是 interrupted），
+        // 或停止在工具执行中（最后剩下的是一条中断占位的 tool 行）
+        if (last.Status == "interrupted") return true;
+
+        // 工具已经落库成失败：只剩这一条结果、后面再没有 assistant，说明网关是被停在那里的
+        if (last.Role == "tool" && last.Status == "failed") return true;
+
+        // 带 tool_calls 的 assistant 后面一条结果都没有：应用在工具跑起来之前就被关掉了
+        return last.Role == "assistant" && ToolCallJson.Deserialize(last.Metadata).Count > 0;
+    }
+
+    /// <summary>AI 轮的第一条消息在 <see cref="Messages"/> 里的下标（找不到就退回 <paramref name="fallback"/>）。</summary>
+    private int IndexOfTurnStart(string? turnId, int fallback)
+    {
+        for (var i = 0; i <= fallback && i < Messages.Count; i++)
+            if (Messages[i].TurnId == turnId && Messages[i].Role is "assistant" or "tool")
+                return i;
+        return fallback;
+    }
+
+    // ============================================================
+    // 历史重读
+    // ============================================================
+
+    /// <summary>
+    /// 从库里重读全部消息（压缩落了摘要、重新生成改了顺序、删了轮次之后调）。
+    /// 只做数据，重绘由宿主订阅 <see cref="HistoryRebuildRequested"/> 负责。
+    /// </summary>
+    public async Task ReloadMessagesAsync()
+    {
+        Messages.Clear();
+        try
+        {
+            Messages.AddRange(await ChatRepository.GetBySessionAsync(SessionId));
+        }
+        catch
+        {
+            // 读失败就保持空列表：消息是「显示什么」的依据，留着半份比空着更危险
+        }
+
+        HistoryRebuildRequested?.Invoke(null);
+    }
+
+    // ============================================================
+    // 上下文压缩
+    // ============================================================
+
+    /// <summary>
+    /// 压缩上下文：让模型把「当前分界线之后」的全部内容压成一段摘要，作为一条
+    /// <see cref="ContextCompression.CompressRole"/> 消息落库。此后构建请求时以它为界，
+    /// 它之前的消息不再发给模型 —— 原文仍然留在库里，也仍然显示在界面上。
+    /// </summary>
+    /// <param name="manual">
+    /// 手动触发时「没什么可压」与失败都要由宿主给出可见反馈（结果里带着原因）；
+    /// 自动触发（发请求前的阈值检查）则一律安静，因为用户并没有在等这个结果。
+    /// </param>
+    /// <param name="ct">
+    /// 自动压缩时传当前这一轮的取消源：压缩也是模型请求，用户在压缩阶段点「停止」就该停下来。
+    /// </param>
+    public async Task<CompressResult> CompressAsync(bool manual, CancellationToken ct = default)
+    {
+        if (IsCompressing) return CompressResult.Skipped;
+
+        if (!ContextCompression.HasCompressibleContent(Messages))
+            return manual ? CompressResult.Empty : CompressResult.Skipped;
+
+        var slice = ContextCompression.SliceForSummary(Messages);
+        if (slice.Count == 0) return CompressResult.Skipped;
+
+        IsCompressing = true;
+        CompressingChanged?.Invoke(true);
+
+        try
+        {
+            // 摘要用当前会话选中的模型：不额外引入设置项，质量也是这里最好的。
+            // 没有可用模型就没法压缩：手动触发要说明原因，自动触发安静跳过。
+            var modelId = SummaryModelIdProvider?.Invoke() ?? Profile.State.Model;
+            var client = await Gateway.ResolveClientAsync(modelId);
+            if (client is null)
+                return CompressResult.Failed("尚未配置可用的模型，请到「设置 → 模型服务」添加并启用服务商与模型");
+
+            var history = new List<ChatMessage>
+            {
+                new() { Role = "user", Content = ContextCompression.BuildSummaryRequest(slice) },
+            };
+            var options = new ChatRequestOptions
+            {
+                Thinking = ThinkingMode.NoThink,   // 压缩是搬运信息不是解题，不需要推理
+                Tools = null,                      // 更不该让它去调工具
+                SupportsVision = false,
+            };
+
+            var builder = new StringBuilder();
+            await client.StreamAsync(
+                history,
+                ContextCompression.SummarySystemPrompt,
+                options,
+                new ChatRoundSink { OnContent = chunk => builder.Append(chunk) },
+                ct);
+
+            var summary = builder.ToString().Trim();
+            if (summary.Length == 0) return CompressResult.Failed("模型没有返回摘要内容");
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            await ChatRepository.InsertAsync(new ChatMessage
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                SessionId = SessionId,
+                TurnId = await ChatRepository.GetNextTurnIdAsync(SessionId),
+                SequenceNumber = await ChatRepository.GetNextSequenceAsync(SessionId),
+                Role = ContextCompression.CompressRole,
+                Content = summary,
+                Metadata = ContextCompression.SerializeMetadata(),
+                Status = "completed",
+                ModelName = client.ModelName,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+
+            await ReloadMessagesAsync();
+            return new CompressResult(true, slice.Count, null, false);
+        }
+        catch (OperationCanceledException)
+        {
+            // 用户点了「停止」。这里必须放出去：调用方（发送那一轮）要据此放弃这次发送，
+            // 而不是吞掉异常后继续把消息发出去。
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return CompressResult.Failed(ex.Message);
+        }
+        finally
+        {
+            IsCompressing = false;
+            CompressingChanged?.Invoke(false);
+        }
+    }
+
+    /// <summary>
+    /// 发送前按设置自动压缩：上下文占用超过阈值就先压一次。任何一步不满足就安静跳过 ——
+    /// 这一步只是顺手的优化，绝不能因为它失败或超时就拖住正常发送。
+    /// </summary>
+    private async Task MaybeAutoCompressAsync(CancellationToken ct)
+    {
+        var settings = AppSettingsStore.Current;
+        if (!settings.AutoCompressContext) return;
+        if (!ContextCompression.HasCompressibleContent(Messages)) return;
+        if (!TryGetContextUsage(out var used, out var total)) return;
+
+        var threshold = Math.Clamp(settings.AutoCompressThresholdPercent, 1, 100);
+
+        // 用整数乘法比百分比，避免浮点误差把「刚好等于阈值」判到另一边
+        if (used * 100 < total * threshold) return;
+
+        await CompressAsync(manual: false, ct);
+    }
+
+    /// <summary>
+    /// 当前上下文占用的 token 数与窗口上限。无上限（模型未声明）或历史里没有任何 usage 时返回 false。
+    /// 无状态 API 的最后一次输入已包含之前所有轮的输入与输出，所以最后一个 usage 就是当前占用。
+    /// </summary>
+    public bool TryGetContextUsage(out long used, out long total)
+    {
+        used = 0;
+        total = ContextWindow;
+        if (total <= 0) return false;
+
+        for (var i = Messages.Count - 1; i >= 0; i--)
+        {
+            var m = Messages[i];
+            if (m.Role != "assistant" || string.IsNullOrWhiteSpace(m.UsageJson)) continue;
+            if (TokenUsage.FromStoredJson(m.UsageJson) is not { } usage) continue;
+
+            used = usage.TotalTokens;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

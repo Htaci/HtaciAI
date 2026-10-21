@@ -164,12 +164,38 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
   点停止（保留已收正文、无错误卡）、重试（旧轮保留、新轮追加）、
   重新生成（旧轮替换、位置正确）、自动话题命名。
 
-- **C** ⬜ 未开始：迁 `Regenerate` / `Retry` / `Compress` / 异步审批与提问。
+- **C** ✅ 已完成：剩下的入口也搬进 runtime ——
+  `RegenerateAsync` / `RetryAsync` / `ContinueAsync` / `CompressAsync`（含发请求前的自动压缩）
+  与 `ReloadMessagesAsync`、`IsTurnResumable`、上下文用量口径。视图只剩「解析模型 → 调 runtime → 提示人话」。
 
-配套：`ConversationRuntimeRegistry`（按 sessionId 复用，视图关闭不销毁——桌宠后台工作的前提）。
-**A 步刻意没接 registry**：一旦 runtime 跨视图复用，`LoadMessagesAsync` 就会在「视图重建」时
-把库里的历史再灌一遍（重复消息），或者干脆不读（历史为空）。这件事必须与 B 步的
-「事件驱动 + 是否已初始化」判断一起做，单独提前接只会引入难查的状态错乱。
+  几个要点：
+
+  | 东西 | 位置 | 为什么 |
+  | --- | --- | --- |
+  | `TurnSettings(Model, Client, Thinking, ToolIds)` | runtime | 模型解析是调用方的判断（视图读选择器，插件读自己的配置） |
+  | `HistoryRebuildRequested`（事件） | runtime 发、宿主重绘 | runtime 只管数据，重绘归视图；压缩 / 重新生成 / 删轮次共用一条路 |
+  | `TakePendingInsertSequence()` | runtime | 插入位置在「发起时」定下、「建控件时」才取用 —— 中间可能已经重绘过 |
+  | `CompressingChanged`（事件） | runtime 发、宿主提示 | 「正在压缩上下文…」只有界面能给 |
+  | `ContextWindow` | runtime 的可写属性 | 自动压缩的阈值判定要用它；每轮按请求里的模型刷新，换模型时宿主也可直接赋 |
+
+  已用**无头回归**驱动 `ConversationRuntime`（不建任何界面，本地假 OpenAI 服务）跑完 26 项：
+  工具循环、停止（保留已收正文、interrupted 落库、运行标记复位）、继续、重新生成
+  （旧轮替换而非叠加、请求过重绘、新回复紧跟用户消息）、失败轮 + 重试（消息只增不减）、
+  手动压缩（摘要落库）与「刚压过再压」的收敛。
+  这一轮同时证明了 M1 的目的：**跑一轮对话不再需要打开的视图**。
+
+配套（**唯一剩下的一步**）：`ConversationRuntimeRegistry`（按 sessionId 复用，视图关闭不销毁——
+桌宠后台工作的前提）。现在仍是一个视图一个 runtime。
+
+接 registry 时要一并解决的几件事（别只做「字典复用」）：
+
+1. **谁负责读历史**：runtime 已经能自己 `ReloadMessagesAsync`，但视图的 `LoadMessagesAsync`
+   还带着首屏分段渲染的计时与 `_historyLoaded` 门闩。复用后要改成「runtime 只读一次，
+   视图重新挂上时只重绘」。
+2. **事件订阅成对**：视图现在是「构造即订阅、永不退订」。跨视图复用后必须
+   `AttachedToVisualTree` 订阅 / `DetachedFromVisualTree` 退订，否则两个视图会同时收到增量。
+3. **回收**：引用计数（视图 + 插件订阅）归零且没有活跃轮次时才允许回收，运行中的会话不许回收
+   —— 与 `SessionViewCache` 的钉住逻辑同款。
 
 > 另外记下了插件清单的字段设想（平台独占、前置依赖、循环依赖与连带停用规则），
 > 见 [`plugin-manifest.md`](./plugin-manifest.md)。清单继续用 JSON，不上 ini。
