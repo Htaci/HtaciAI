@@ -11,6 +11,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using HtaciAI.Models;
 using HtaciAI.Plugin.Abstractions;
+using HtaciAI.Services;
 using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Storage;
 
@@ -36,7 +37,9 @@ public partial class PluginsPage : UserControl
 
     private readonly AppSettingsData _data = AppSettingsStore.Current;
 
-    /// <summary>当前选中的插件 id。刷新时若它已消失，自动回落到第一个。</summary>
+    /// <summary>
+    /// 当前选中的插件 id。<c>null</c> = 停在主页（插件卡片总览）。
+    /// </summary>
     private string? _selectedId;
 
     /// <summary>程序在改勾选框（还原状态）时置位，避免被当成用户点击。</summary>
@@ -51,7 +54,9 @@ public partial class PluginsPage : UserControl
     {
         InitializeComponent();
 
-        RefreshButton.Click += (_, _) => Refresh();
+        // 刷新 = 重新扫描目录：刚放进去的插件立刻能识别，不必重启程序
+        RefreshButton.Click += async (_, _) => await RescanAsync();
+        HomeButton.Click += (_, _) => ShowHome();
         OpenDirectoryButton.PointerPressed += (_, e) =>
         {
             e.Handled = true;
@@ -69,6 +74,10 @@ public partial class PluginsPage : UserControl
         {
             Subscribe();
             Refresh();
+
+            // 顺手重新扫一次目录：用户常见的动作就是「先把插件文件夹拷进去，再切到这页看」。
+            // 不自动扫的话，他得自己找到右上角的刷新按钮才会看见，很容易以为「插件没被识别」。
+            _ = RescanAsync();
         };
         DetachedFromVisualTree += (_, _) => Unsubscribe();
 
@@ -105,18 +114,53 @@ public partial class PluginsPage : UserControl
     // 刷新
     // ============================================================
 
+    /// <summary>
+    /// 重建整页。<b>默认停在主页</b>（用户要求的「打开就是主页」）：
+    /// <see cref="_selectedId"/> 为 null 就是这个状态；点了左侧某个插件才进详情。
+    /// </summary>
     private void Refresh()
     {
         var all = PluginManager.Instance.GetAll();
 
-        if (_selectedId is null || all.All(p => p.Id != _selectedId))
-            _selectedId = all.Count > 0 ? all[0].Id : null;
-
-        var selected = all.FirstOrDefault(p => p.Id == _selectedId);
+        // 选中的插件没了（被删、被移走）就退回主页，而不是随便挑一个顶上
+        if (_selectedId is not null && all.All(p => p.Id != _selectedId))
+            _selectedId = null;
 
         UpdateHeader(all);
         RefreshList(all);
-        RefreshDetail(selected);
+        RefreshContent(all);
+    }
+
+    private void ShowHome()
+    {
+        _selectedId = null;
+        Refresh();
+    }
+
+    /// <summary>
+    /// 刷新按钮：重新扫描插件目录并加载新插件。
+    ///
+    /// <b>为什么不只是重画界面</b>：插件是「刚放进目录一个文件夹」这种形态，不做扫描就永远看不见它 ——
+    /// 之前正是这样，用户只能重启程序。这里扫描不动正在运行的插件，所以不会打断桌宠。
+    /// </summary>
+    private async Task RescanAsync()
+    {
+        _actionError = null;
+        RefreshButton.IsEnabled = false;
+
+        try
+        {
+            await PluginManager.Instance.RescanAsync();
+        }
+        catch (Exception ex)
+        {
+            _actionError = "重新扫描插件目录失败：" + ex.Message;
+        }
+        finally
+        {
+            RefreshButton.IsEnabled = true;
+            Refresh();
+        }
     }
 
     private void UpdateHeader(IReadOnlyList<PluginInfo> all)
@@ -151,11 +195,11 @@ public partial class PluginsPage : UserControl
             return;
         }
 
-        foreach (var info in all)
-            PluginList.Children.Add(CreatePluginItem(info));
+        for (var i = 0; i < all.Count; i++)
+            PluginList.Children.Add(CreatePluginItem(all[i], canMoveUp: i > 0, canMoveDown: i < all.Count - 1));
     }
 
-    private Border CreatePluginItem(PluginInfo info)
+    private Border CreatePluginItem(PluginInfo info, bool canMoveUp, bool canMoveDown)
     {
         var active = info.Id == _selectedId;
 
@@ -207,21 +251,61 @@ public partial class PluginsPage : UserControl
         };
         title.Children.Add(statusRow);
 
+        // 顺序箭头：鼠标移上来才出现（平时不抢注意力，也不需要额外一行说明）
+        var up = CreateOrderButton("\uF2B7", "上移（更早加载）");
+        var down = CreateOrderButton("\uF2A4", "下移（更晚加载）");
+        up.Click += (_, e) =>
+        {
+            e.Handled = true;
+            PluginManager.Instance.Move(info.Id, -1);
+            Refresh();
+        };
+        down.Click += (_, e) =>
+        {
+            e.Handled = true;
+            PluginManager.Instance.Move(info.Id, +1);
+            Refresh();
+        };
+
+        var arrows = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Vertical,
+            Spacing = 0,
+            IsVisible = false,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+
+        // 只有真能移动的方向才给箭头：到顶了还显示一个点了没反应的按钮，只会让人以为卡住了
+        if (canMoveUp) arrows.Children.Add(up);
+        if (canMoveDown) arrows.Children.Add(down);
+
+        title.Margin = new Thickness(0);
+
+        var layout = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+        };
+        layout.Children.Add(title);
+        layout.Children.Add(arrows);
+        Grid.SetColumn(arrows, 1);
+
         var item = new Border
         {
             CornerRadius = new CornerRadius(10),
             Background = active ? new SolidColorBrush(Color.Parse("#E8F0FA")) : Brushes.Transparent,
             Padding = new Thickness(12, 10),
             Cursor = new Cursor(StandardCursorType.Hand),
-            Child = title,
+            Child = layout,
         };
 
         item.PointerEntered += (_, _) =>
         {
+            if (arrows.Children.Count > 0) arrows.IsVisible = true;
             if (!active) item.Background = new SolidColorBrush(Color.Parse("#F1F3F5"));
         };
         item.PointerExited += (_, _) =>
         {
+            arrows.IsVisible = false;
             if (!active) item.Background = Brushes.Transparent;
         };
         item.PointerPressed += (_, e) =>
@@ -234,24 +318,172 @@ public partial class PluginsPage : UserControl
         return item;
     }
 
-    // ---- 右侧详情 ----
+    /// <summary>一个很小的顺序箭头按钮（列表项右侧，悬停时出现）。</summary>
+    private static Button CreateOrderButton(string glyph, string tip)
+    {
+        var button = new Button
+        {
+            Width = 18,
+            Height = 14,
+            Padding = new Thickness(0),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Content = new TextBlock
+            {
+                Text = glyph,
+                FontFamily = AppFonts.Icons,
+                FontSize = 10,
+                Foreground = new SolidColorBrush(Color.Parse("#8892A4")),
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            },
+        };
 
-    private void RefreshDetail(PluginInfo? info)
+        ToolTip.SetTip(button, tip);
+        return button;
+    }
+
+    // ---- 右侧：主页 / 详情 ----
+
+    /// <summary>
+    /// 右侧内容。没选插件 = <b>主页</b>：总开关 + 每个插件一张卡片
+    /// （运行中的排在前面，其余按加载顺序）。选了插件 = 那个插件的详情。
+    /// </summary>
+    private void RefreshContent(IReadOnlyList<PluginInfo> all)
     {
         DetailPanel.Children.Clear();
-
-        DetailPanel.Children.Add(CreateMasterSwitchCard());
 
         if (_actionError is not null)
             DetailPanel.Children.Add(CreateBanner(_actionError, "#FEF2F2", Danger));
 
-        if (info is null)
+        if (_selectedId is null)
         {
-            DetailPanel.Children.Add(CreateEmptyCard());
+            DetailPanel.Children.Add(CreateMasterSwitchCard());
+            DetailPanel.Children.Add(CreateHomeCard(all));
             return;
         }
 
-        DetailPanel.Children.Add(CreatePluginCard(info));
+        if (all.FirstOrDefault(p => p.Id == _selectedId) is { } info)
+        {
+            DetailPanel.Children.Add(CreatePluginCard(info));
+            return;
+        }
+
+        DetailPanel.Children.Add(CreateMasterSwitchCard());
+        DetailPanel.Children.Add(CreateEmptyCard());
+    }
+
+    /// <summary>
+    /// 主页：每个插件一张小卡片。**运行中的排在前面**（这正是用户最想先看到的），
+    /// 组内按加载顺序；点了进详情。
+    /// </summary>
+    private Control CreateHomeCard(IReadOnlyList<PluginInfo> all)
+    {
+        if (all.Count == 0) return CreateEmptyCard();
+
+        var grid = new WrapPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            Margin = new Thickness(0, -6, -12, 0),
+        };
+
+        foreach (var info in all.OrderByDescending(p => p.State == PluginRunState.Loaded))
+            grid.Children.Add(CreatePluginTile(info));
+
+        return CreateCard("插件主页", "运行中的排在前面，其余按加载顺序", grid);
+    }
+
+    /// <summary>主页上的一张小卡片。</summary>
+    private Control CreatePluginTile(PluginInfo info)
+    {
+        var color = StateColor(info.State);
+
+        var body = new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = info.Name,
+                    FontSize = 14,
+                    FontWeight = FontWeight.SemiBold,
+                    Foreground = TextPrimary,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                },
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    Spacing = 5,
+                    Children =
+                    {
+                        new Border
+                        {
+                            Width = 6, Height = 6,
+                            CornerRadius = new CornerRadius(3),
+                            Background = new SolidColorBrush(color),
+                            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                        },
+                        new TextBlock
+                        {
+                            Text = ShortStateText(info.State),
+                            FontSize = 10.5,
+                            Foreground = new SolidColorBrush(color),
+                        },
+                        new TextBlock
+                        {
+                            Text = string.IsNullOrWhiteSpace(info.Version) ? info.Id : $"{info.Id} · {info.Version}",
+                            FontSize = 10.5,
+                            Foreground = TextFaint,
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                        },
+                    },
+                },
+                new TextBlock
+                {
+                    Text = string.IsNullOrWhiteSpace(info.Description) ? "（没有写说明）" : info.Description,
+                    FontSize = 11.5,
+                    Foreground = TextMuted,
+                    TextWrapping = TextWrapping.Wrap,
+                    MaxHeight = 34,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                },
+            },
+        };
+
+        var tile = new Border
+        {
+            Width = 230,
+            Margin = new Thickness(0, 6, 12, 0),
+            Padding = new Thickness(14, 12),
+            CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(Color.Parse("#FAFBFC")),
+            BorderBrush = LineBrush,
+            BorderThickness = new Thickness(1),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = body,
+        };
+
+        tile.PointerEntered += (_, _) =>
+        {
+            tile.Background = Surface;
+            tile.BorderBrush = new SolidColorBrush(Color.Parse("#CFD8E6"));
+        };
+        tile.PointerExited += (_, _) =>
+        {
+            tile.Background = new SolidColorBrush(Color.Parse("#FAFBFC"));
+            tile.BorderBrush = LineBrush;
+        };
+        tile.PointerPressed += (_, e) =>
+        {
+            _selectedId = info.Id;
+            Refresh();
+            e.Handled = true;
+        };
+
+        return tile;
     }
 
     /// <summary>总开关。关掉 = 全部卸载，之后新插件也不会加载。</summary>
@@ -360,7 +592,9 @@ public partial class PluginsPage : UserControl
 
         if (info.RequiresRestart)
             body.Children.Add(CreateBanner(
-                "已停止运行，但插件文件仍被占用、内存没能释放。需要重启程序才能重新加载它。",
+                "已停止运行，但插件文件仍被占用、内存没能释放。需要重启程序才能重新加载它。" +
+                "常见原因：插件没有在 ShutdownAsync 里停掉自己的定时器 / 动画 / 后台任务，" +
+                "或者用了泛型 Storage.Load<T>。详情见插件页的「插件开发文档」。",
                 "#FFF7ED", Warning));
 
         // ---- 能力清单 ----

@@ -14,7 +14,7 @@
             <Grid RowDefinitions="Auto,*"
                   Margin="12,16">
                 <Grid Grid.Row="0"
-                      ColumnDefinitions="*,Auto"
+                      ColumnDefinitions="*,Auto,Auto"
                       Margin="12,0,8,12">
                     <TextBlock Grid.Column="0"
                                Text="插件"
@@ -22,8 +22,28 @@
                                FontWeight="SemiBold"
                                Foreground="#1A1A2E"
                                VerticalAlignment="Center"/>
-                    <Button x:Name="RefreshButton"
+
+                    <!-- 主页：插件卡片总览（默认页）。点插件详情后可以用它回到这里 -->
+                    <Button x:Name="HomeButton"
                             Grid.Column="1"
+                            Width="28"
+                            Height="28"
+                            Padding="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="8"
+                            Cursor="Hand"
+                            ToolTip.Tip="插件主页">
+                        <TextBlock Text="&#xF481;"
+                                   FontFamily="{StaticResource IconFont}"
+                                   FontSize="14"
+                                   Foreground="#4B5563"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Button>
+
+                    <Button x:Name="RefreshButton"
+                            Grid.Column="2"
                             Width="28"
                             Height="28"
                             Padding="0"

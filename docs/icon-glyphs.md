@@ -116,5 +116,7 @@ print(hex(rev['ic_fluent_warning_24_regular']))"
 | 未知（表里没有） | `question_circle_24_regular` | U+F63E | 同上的灰问号 |
 | 出错（请求失败） | `error_circle_24_regular` | U+F3F2 | `Controls/ErrorCard.cs` 错误卡的标题图标 |
 | 插件 | `puzzle_piece_24_regular` | U+E9EA | `Views/NewTabPage.axaml.cs` 的插件卡 |
+| 插件主页（回到卡片总览） | `home_24_regular` | U+F481 | `Views/PluginsPage.axaml` 左侧标题行 |
+| 上移 / 下移（调整加载顺序） | `chevron_up_24_regular` / `chevron_down_24_regular` | U+F2B7 / U+F2A4 | `Views/PluginsPage.axaml.cs` 列表项悬停时出现 |
 
 这两个提示图标点开都会跳到该模型的编辑页，补完保存即消失（见 `docs/model-table.md`）。

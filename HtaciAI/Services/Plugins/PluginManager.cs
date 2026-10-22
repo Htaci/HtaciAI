@@ -52,7 +52,8 @@ public sealed partial class PluginManager
     public static string PluginsDirectory => AppPaths.Plugins;
 
     /// <summary>当前所有已发现的插件快照（含加载失败的）。</summary>
-    public IReadOnlyList<PluginInfo> GetAll() => _entries.Select(ToInfo).ToList();
+    /// <summary>全部插件快照，<b>按用户设定的加载顺序</b>（小的在前）。</summary>
+    public IReadOnlyList<PluginInfo> GetAll() => OrderedEntries().Select(ToInfo).ToList();
 
     /// <summary>插件 id 是否已发现。</summary>
     public PluginInfo? Find(string id) => _entries.Where(e => e.Id == id).Select(ToInfo).FirstOrDefault();
@@ -672,6 +673,15 @@ public sealed partial class PluginManager
     {
         _entries.Clear();
 
+        foreach (var (id, dir) in DiscoverDirectories())
+            AddEntry(id, dir);
+
+        EnsureLoadOrder();
+    }
+
+    /// <summary>读插件根目录，返回 (id, 绝对路径)。以点开头的一律跳过。</summary>
+    private static IEnumerable<(string Id, string Directory)> DiscoverDirectories()
+    {
         var root = AppPaths.Plugins;
         try
         {
@@ -680,7 +690,7 @@ public sealed partial class PluginManager
         catch (Exception ex)
         {
             PluginLog.Host("插件目录不可用：" + ex.Message, ex);
-            return;
+            return Array.Empty<(string, string)>();
         }
 
         string[] dirs;
@@ -691,11 +701,12 @@ public sealed partial class PluginManager
         catch (Exception ex)
         {
             PluginLog.Host("读取插件目录失败：" + ex.Message, ex);
-            return;
+            return Array.Empty<(string, string)>();
         }
 
         Array.Sort(dirs, StringComparer.OrdinalIgnoreCase);
 
+        var found = new List<(string, string)>(dirs.Length);
         foreach (var dir in dirs)
         {
             var id = Path.GetFileName(dir);
@@ -703,12 +714,20 @@ public sealed partial class PluginManager
             // 以点开头的是宿主自己的东西（或用户有意隐藏），不当插件
             if (id.StartsWith('.')) continue;
 
-            var entry = new PluginEntry(id, dir) { Record = PluginStateStore.GetOrCreate(id) };
-            _entries.Add(entry);
-
-            if (!TryReadManifest(entry)) continue;
-            ValidateManifest(entry);
+            found.Add((id, dir));
         }
+
+        return found;
+    }
+
+    /// <summary>把一个目录变成一个条目（读清单 + 校验）。已存在的条目不要走这里。</summary>
+    private void AddEntry(string id, string directory)
+    {
+        var entry = new PluginEntry(id, directory) { Record = PluginStateStore.GetOrCreate(id) };
+        _entries.Add(entry);
+
+        if (!TryReadManifest(entry)) return;
+        ValidateManifest(entry);
     }
 
     private bool TryReadManifest(PluginEntry entry)
@@ -812,6 +831,10 @@ public sealed partial class PluginManager
         {
             if (entry.Manifest is not { } manifest) continue;
             if (entry.RunState is PluginRunState.Blocked or PluginRunState.Failed) continue;
+
+            // 已经在跑的不动：重扫目录时把它的状态改成「无法加载」不会卸载它，
+            // 界面就会显示「无法加载」而桌宠窗口还开着 —— 那种不一致比规则本身更难查。
+            if (entry.Instance is not null) continue;
 
             if (!IsPlatformSupported(manifest, out var platformError))
             {
@@ -920,20 +943,163 @@ public sealed partial class PluginManager
         }
     }
 
+    // ============================================================
+    // 加载顺序
+    // ============================================================
+
+    /// <summary>
+    /// 按用户设定的顺序排列（<c>Order</c> 小的在前），没设过的排在后面、按 id 兜底。
+    /// 界面上的列表与卡片、以及真正的加载顺序都以它为准。
+    /// </summary>
+    private List<PluginEntry> OrderedEntries()
+        => _entries
+            .OrderBy(e => e.Record.Order ?? int.MaxValue)
+            .ThenBy(e => e.Id, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// 给还没排过序的插件补上顺序号（按目录名的自然顺序）。
+    /// 之后用户拖动 / 点箭头就只交换这些数字。
+    /// </summary>
+    private void EnsureLoadOrder()
+    {
+        var missing = _entries.Where(e => e.Record.Order is null).ToList();
+        if (missing.Count == 0) return;
+
+        var next = _entries.Where(e => e.Record.Order is not null)
+            .Select(e => e.Record.Order!.Value)
+            .DefaultIfEmpty(-1)
+            .Max() + 1;
+
+        foreach (var entry in missing.OrderBy(e => e.Id, StringComparer.Ordinal))
+            entry.Record.Order = next++;
+
+        PluginStateStore.Save();
+    }
+
+    /// <summary>
+    /// 把某个插件上移 / 下移一位（<paramref name="delta"/> = -1 / +1）。
+    /// 只在列表里交换位置并落盘，<b>不打断正在运行的插件</b> —— 新顺序在下一次加载时生效。
+    /// </summary>
+    /// <returns>顺序是否真的变了（到顶 / 到底 / 找不到时返回 false）。</returns>
+    public bool Move(string id, int delta)
+    {
+        if (delta == 0) return false;
+
+        var ordered = OrderedEntries();
+        var index = ordered.FindIndex(e => string.Equals(e.Id, id, StringComparison.Ordinal));
+        if (index < 0) return false;
+
+        var target = index + delta;
+        if (target < 0 || target >= ordered.Count) return false;
+
+        (ordered[index], ordered[target]) = (ordered[target], ordered[index]);
+
+        PluginStateStore.SaveOrder(ordered.Select(e => e.Id).ToList());
+        Raise();
+        return true;
+    }
+
+    // ============================================================
+    // 重新扫描（用户点「刷新」）
+    // ============================================================
+
+    /// <summary>
+    /// 重新扫描插件目录，并把新出现的插件加载起来。<b>不必重启程序。</b>
+    ///
+    /// 与 <see cref="ReloadAsync"/> 的区别：那个会先把所有插件停掉再重来（换总开关时该这么做），
+    /// 这个只处理「目录变了」—— 正在运行的插件一个都不动，所以不会打断桌宠之类的东西。
+    ///
+    /// 三件事按顺序做：目录消失的卸载掉 → 新目录建条目、老目录重读清单 →
+    /// 该加载的加载（前置排前面，用户禁用的跳过）。
+    /// </summary>
+    public async Task RescanAsync(CancellationToken ct = default)
+    {
+        var found = DiscoverDirectories().ToList();
+        var diskIds = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
+
+        // 1. 目录被删掉的：先卸载（否则实例还活着、内存与文件一直占着），再从列表里移除
+        foreach (var entry in _entries.Where(e => !diskIds.Contains(e.Id)).ToList())
+        {
+            if (entry.Instance is not null || entry.LoadContext is not null)
+            {
+                try
+                {
+                    await UnloadAsync(entry);
+                }
+                catch (Exception ex)
+                {
+                    PluginLog.Error(entry.Id, "插件目录已消失，卸载失败", ex);
+                }
+            }
+
+            _entries.Remove(entry);
+            PluginLog.Info(entry.Id, "插件目录已不存在，已从列表移除");
+        }
+
+        // 2. 新目录建条目；还没跑起来的老条目重读一次清单（用户可能刚改过 plugin.json）
+        foreach (var (id, directory) in found)
+        {
+            var existing = FindEntry(id);
+            if (existing is null)
+            {
+                AddEntry(id, directory);
+                continue;
+            }
+
+            // 正在跑 / 需重启 / 用户禁用的保持原状：重读清单只会把状态搅乱
+            if (existing.Instance is not null) continue;
+            if (existing.RunState is PluginRunState.NeedsRestart or PluginRunState.Disabled) continue;
+
+            existing.Manifest = null;
+            existing.Error = null;
+            existing.RunState = PluginRunState.NotLoaded;
+
+            if (!TryReadManifest(existing)) continue;
+            ValidateManifest(existing);
+        }
+
+        EnsureLoadOrder();
+        ApplyManifestRules();
+
+        if (!IsMasterEnabled)
+        {
+            Raise();
+            return;
+        }
+
+        // 3. 该加载的加载起来（按加载顺序，前置先）
+        foreach (var entry in LoadOrder())
+        {
+            if (_stopping) break;
+            if (entry.Instance is not null) continue;
+            if (!entry.Record.Enabled) continue;
+            if (entry.RunState is PluginRunState.Blocked or PluginRunState.Failed
+                or PluginRunState.SkippedByCrash or PluginRunState.NeedsRestart)
+                continue;
+
+            await TryLoadOnStartupAsync(entry, ct);
+        }
+
+        Raise();
+    }
+
     /// <summary>
     /// 加载顺序：<b>前置排在前面</b>（对 <c>requires</c> 做拓扑排序），其余保持扫描顺序。
     /// 不排序的话，「A 依赖 B、但 B 的目录名排在 A 后面」时 A 会因为 B 还没加载而被判成依赖未满足。
     /// </summary>
     private List<PluginEntry> LoadOrder()
     {
-        var result = new List<PluginEntry>(_entries.Count);
+        // 基准顺序 = 用户设定的加载顺序（前置再插到它前面）
+        var ordered = OrderedEntries();
+        var result = new List<PluginEntry>(ordered.Count);
         var visited = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var entry in _entries)
+        foreach (var entry in ordered)
             AddWithDependencies(entry);
 
         // 环里的节点不会被 Visit 到两次；剩下的按原顺序补进来，保证列表完整
-        foreach (var entry in _entries)
+        foreach (var entry in ordered)
             if (visited.Add(entry.Id))
                 result.Add(entry);
 

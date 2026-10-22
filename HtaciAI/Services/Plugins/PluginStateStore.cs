@@ -41,6 +41,15 @@ public sealed class PluginStateRecord
 
     /// <summary>当前是否处于「疑似崩溃源」状态：为 true 且未开 <see cref="AutoLoadAfterCrash"/> 时跳过加载。</summary>
     public bool CrashSuspected { get; set; }
+
+    /// <summary>
+    /// 用户设定的<b>加载顺序</b>（小的先加载、列表里也排在前面）。<c>null</c> = 还没排过，
+    /// 首次扫描时按目录名补一个。
+    ///
+    /// <b>为什么它归宿主而不是插件自己写清单里</b>：这是「用户想怎么排」，不是「插件是什么」——
+    /// 换台机器、换个人用，顺序本来就该各自不同；写进 plugin.json 等于把用户的偏好钉死在插件里。
+    /// </summary>
+    public int? Order { get; set; }
 }
 
 /// <summary>
@@ -91,6 +100,18 @@ public static class PluginStateStore
             record.CrashSuspected = true;
             record.LastCrashAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             if (!string.IsNullOrEmpty(crashLogPath)) record.LastCrashLog = crashLogPath;
+            Save();
+        }
+    }
+
+    /// <summary>把一串插件 id 的当前顺序整体写回（列表里调整顺序后调）。</summary>
+    public static void SaveOrder(IReadOnlyList<string> orderedIds)
+    {
+        lock (Gate)
+        {
+            for (var i = 0; i < orderedIds.Count; i++)
+                GetOrCreate(orderedIds[i]).Order = i;
+
             Save();
         }
     }
