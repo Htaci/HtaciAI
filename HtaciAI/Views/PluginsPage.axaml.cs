@@ -58,6 +58,12 @@ public partial class PluginsPage : UserControl
             OpenPluginsDirectory();
         };
 
+        DevDocLink.PointerPressed += (_, e) =>
+        {
+            e.Handled = true;
+            OpenDevDocs();
+        };
+
         // 标签页切回来时状态可能已经变了（别的页面改了总开关、插件自己崩了）
         AttachedToVisualTree += (_, _) =>
         {
@@ -572,6 +578,26 @@ public partial class PluginsPage : UserControl
     // 打开文件 / 目录
     // ============================================================
 
+    /// <summary>
+    /// 生成并打开插件开发文档。
+    ///
+    /// <b>点一次写一次</b>：文档内置在程序里（不发网络请求、不依赖资源文件），
+    /// 每次点击都重新写一遍，所以它永远与当前版本的宿主 API 一致；不点就一个文件都不落盘。
+    /// </summary>
+    private void OpenDevDocs()
+    {
+        var index = PluginDocs.EnsureWritten();
+        if (index is null)
+        {
+            _actionError = "生成插件开发文档失败，请检查数据目录是否可写：" + AppPaths.Docs;
+            Refresh();
+            return;
+        }
+
+        _actionError = null;
+        OpenFile(index);
+    }
+
     private static void OpenPluginsDirectory()
     {
         try
@@ -748,6 +774,7 @@ public partial class PluginsPage : UserControl
         PluginRunState.Loaded => Color.Parse("#16A34A"),
         PluginRunState.Failed or PluginRunState.Blocked => Color.Parse("#DC2626"),
         PluginRunState.SkippedByCrash or PluginRunState.NeedsRestart => Color.Parse("#D97706"),
+        PluginRunState.DependencyBlocked => Color.Parse("#D97706"),
         _ => Color.Parse("#9CA3AF"),
     };
 
@@ -761,6 +788,7 @@ public partial class PluginsPage : UserControl
         PluginRunState.Blocked => "无法加载",
         PluginRunState.SkippedByCrash => "崩溃后暂停",
         PluginRunState.NeedsRestart => "需重启",
+        PluginRunState.DependencyBlocked => "依赖未就绪",
         _ => state.ToString(),
     };
 }

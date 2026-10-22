@@ -1,7 +1,7 @@
 # 开发交接快照
 
 > 用途：上下文压缩 / 换人接手时，只读这一份就能接着干。
-> 最后更新：2026-10（对应提交 `M4`）
+> 最后更新：2026-10（对应提交 `M7`）
 
 ---
 
@@ -9,7 +9,8 @@
 
 **已完成**：M0（插件加载/卸载/崩溃归因）、M1（`ConversationRuntime` + `ConversationRuntimeRegistry`，
 A/B/C 三步全完）、M2（`PromptComposer` + `IChatEventBus`）、M3（`ISessionFacade`）、
-M4（窗口宿主 + 界面插槽 + 安全壳）、M6（插件管理页）、工具超时与「继续」那一轮。
+M4（窗口宿主 + 界面插槽 + 安全壳）、M7（插件工具 + 清单依赖字段 + 内置开发文档）、
+M6（插件管理页）、工具超时与「继续」那一轮。
 
 **提交线**（从旧到新）：
 
@@ -23,10 +24,11 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 85f91d8  交接文档更新到 M2 开工点
 2209bab  M3：插件能主动发起对话（ISessionFacade）
 4b3409a  M2：上下文贡献 + 会话事件总线
-（M4）    窗口宿主 + 界面插槽 + 插件控件安全壳
+cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
+（M7）    插件工具 + 清单依赖字段 + 内置开发文档
 ```
 
-**下一步：M5（桌宠插件本体）**。三块地基（M2/M3/M4）都齐了，见「三、待办」。
+**下一步：M5（桌宠插件本体）**。底层能力已全部齐备，见「三、待办」。
 工作区干净，`dotnet build HtaciAI/HtaciAI.csproj -t:Rebuild` 0 错误、6 个既有告警。
 
 **关键能力现在到哪了**：
@@ -40,6 +42,9 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 | 插件能不能观察会话流（流式增量、轮次完成） | ✅ M2（`IChatEventBus`） |
 | 插件能不能往上下文里加东西 | ✅ M2（`PromptComposer` + `IPromptRegistry`） |
 | 插件能不能建窗口 / 插控件 | ✅ M4（`IPluginWindowHost` + `IUiExtensionRegistry`） |
+| 插件能不能提供工具给模型 | ✅ M7（`IToolRegistryApi` + `ToolSource.Plugin`） |
+| 清单能不能声明平台/前置/互斥 | ✅ M7（含拓扑加载、循环依赖、连带停用） |
+| 用户能不能在界面里看到开发文档 | ✅ M7（插件页小字入口 → `<数据根>/doc/`） |
 | 桌宠插件本体 | ⬜ M5（M2/M3/M4 已全部就绪） |
 
 
@@ -407,6 +412,73 @@ cd7c9c4  M1 收尾：ConversationRuntimeRegistry，一个会话一份运行时
 
 ---
 
+### 12. 插件工具 + 清单依赖字段 + 内置开发文档（M7）
+
+#### a) `tools.provide`（插件提供工具）
+
+契约 `IPluginTools.cs`：`IToolRegistryApi.Register(PluginToolDefinition, PluginToolHandler)`。
+宿主侧 `Services/Plugins/PluginToolFacade.cs` + `ToolSource.Plugin`。
+
+| 东西 | 做法 | 为什么 |
+| --- | --- | --- |
+| 执行体存哪 | 单独一张按工具名的表（`PluginToolRegistry`），**不挂在 `ToolDefinition` 上** | 那份定义会在选择器、请求页、工具页到处被复制；混进插件代码就等于到处留着插件程序集 |
+| 工具 id | `plugin:<插件id>:<工具名>`，`Target` 存插件 id | 会话存档里选中的 id 能反查是谁的工具 |
+| 校验 | 名字 `^[a-z][a-z0-9_]{1,63}$`、schema 根 `type=object`、不与任何既有工具重名 | 名字是模型唯一的调用入口，重名等于随机命中一个 |
+| 拒绝方式 | 记警告 + 返回 no-op 凭据，**不抛** | 一个工具名写错不该让整个插件加载失败 |
+| 失败 | 返回 `PluginToolResult.Fail` 或抛异常 → 都变成一条失败结果回给模型 | 插件 bug 不能掀掉整轮对话 |
+| 撤销 | 单个 `IDisposable` 或整个门面 `Dispose`（禁用插件时自动） | 与会话里选着的 id 自动失联 |
+| 审批 | 走 `ToolExecutorDispatcher` 原有那条路（危险等级 + 权限档位） | 与内置工具完全一致，没有第二套规则 |
+| 超时 | 沿用默认 5 分钟；schema 里声明 `timeout` 则由模型给 | 复用已有守卫，插件不必自己写超时 |
+
+#### b) 清单的 `platforms` / `requires` / `conflicts`
+
+`PluginManifest` 新增这四个字段（另有 `tags` / `author` / `homepage` 纯展示）。
+判定分成两段：
+
+- **加载前（`ApplyManifestRules`）**：平台不符、前置没装、`requires` 写了自己、`requires` 成环 → `Blocked`。
+  成环时**整组都标**并写出环路 `a → b → a`（只标一个的话，用户改完那个会发现另一个又报同样的错）。
+- **加载时（`CheckDependencies`）**：前置**没运行起来**、或与已运行插件互斥 → `DependencyBlocked`。
+
+新增状态 `PluginRunState.DependencyBlocked`（「因依赖未运行」）。与 `Blocked` 分开的理由：
+Blocked 是「这个插件的清单有问题，作者要改」，DependencyBlocked 是「插件没问题、环境不满足」，
+用户能做的事完全不同。
+
+配套规则：
+
+| 场景 | 行为 |
+| --- | --- |
+| 加载顺序 | 对 `requires` 拓扑排序，前置先加载。不排序的话「A 依赖 B 但 B 目录名排在后面」会误判 |
+| 互斥 | **双向检查**：不只查自己的 `conflicts`，还查「已运行插件有没有把我列为 conflicts」。
+否则「谁先加载谁赢」，而目录名字母序不该有这种权力 |
+| 前置被禁用 | 依赖方一起停（`StopDependentsAsync`，递归），状态写「前置 X 已停止，本插件也跟着停了」 |
+| 前置重新启用 | `LoadWaitingDependentsAsync` 把因它被挡住的依赖方重新试一遍 |
+
+#### c) 内置开发文档
+
+`Services/Plugins/PluginDocs.cs`：**点一次写一次**，写进 `<数据根>/doc/`，然后浏览器打开首页。
+
+- 内置九份 HTML（首页 + 八章）：搭建环境（VS 2026 建类库、改 csproj、部署、调试）、
+  清单字段、日志/存储/资源、上下文贡献与会话事件、主动发起对话、窗口与插槽、注册工具、调试打包排错。
+- 样式内联在各页里（共用一份 `<style>` 模板），**没有外部资源**：拷走 doc 目录也能直接看。
+- 不点就不落盘 —— 只用对话功能的用户不该凭空多出九个文件。
+- 入口：插件页标题下的那行小字「插件开发文档 · 从零写一个插件」（`PluginsPage.DevDocLink`）。
+
+**已验证**（无头，两套 harness）：
+
+- 工具：登记后注册表能解析、分派器能执行、名字不合规 / 坏 schema / 重名都被拒绝、
+  执行体抛异常变成失败结果、单条撤销与门面撤销都干净
+- 真插件（示例）声明 `tools.provide` 后 `sample_count_words` 出现在注册表、执行返回「3 个词」、
+  禁用后工具消失且状态仍是「已禁用」（没吊住程序集）
+- 清单：前置在运行 → 依赖方运行；前置不存在 → 无法加载；平台不符 → 无法加载；
+  成环 → 两个都标；互斥 → 两者不会同时运行；前置禁用 → 依赖方跟着停；
+  前置重新启用 → 依赖方自动回来
+- 文档：九份文件都写出来、安装章含「Visual Studio 2026」与「类库」、清单章含能力与依赖字段、
+  工具章含 `PluginToolDefinition` 与 `DangerLevel`、无未替换占位符
+
+**没验证**：人眼看文档排版与插件页那行小字；插件工具在真实界面里的工具页展示与等级调整按钮。
+
+---
+
 ## 二、M0 踩过的坑（别再踩）
 
 ### 坑 1：`LoadFromAssemblyPath` 会锁死文件
@@ -449,8 +521,8 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
 
 ## 三、待办
 
-M0 / M1 / M2 / M3 / M4 / M6 已完成，只剩 **M5（桌宠插件本体）**。
-它需要的三块地基现在都齐了：
+M0 / M1 / M2 / M3 / M4 / M6 / M7 已完成，只剩 **M5（桌宠插件本体）**。
+它需要的底层能力现在全部齐备：
 
 | 桌宠要做的事 | 用哪个出口 |
 | --- | --- |
@@ -459,6 +531,10 @@ M0 / M1 / M2 / M3 / M4 / M6 已完成，只剩 **M5（桌宠插件本体）**。
 | 气泡显示 AI 输出尾部 | 同上，`ContentDelta`（已经按 50 ms 合并，`Text` 是累积正文） |
 | 点一下就开口 | `context.Sessions.SendAsync(sessionId, text)` |
 | 在会话窗口里加自己的按钮 | `context.Slots.AddControl(PluginSlots.ConversationInputSide, ...)` |
+| 给模型提供「喂食 / 摸摸头」这类动作 | `context.Tools.Register(...)`（要声明 `tools.provide`） |
+
+写之前先让用户看一眼 **插件页那行小字「插件开发文档」**：它会把完整的九章 HTML 教程
+生成到 `<数据根>/doc/` 并打开浏览器，里面从「VS 2026 建一个类库」讲到排错清单。
 
 开工要点（M5）：
 
@@ -474,7 +550,7 @@ M0 / M1 / M2 / M3 / M4 / M6 已完成，只剩 **M5（桌宠插件本体）**。
 验收（`plugin-plan.md` 第 7 节的 M5 那两条）：
 桌宠能显示流式内容尾部；点击能发起一轮；重启后位置被记住；禁用后窗口消失且不再响应事件。
 
-### 已验证可复用的测试手法（M1 – M4 用过四次）
+### 已验证可复用的测试手法（M1 – M7 用过五次）
 
 无头 harness：临时建 csproj（引 `HtaciAI.csproj`），`Main` 里 `AppPaths.Initialize` +
 `DatabaseService.Initialize` + 写测试会话/模型行，然后**直接调服务层**，不建界面。

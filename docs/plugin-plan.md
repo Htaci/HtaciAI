@@ -141,9 +141,8 @@ public interface IPluginContext
 > **实装后的差异**（以 [`plugin-handoff.md`](./plugin-handoff.md) 为准）：
 > `IUiSlotRegistry` 实装名是 `IUiExtensionRegistry`；`IPromptContributor` 去掉了 `Layer`
 > （只有「追加到 system 末尾」一种用法）；`BuildAsync` 的签名就是现在这一份：
-> 每插件 4 KB / 单轮合计 8 KB 配额、500 ms 超时、`prompt.contribute` 与 `chat.observe`
-> 全部已实装（M2）；`Windows` / `Slots` 已实装（M4）；`Tools` 仍待做（M0 计划的
-> `tools.provide` 到现在还没接）。
+> 每插件 4 KB / 单轮合计 8 KB 配额、500 ms 超时。**`IPluginContext` 的七项门面现已全部实装**
+> —— `Prompts` / `Chat`（M2）、`Sessions`（M3）、`Windows` / `Slots`（M4）、`Tools`（M7）。
 
 ### 2.3 扩展点
 
@@ -460,9 +459,10 @@ public sealed class WindowOptions
 | M3 | `ISessionFacade`（主动发起、取消、改权限、读历史；agent 旁注与临时模型未做，理由见交接文档） | M1 | ✅ 已完成 |
 | M4 | `IPluginWindowHost` + `IUiExtensionRegistry` + `PluginControlHost` + 插槽与入口卡片 | M0 | ✅ 已完成 |
 | M5 | 桌宠插件（先窗口+气泡，后主动发起） | M2、M3、M4 | ⬜ 未开始 |
+| M7 | 插件工具（`IToolRegistryApi` + `tools.provide`）、清单的 `platforms`/`requires`/`conflicts`/`tags`/`author` 与拓扑加载、内置开发文档（`<数据根>/doc/`） | M0、M4 | ✅ 已完成 |
 | M6 | 「插件」页（新标签页入口）：列表、启用/禁用、能力清单、错误状态、需重启提示、崩溃记录与崩溃日志、崩溃后仍自动加载；与设置页总开关联动 | M0 | ✅ 已完成（含「最近一次贡献字数」） |
 
-**下一步**：M5（桌宠插件本体）。M2 / M3 / M4 三块地基都已就绪，
+**下一步**：M5（桌宠插件本体）。`IPluginContext` 上的门面已全部就绪，
 开工要点写在 [`plugin-handoff.md`](./plugin-handoff.md) 的「三、待办」里。
 
 ---

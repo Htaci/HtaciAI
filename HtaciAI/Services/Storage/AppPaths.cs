@@ -17,6 +17,7 @@ namespace HtaciAI.Services.Storage;
 ///   plugins/         插件（&lt;id&gt;/plugin.json + dll），以及宿主侧的 state.json
 ///   plugin-data/     插件私有数据（&lt;id&gt;/），与插件目录分开以免升级时被覆盖
 ///   logs/            插件日志与崩溃日志
+///   doc/             插件开发文档（HTML，按需生成）
 ///   settings.json    业务设置（默认配置页的项）
 /// </code>
 ///
@@ -50,6 +51,7 @@ public static class AppPaths
     private static string _plugins = "";
     private static string _pluginData = "";
     private static string _logs = "";
+    private static string _docs = "";
     private static string _requestedRoot = "";
     private static StorageMode _mode = StorageMode.Default;
     private static string? _initError;
@@ -81,6 +83,13 @@ public static class AppPaths
     /// 数据放里面就会跟着一起没。
     /// </summary>
     public static string PluginData { get { EnsureInitialized(); return _pluginData; } }
+
+    /// <summary>
+    /// 文档目录（<c>&lt;数据根&gt;/doc</c>）：目前放插件开发文档的 HTML。
+    /// <b>按需生成</b> —— 第一次在插件页点「插件开发文档」时才建目录并写入，
+    /// 不点就一个文件都不落盘（只用对话功能的用户不该多出一堆文件）。
+    /// </summary>
+    public static string Docs { get { EnsureInitialized(); return _docs; } }
 
     /// <summary>日志目录（插件日志、崩溃日志）。</summary>
     public static string Logs { get { EnsureInitialized(); return _logs; } }
@@ -200,6 +209,7 @@ public static class AppPaths
         _plugins = Path.Combine(root, "plugins");
         _pluginData = Path.Combine(root, "plugin-data");
         _logs = Path.Combine(root, "logs");
+        _docs = Path.Combine(root, "doc");
     }
 
     /// <summary>Windows 下路径大小写不敏感；末尾分隔符差异也不该算作不同目录。</summary>

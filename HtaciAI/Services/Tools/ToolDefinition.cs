@@ -12,6 +12,13 @@ public enum ToolSource
     Script,
     /// <summary>MCP 服务端提供的工具（<see cref="ToolDefinition.Target"/> 存所属服务 id）。</summary>
     Mcp,
+
+    /// <summary>
+    /// 插件登记的工具（<see cref="ToolDefinition.Target"/> 存插件 id）。
+    /// 执行体在 <c>PluginToolRegistry</c> 里按名字查 —— 刻意不放在本对象上：
+    /// 这份定义会被选择器、请求体到处复制，混进插件代码就等于到处留着插件程序集。
+    /// </summary>
+    Plugin,
     // 未来：Terminal
 }
 

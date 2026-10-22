@@ -50,6 +50,44 @@ public sealed class PluginManifest
     /// </summary>
     [JsonPropertyName("capabilities")]
     public List<string> Capabilities { get; set; } = new();
+
+    /// <summary>
+    /// 只在哪些平台上加载：<c>windows</c> / <c>linux</c> / <c>macos</c>。
+    /// <b>空 = 所有平台</b>（绝大多数插件都是这样）。
+    ///
+    /// 用在「这个插件 P/Invoke 了某个只在一个系统里有的库」这类情况：
+    /// 与其在别的系统上加载后崩掉，不如根本不加载并写明原因。
+    /// </summary>
+    [JsonPropertyName("platforms")]
+    public List<string> Platforms { get; set; } = new();
+
+    /// <summary>
+    /// 前置插件 id：<b>宿主会先加载它们</b>。任何一个没装 / 被禁用 / 加载失败，本插件都不加载，
+    /// 并在插件页写明是哪一个前置没起来。
+    /// </summary>
+    [JsonPropertyName("requires")]
+    public List<string> Requires { get; set; } = new();
+
+    /// <summary>
+    /// 与这些插件互斥：只要它们中任何一个正在运行，本插件就不加载。
+    ///
+    /// 用途是「两个插件都想接管同一件事」（比如两个桌宠同时改输入框的行为），
+    /// 让用户自己去插件页决定留哪个，而不是让它们互相打架。
+    /// </summary>
+    [JsonPropertyName("conflicts")]
+    public List<string> Conflicts { get; set; } = new();
+
+    /// <summary>分类标签，纯展示用（插件页与文档里列出来）。</summary>
+    [JsonPropertyName("tags")]
+    public List<string> Tags { get; set; } = new();
+
+    /// <summary>作者署名，纯展示用。</summary>
+    [JsonPropertyName("author")]
+    public string? Author { get; set; }
+
+    /// <summary>项目主页 / 仓库地址，纯展示用。</summary>
+    [JsonPropertyName("homepage")]
+    public string? Homepage { get; set; }
 }
 
 /// <summary>

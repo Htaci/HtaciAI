@@ -30,6 +30,14 @@ public enum PluginRunState
     /// 功能已经停止，只是内存没释放；文件也被占用，所以要更新/重新启用都得重启程序。
     /// </summary>
     NeedsRestart,
+
+    /// <summary>
+    /// 因为前置插件或互斥插件的关系没有运行（前置没装 / 被禁用 / 加载失败，或与正在运行的插件冲突）。
+    ///
+    /// <b>与 <see cref="Blocked"/> 分开</b>：Blocked 是「这个插件自己的清单有问题，作者要改」，
+    /// 而这里插件本身没问题，是环境不满足 —— 用户看到的处置办法完全不同。
+    /// </summary>
+    DependencyBlocked,
 }
 
 /// <summary>
@@ -63,6 +71,7 @@ public sealed record PluginInfo(
         PluginRunState.Blocked => "无法加载",
         PluginRunState.SkippedByCrash => "因崩溃暂停加载",
         PluginRunState.NeedsRestart => "已禁用（需重启才能完全更新启用状态）",
+        PluginRunState.DependencyBlocked => "因依赖未运行",
         _ => State.ToString(),
     };
 

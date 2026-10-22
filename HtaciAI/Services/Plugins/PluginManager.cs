@@ -79,6 +79,10 @@ public sealed partial class PluginManager
 
         ScanDirectory();
 
+        // 扫描之后、加载之前把清单里描述的关系过一遍：
+        // 平台不符 / 前置没装 / 互相依赖成环 —— 这三种到这里就能判定，不必等加载失败。
+        ApplyManifestRules();
+
         if (!IsMasterEnabled)
         {
             // 总开关关着：连加载都不尝试，但列表仍要能显示出来，方便用户看到有什么
@@ -89,7 +93,7 @@ public sealed partial class PluginManager
             return;
         }
 
-        foreach (var entry in _entries.ToList())
+        foreach (var entry in LoadOrder())
         {
             if (_stopping) break;
             await TryLoadOnStartupAsync(entry, ct);
@@ -100,7 +104,7 @@ public sealed partial class PluginManager
 
     private async Task TryLoadOnStartupAsync(PluginEntry entry, CancellationToken ct)
     {
-        // 扫描阶段已经判定过的问题（清单坏了、版本不够、入口缺失）保持原状
+        // 扫描阶段已经判定过的问题（清单坏了、版本不够、入口缺失、平台不符、循环依赖）保持原状
         if (entry.RunState is PluginRunState.Blocked or PluginRunState.Failed) return;
 
         if (!entry.Record.Enabled)
@@ -118,6 +122,10 @@ public sealed partial class PluginManager
             PluginLog.Warn(entry.Id, "因疑似崩溃标记跳过加载");
             return;
         }
+
+        // 前置没起来就别加载它：起不来的前置几乎必然让依赖方在半路炸掉，
+        // 而那种崩溃在日志里看起来会像是依赖方自己的问题。
+        if (CheckDependencies(entry)) return;
 
         await LoadAsync(entry, ct);
     }
@@ -222,8 +230,36 @@ public sealed partial class PluginManager
             return;
         }
 
+        // 手动启用时也要过一遍依赖：前置可能正是刚被禁用的那个
+        ApplyManifestRules();
+        if (entry.RunState == PluginRunState.Blocked) { Raise(); return; }
+
+        // 用户手动启用 = 明确表示要用它，但前置确实没运行起来还是不能启用
+        // （绕过这条只会让插件在半路炸掉，那种崩溃在日志里看起来像它自己的 bug）
+        if (CheckDependencies(entry)) { Raise(); return; }
+
         await LoadAsync(entry, ct);
+
+        // 之前因为「前置没起来」被挡住的依赖方，现在可以试着加载了
+        await LoadWaitingDependentsAsync(entry.Id, ct);
+
         Raise();
+    }
+
+    /// <summary>某个前置刚加载成功：把因为它而没起来的依赖方重新试一遍（只试一层，且只在确实被挡过时）。</summary>
+    private async Task LoadWaitingDependentsAsync(string loadedId, CancellationToken ct)
+    {
+        foreach (var entry in _entries.ToList())
+        {
+            if (entry.RunState != PluginRunState.DependencyBlocked) continue;
+            if (entry.Manifest is not { } manifest) continue;
+            if (!manifest.Requires.Contains(loadedId, StringComparer.Ordinal)) continue;
+            if (!entry.Record.Enabled) continue;
+
+            if (CheckDependencies(entry)) continue;
+
+            await LoadAsync(entry, ct);
+        }
     }
 
     /// <summary>禁用插件：停止投递 → 收尾 → 摘引用 → 尝试卸载程序集。</summary>
@@ -238,6 +274,9 @@ public sealed partial class PluginManager
             await UnloadAsync(entry);
         else if (entry.RunState != PluginRunState.NeedsRestart)
             entry.RunState = PluginRunState.Disabled;
+
+        // 前置停了，依赖它的那些也得停：让它们继续跑，很快会变成「前置已经不存在」的怪错
+        await StopDependentsAsync(entry.Id);
 
         Raise();
     }
@@ -755,6 +794,255 @@ public sealed partial class PluginManager
         return true;
     }
 
+    // ============================================================
+    // 清单里描述的关系：平台 / 前置 / 互斥 / 循环
+    // ============================================================
+
+    /// <summary>
+    /// 扫描之后、加载之前把「不需要跑代码就能判定」的问题一次性判掉：
+    /// 平台不符、前置没装、前置关系成环。判定结果一律是 <see cref="PluginRunState.Blocked"/>
+    /// （插件自己或它的清单要改），而不是 <see cref="PluginRunState.DependencyBlocked"/>
+    /// （那是「插件没问题、环境不满足」，只有前置<b>没运行起来</b>才归那一类）。
+    /// </summary>
+    private void ApplyManifestRules()
+    {
+        var ids = _entries.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var entry in _entries)
+        {
+            if (entry.Manifest is not { } manifest) continue;
+            if (entry.RunState is PluginRunState.Blocked or PluginRunState.Failed) continue;
+
+            if (!IsPlatformSupported(manifest, out var platformError))
+            {
+                Block(entry, platformError!);
+                continue;
+            }
+
+            if (manifest.Requires.FirstOrDefault(r => !ids.Contains(r)) is { } missing)
+            {
+                Block(entry, $"前置插件 {missing} 没有安装（plugins/{missing}/ 不存在）。");
+                continue;
+            }
+
+            if (manifest.Requires.Any(r => string.Equals(r, entry.Id, StringComparison.Ordinal)))
+            {
+                Block(entry, "清单里的 requires 写了自己。");
+            }
+        }
+
+        MarkDependencyCycles();
+    }
+
+    /// <summary>平台检查：<c>platforms</c> 为空表示所有平台。</summary>
+    private static bool IsPlatformSupported(PluginManifest manifest, out string? error)
+    {
+        error = null;
+        if (manifest.Platforms.Count == 0) return true;
+
+        var current = CurrentPlatform();
+        foreach (var platform in manifest.Platforms)
+            if (string.Equals(platform?.Trim(), current, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+        // 也接受常见的别名（win / osx），省得作者为一个字符串反复试
+        if (manifest.Platforms.Any(p => IsPlatformAlias(p, current))) return true;
+
+        error = $"该插件只支持 {string.Join(" / ", manifest.Platforms)}，当前系统是 {current}。";
+        return false;
+    }
+
+    private static string CurrentPlatform()
+    {
+        if (OperatingSystem.IsWindows()) return "windows";
+        if (OperatingSystem.IsMacOS()) return "macos";
+        if (OperatingSystem.IsLinux()) return "linux";
+        return "unknown";
+    }
+
+    private static bool IsPlatformAlias(string? platform, string current)
+    {
+        var value = platform?.Trim().ToLowerInvariant();
+        return current switch
+        {
+            "windows" => value is "win" or "win32" or "win64",
+            "macos" => value is "osx" or "mac" or "darwin",
+            "linux" => value is "unix",
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// 找前置关系里的环。整组都标 Blocked 并写出环路（<c>a → b → a</c>）：
+    /// 只标其中一个的话，用户改完那一个会发现另一个又报同样的错。
+    /// </summary>
+    private void MarkDependencyCycles()
+    {
+        // 0 = 未访问，1 = 在栈上，2 = 已完成
+        var state = new Dictionary<string, int>(StringComparer.Ordinal);
+        var stack = new List<string>();
+
+        foreach (var entry in _entries)
+            Visit(entry.Id, entry, state, stack);
+
+        void Visit(string id, PluginEntry? entry, Dictionary<string, int> state, List<string> stack)
+        {
+            if (entry?.Manifest is not { } manifest) return;
+
+            state.TryGetValue(id, out var mark);
+            if (mark == 2) return;
+
+            if (mark == 1)
+            {
+                // 回到栈上的节点 = 找到环；把从它开始的那一段摘出来
+                var start = stack.IndexOf(id);
+                if (start < 0) return;
+
+                var cycle = stack.Skip(start).ToList();
+                var path = string.Join(" → ", cycle.Append(id));
+                var message = $"前置关系成环：{path}。这些插件都无法加载，请先改掉其中一环的 requires。";
+
+                foreach (var cycleId in cycle)
+                    if (FindEntry(cycleId) is { } member && member.RunState != PluginRunState.Blocked)
+                        Block(member, message);
+
+                return;
+            }
+
+            state[id] = 1;
+            stack.Add(id);
+
+            foreach (var required in manifest.Requires)
+                Visit(required, FindEntry(required), state, stack);
+
+            stack.RemoveAt(stack.Count - 1);
+            state[id] = 2;
+        }
+    }
+
+    /// <summary>
+    /// 加载顺序：<b>前置排在前面</b>（对 <c>requires</c> 做拓扑排序），其余保持扫描顺序。
+    /// 不排序的话，「A 依赖 B、但 B 的目录名排在 A 后面」时 A 会因为 B 还没加载而被判成依赖未满足。
+    /// </summary>
+    private List<PluginEntry> LoadOrder()
+    {
+        var result = new List<PluginEntry>(_entries.Count);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var entry in _entries)
+            AddWithDependencies(entry);
+
+        // 环里的节点不会被 Visit 到两次；剩下的按原顺序补进来，保证列表完整
+        foreach (var entry in _entries)
+            if (visited.Add(entry.Id))
+                result.Add(entry);
+
+        return result;
+
+        void AddWithDependencies(PluginEntry entry)
+        {
+            if (!visited.Add(entry.Id)) return;
+
+            if (entry.Manifest is { } manifest)
+                foreach (var required in manifest.Requires)
+                    if (FindEntry(required) is { } dependency && !visited.Contains(dependency.Id))
+                        AddWithDependencies(dependency);
+
+            result.Add(entry);
+        }
+    }
+
+    /// <summary>
+    /// 运行时依赖检查：前置都<b>真的在运行</b>吗、有没有互斥插件正在运行。
+    /// 返回 true 表示不该加载（原因已经写到 <see cref="PluginEntry.Error"/>）。
+    /// </summary>
+    private bool CheckDependencies(PluginEntry entry)
+    {
+        if (entry.Manifest is not { } manifest) return false;
+
+        foreach (var required in manifest.Requires)
+        {
+            var dependency = FindEntry(required);
+            if (dependency is null)
+            {
+                Block(entry, $"前置插件 {required} 没有安装。");
+                return true;
+            }
+
+            if (dependency.RunState != PluginRunState.Loaded)
+            {
+                var reason = dependency.RunState switch
+                {
+                    PluginRunState.Disabled => "已被禁用",
+                    PluginRunState.SkippedByCrash => "因疑似崩溃被跳过",
+                    PluginRunState.DependencyBlocked => "自己也没能运行",
+                    PluginRunState.Blocked => "清单无法加载",
+                    PluginRunState.Failed => "加载失败",
+                    _ => "未在运行",
+                };
+
+                BlockByDependency(entry, $"前置插件 {required} {reason}，本插件因此没有加载。");
+                return true;
+            }
+        }
+
+        foreach (var conflict in manifest.Conflicts)
+        {
+            if (FindEntry(conflict) is { RunState: PluginRunState.Loaded })
+            {
+                BlockByDependency(entry, $"与正在运行的插件 {conflict} 冲突（清单里写了 conflicts），本插件没有加载。");
+                return true;
+            }
+        }
+
+        // 反方向也要查：互斥是双向的，但只有一方可能写了 conflicts。
+        // 不查这一遍的话，「先加载谁」会决定谁赢 —— 而目录名的字母序不该有这种权力。
+        foreach (var other in _entries)
+        {
+            if (other.RunState != PluginRunState.Loaded) continue;
+            if (other.Manifest is not { } otherManifest) continue;
+            if (!otherManifest.Conflicts.Contains(entry.Id, StringComparer.Ordinal)) continue;
+
+            BlockByDependency(entry, $"与正在运行的插件 {other.Id} 冲突（对方清单里写了 conflicts），本插件没有加载。");
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void BlockByDependency(PluginEntry entry, string reason)
+    {
+        entry.RunState = PluginRunState.DependencyBlocked;
+        entry.Error = reason;
+        PluginLog.Warn(entry.Id, "未加载：" + reason);
+    }
+
+    /// <summary>
+    /// 某个插件停下来之后，它（直接或间接）的依赖方也要停 —— 让依赖方继续跑，
+    /// 它很快就会在一个「前置已经不存在」的状态下出错，而那个错看起来像是它自己的 bug。
+    /// </summary>
+    private async Task StopDependentsAsync(string stoppedId)
+    {
+        foreach (var entry in _entries.ToList())
+        {
+            if (entry.Manifest is not { } manifest) continue;
+            if (!manifest.Requires.Contains(stoppedId, StringComparer.Ordinal)) continue;
+            if (entry.RunState != PluginRunState.Loaded) continue;
+
+            try
+            {
+                await UnloadAsync(entry);
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Error(entry.Id, "前置停止后卸载失败", ex);
+            }
+
+            BlockByDependency(entry, $"前置插件 {stoppedId} 已停止，本插件也跟着停了。");
+            await StopDependentsAsync(entry.Id);
+        }
+    }
+
     private static void Block(PluginEntry entry, string error)
     {
         entry.RunState = PluginRunState.Blocked;
@@ -789,6 +1077,8 @@ public sealed partial class PluginManager
             windows = host;
         }
 
+        var hasTools = HasCapability(manifest, PluginCapabilities.ToolsProvide);
+
         IUiExtensionRegistry? slots = null;
         if (HasCapability(manifest, PluginCapabilities.UiSlot))
         {
@@ -810,7 +1100,19 @@ public sealed partial class PluginManager
                 ? new PluginChatFacade(manifest.Id, entry.Subscriptions)
                 : null,
             Windows: windows,
-            Slots: slots);
+            Slots: slots,
+            Tools: hasTools ? CreateToolFacade(entry) : null);
+    }
+
+    /// <summary>
+    /// 建工具门面并登记进订阅表：禁用插件时它把该插件的工具全部从注册表里摘掉，
+    /// 会话里选着的 id 于是自然解析不到（模型看不见、也调不到）。
+    /// </summary>
+    private static IToolRegistryApi CreateToolFacade(PluginEntry entry)
+    {
+        var facade = new PluginToolFacade(entry.Id);
+        entry.Subscriptions.Add(facade);
+        return facade;
     }
 
     // ============================================================

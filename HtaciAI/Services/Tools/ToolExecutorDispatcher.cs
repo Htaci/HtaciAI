@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Services;
 using HtaciAI.Services.Mcp;
+using HtaciAI.Services.Plugins;
 
 namespace HtaciAI.Services.Tools;
 
@@ -144,6 +145,7 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
             ToolSource.Script => _scripts.ExecuteAsync(tool, call, ct),
             ToolSource.Builtin => _builtin.ExecuteAsync(tool, call, Context, ct),
             ToolSource.Mcp => _mcp.ExecuteAsync(tool, call, ct),
+            ToolSource.Plugin => PluginToolRegistry.InvokeAsync(tool, call, ct),
             _ => Task.FromResult(ToolExecution.Fail($"暂不支持的工具来源：{tool.Source}")),
         };
 

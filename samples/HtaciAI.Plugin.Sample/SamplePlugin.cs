@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -134,6 +135,30 @@ public sealed class SamplePlugin : IPlugin
 
         if (context.Windows is null)
             context.Log.Info("未声明 ui.window：不能建自己的窗口");
+
+        // 工具：登记后模型能调用、用户能在工具页看见并调危险等级。
+        // 注意登记失败不会抛（名字不合规 / 重名 / schema 不合法都只记日志）。
+        context.Tools?.Register(
+            new PluginToolDefinition
+            {
+                Name = "sample_count_words",
+                Description = "数一数一段文本有多少个词（示例插件提供的工具）。",
+                InputSchemaJson =
+                    "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"要统计的文本\"}},\"required\":[\"text\"]}",
+                DangerLevel = PluginToolDangerLevel.Safe,
+            },
+            (call, ct) =>
+            {
+                string text;
+                using (var doc = JsonDocument.Parse(call.ArgumentsJson))
+                    text = doc.RootElement.TryGetProperty("text", out var value) ? value.GetString() ?? "" : "";
+
+                var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+                return Task.FromResult(PluginToolResult.Ok($"{words} 个词"));
+            });
+
+        if (context.Tools is not null)
+            context.Log.Info("已登记示例工具 sample_count_words");
 
         // 演示「插件必须自己停掉后台任务」：宿主没法从外部停它，
         // 留着运行中的定时器会让程序集无法卸载，禁用后就只能提示「需重启」。
