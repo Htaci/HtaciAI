@@ -280,10 +280,13 @@ public partial class ToolsPage : UserControl
 
         var levelBadge = BuildEditableLevelBadge(tool);
 
-        var nameRow = new StackPanel
+        // 用 WrapPanel 而不是 StackPanel：工具名 + 一串标签很容易超过卡片宽度，
+        // StackPanel 只会把它截断 / 顶出卡片，WrapPanel 会自动折到第二行。
+        var nameRow = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            ItemSpacing = 8,
+            LineSpacing = 4,
             Children =
             {
                 new TextBlock
@@ -347,7 +350,7 @@ public partial class ToolsPage : UserControl
         var card = new Border
         {
             Width = 240,
-            Height = 118,
+            MinHeight = 118,
             Margin = new Thickness(0, 0, 12, 12),
             Padding = new Thickness(16, 14),
             CornerRadius = new CornerRadius(12),

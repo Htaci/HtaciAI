@@ -9,7 +9,6 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
-using HtaciAI.Models;
 using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services;
 using HtaciAI.Services.Plugins;
@@ -18,7 +17,7 @@ using HtaciAI.Services.Storage;
 namespace HtaciAI.Views;
 
 /// <summary>
-/// 插件页：左侧列出插件目录里发现的插件，右侧是总开关与所选插件的详情。
+/// 插件页：左侧是插件列表，右侧是<b>主页</b>（安全提示 + 插件卡片）或所选插件的详情。
 ///
 /// <b>这里只做「展示 + 转发」</b>：真正的加载、卸载、崩溃策略全在 <see cref="PluginManager"/> 里。
 /// 页面不缓存插件状态，每次 <see cref="Refresh"/> 都从管理器取一份新快照 ——
@@ -34,8 +33,6 @@ public partial class PluginsPage : UserControl
     private static readonly IBrush Danger = new SolidColorBrush(Color.Parse("#DC2626"));
     private static readonly IBrush Warning = new SolidColorBrush(Color.Parse("#B45309"));
     private static readonly IBrush Ok = new SolidColorBrush(Color.Parse("#16A34A"));
-
-    private readonly AppSettingsData _data = AppSettingsStore.Current;
 
     /// <summary>
     /// 当前选中的插件 id。<c>null</c> = 停在主页（插件卡片总览）。
@@ -165,17 +162,103 @@ public partial class PluginsPage : UserControl
 
     private void UpdateHeader(IReadOnlyList<PluginInfo> all)
     {
-        if (all.Count == 0)
+        var selected = _selectedId is null ? null : all.FirstOrDefault(p => p.Id == _selectedId);
+
+        // ---- 主页：页面级标题、插件数、开发文档入口 ----
+        if (selected is null)
         {
-            HeaderDesc.Text = "插件目录里还没有插件";
+            HeaderTitle.Text = "插件";
+            OpenDirectoryButton.IsVisible = true;
+            DevDocLink.IsVisible = true;
+            HeaderCaps.IsVisible = false;
+            HeaderCaps.Children.Clear();
+            DetailActions.IsVisible = false;
+            DetailActions.Children.Clear();
+
+            HeaderDesc.Text = all.Count == 0
+                ? "插件目录里还没有插件"
+                : PluginManager.IsMasterEnabled
+                    ? $"共 {all.Count} 个插件，{all.Count(p => p.State == PluginRunState.Loaded)} 个运行中"
+                    : $"共 {all.Count} 个插件，总开关已关闭（可在设置里打开）";
             return;
         }
 
-        var loaded = all.Count(p => p.State == PluginRunState.Loaded);
-        HeaderDesc.Text = PluginManager.IsMasterEnabled
-            ? $"共 {all.Count} 个插件，{loaded} 个运行中"
-            : $"共 {all.Count} 个插件，总开关已关闭";
+        // ---- 详情：标题就是这个插件的名字，副标题是版本号 ----
+        HeaderTitle.Text = selected.Name;
+        HeaderDesc.Text = string.IsNullOrWhiteSpace(selected.Version)
+            ? selected.Id
+            : $"版本 {selected.Version}";
+
+        OpenDirectoryButton.IsVisible = false;
+        DevDocLink.IsVisible = false;
+
+        // 能力标签放在原来「开发文档」那行的位置：这个插件能做什么，比插件有几行代码更要紧
+        HeaderCaps.Children.Clear();
+        foreach (var capability in selected.Capabilities)
+            HeaderCaps.Children.Add(CreateTag(capability));
+        HeaderCaps.IsVisible = HeaderCaps.Children.Count > 0;
+
+        BuildDetailActions(selected);
     }
+
+    /// <summary>
+    /// 详情页右上角的两个开关：崩溃后自动加载、启用。
+    /// 手动开关（而不是勾选框）更符合「点一下就生效」的语义，也不会跟下面的内容抢注意力。
+    /// </summary>
+    private void BuildDetailActions(PluginInfo info)
+    {
+        DetailActions.Children.Clear();
+
+        var autoLoad = new ToggleSwitch
+        {
+            IsChecked = info.AutoLoadAfterCrash,
+            OnContent = null,
+            OffContent = null,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(autoLoad, info.CrashSuspected
+            ? "崩溃后仍自动加载。该插件疑似导致过崩溃，打开前请确认"
+            : "崩溃后仍自动加载：不打开时，疑似导致崩溃的插件下次启动会被跳过");
+        autoLoad.IsCheckedChanged += (_, _) =>
+        {
+            if (_suppressToggle) return;
+            PluginManager.Instance.SetAutoLoadAfterCrash(info.Id, autoLoad.IsChecked == true);
+        };
+
+        var enable = new ToggleSwitch
+        {
+            IsChecked = info.Enabled,
+            OnContent = null,
+            OffContent = null,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(enable, info.Enabled
+            ? "已启用，关掉立即停用它"
+            : "启用会立即加载并执行该插件的代码");
+        enable.IsCheckedChanged += async (_, _) => await OnEnableToggleAsync(info, enable);
+
+        DetailActions.Children.Add(CreateSwitchGroup("崩溃后自动加载", autoLoad));
+        DetailActions.Children.Add(CreateSwitchGroup("启用", enable));
+        DetailActions.IsVisible = true;
+    }
+
+    private static Control CreateSwitchGroup(string label, Control toggle) => new StackPanel
+    {
+        Orientation = Avalonia.Layout.Orientation.Horizontal,
+        Spacing = 8,
+        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        Children =
+        {
+            new TextBlock
+            {
+                Text = label,
+                FontSize = 12,
+                Foreground = TextMuted,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            },
+            toggle,
+        },
+    };
 
     // ---- 左侧列表 ----
 
@@ -348,8 +431,8 @@ public partial class PluginsPage : UserControl
     // ---- 右侧：主页 / 详情 ----
 
     /// <summary>
-    /// 右侧内容。没选插件 = <b>主页</b>：总开关 + 每个插件一张卡片
-    /// （运行中的排在前面，其余按加载顺序）。选了插件 = 那个插件的详情。
+    /// 右侧内容。没选插件 = <b>主页</b>：安全提示 + 插件卡片（直接排在页面上）；
+    /// 选了插件 = 那个插件的详情（README 为主）。
     /// </summary>
     private void RefreshContent(IReadOnlyList<PluginInfo> all)
     {
@@ -360,45 +443,90 @@ public partial class PluginsPage : UserControl
 
         if (_selectedId is null)
         {
-            DetailPanel.Children.Add(CreateMasterSwitchCard());
-            DetailPanel.Children.Add(CreateHomeCard(all));
+            DetailPanel.Children.Add(CreateSafetyNotice());
+            DetailPanel.Children.Add(CreatePluginGrid(all));
             return;
         }
 
         if (all.FirstOrDefault(p => p.Id == _selectedId) is { } info)
         {
-            DetailPanel.Children.Add(CreatePluginCard(info));
+            DetailPanel.Children.Add(CreateDetailCard(info));
             return;
         }
 
-        DetailPanel.Children.Add(CreateMasterSwitchCard());
-        DetailPanel.Children.Add(CreateEmptyCard());
+        DetailPanel.Children.Add(CreatePluginGrid(all));
     }
 
     /// <summary>
-    /// 主页：每个插件一张小卡片。**运行中的排在前面**（这正是用户最想先看到的），
-    /// 组内按加载顺序；点了进详情。
+    /// 黄色警示条：插件与主程序同进程同权限。
+    ///
+    /// <b>只留这一条</b>（不再包在「插件开关」卡片里）：开关挪走后，这句话是页面上唯一
+    /// 需要用户先读一眼的内容，所以给它单独的位置，而不是塞进某张卡的说明文字里。
     /// </summary>
-    private Control CreateHomeCard(IReadOnlyList<PluginInfo> all)
+    private static Control CreateSafetyNotice()
+    {
+        var icon = new TextBlock
+        {
+            Text = "\uF86A", // Fluent System Icons：warning
+            FontFamily = AppFonts.Icons,
+            FontSize = 16,
+            Foreground = new SolidColorBrush(Color.Parse("#D97706")),
+            Margin = new Thickness(0, 0, 10, 0),
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top,
+        };
+
+        var text = new TextBlock
+        {
+            Text = "插件运行在主程序进程，拥有主程序同等权限，在安装/启用插件前，应确认插件来源可信与插件内容安全。",
+            FontSize = 12.5,
+            Foreground = new SolidColorBrush(Color.Parse("#92400E")),
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        grid.Children.Add(icon);
+        grid.Children.Add(text);
+        Grid.SetColumn(text, 1);
+
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#FFFBEB")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#FDE68A")),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(14, 12),
+            Child = grid,
+        };
+    }
+
+    /// <summary>
+    /// 主页：插件卡片<b>直接排在页面上</b>（不再套一层带标题的卡片 —— 那层壳只是多了一圈边框）。
+    /// **运行中的排在前面**，组内按加载顺序；点了进详情。
+    /// </summary>
+    private Control CreatePluginGrid(IReadOnlyList<PluginInfo> all)
     {
         if (all.Count == 0) return CreateEmptyCard();
 
-        var grid = new WrapPanel
+        var panel = new WrapPanel
         {
             Orientation = Avalonia.Layout.Orientation.Horizontal,
-            Margin = new Thickness(0, -6, -12, 0),
+            Margin = new Thickness(0, 0, -12, 0),
         };
 
         foreach (var info in all.OrderByDescending(p => p.State == PluginRunState.Loaded))
-            grid.Children.Add(CreatePluginTile(info));
+            panel.Children.Add(CreatePluginTile(info));
 
-        return CreateCard("插件主页", "运行中的排在前面，其余按加载顺序", grid);
+        return panel;
     }
 
-    /// <summary>主页上的一张小卡片。</summary>
+    /// <summary>
+    /// 主页上的一张插件卡片：启用的正常样式，未启用的浅灰半透明（一眼分得出谁在跑）。
+    /// </summary>
     private Control CreatePluginTile(PluginInfo info)
     {
         var color = StateColor(info.State);
+        var enabled = info.Enabled;
 
         var body = new StackPanel
         {
@@ -410,7 +538,7 @@ public partial class PluginsPage : UserControl
                     Text = info.Name,
                     FontSize = 14,
                     FontWeight = FontWeight.SemiBold,
-                    Foreground = TextPrimary,
+                    Foreground = enabled ? TextPrimary : TextMuted,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 },
                 new StackPanel
@@ -453,28 +581,40 @@ public partial class PluginsPage : UserControl
             },
         };
 
+        var normalBackground = Brushes.White;
+        var normalBorder = LineBrush;
+
         var tile = new Border
         {
             Width = 230,
-            Margin = new Thickness(0, 6, 12, 0),
+            Margin = new Thickness(0, 0, 12, 12),
             Padding = new Thickness(14, 12),
             CornerRadius = new CornerRadius(12),
-            Background = new SolidColorBrush(Color.Parse("#FAFBFC")),
-            BorderBrush = LineBrush,
+            Background = enabled ? normalBackground : new SolidColorBrush(Color.Parse("#F6F7F9")),
+            BorderBrush = enabled ? normalBorder : new SolidColorBrush(Color.Parse("#EDEFF2")),
             BorderThickness = new Thickness(1),
+            Opacity = enabled ? 1 : 0.72,
             Cursor = new Cursor(StandardCursorType.Hand),
             Child = body,
         };
 
         tile.PointerEntered += (_, _) =>
         {
-            tile.Background = Surface;
-            tile.BorderBrush = new SolidColorBrush(Color.Parse("#CFD8E6"));
+            if (enabled)
+            {
+                tile.Background = Surface;
+                tile.BorderBrush = new SolidColorBrush(Color.Parse("#CFD8E6"));
+            }
+            else
+            {
+                tile.Opacity = 0.88;
+            }
         };
         tile.PointerExited += (_, _) =>
         {
-            tile.Background = new SolidColorBrush(Color.Parse("#FAFBFC"));
-            tile.BorderBrush = LineBrush;
+            tile.Background = enabled ? normalBackground : new SolidColorBrush(Color.Parse("#F6F7F9"));
+            tile.BorderBrush = enabled ? normalBorder : new SolidColorBrush(Color.Parse("#EDEFF2"));
+            tile.Opacity = enabled ? 1 : 0.72;
         };
         tile.PointerPressed += (_, e) =>
         {
@@ -486,105 +626,16 @@ public partial class PluginsPage : UserControl
         return tile;
     }
 
-    /// <summary>总开关。关掉 = 全部卸载，之后新插件也不会加载。</summary>
-    private Control CreateMasterSwitchCard()
+    /// <summary>
+    /// 单个插件的详情页。
+    ///
+    /// <b>主体就是这个插件的 README.md</b>（用 Markdown 渲染，与对话里的渲染器同一个控件）：
+    /// 插件作者写文档时不用再学一套格式；没写 README 才退回清单里的简介。
+    /// 能力、启停开关这些「宿主关心的事」都在页头和右上角，不跟正文挤在一起。
+    /// </summary>
+    private Control CreateDetailCard(PluginInfo info)
     {
-        var toggle = new CheckBox
-        {
-            Content = "启用插件",
-            FontSize = 13,
-            IsChecked = PluginManager.IsMasterEnabled,
-        };
-        toggle.IsCheckedChanged += async (_, _) => await OnMasterToggleAsync(toggle);
-
-        var body = new StackPanel
-        {
-            Spacing = 8,
-            Children =
-            {
-                toggle,
-                new TextBlock
-                {
-                    Text = "插件运行在本程序进程内，与主程序享有同样的权限 —— 能读写文件、能建自己的窗口。" +
-                           "所以这里默认关闭，打开之前请确认插件来源可信。关闭后立即卸载全部插件。",
-                    FontSize = 12,
-                    Foreground = TextMuted,
-                    TextWrapping = TextWrapping.Wrap,
-                },
-            },
-        };
-
-        return CreateCard("插件开关", null, body);
-    }
-
-    private async Task OnMasterToggleAsync(CheckBox toggle)
-    {
-        if (_suppressToggle) return;
-
-        var want = toggle.IsChecked == true;
-        if (want == _data.EnablePlugins) return;
-
-        _data.EnablePlugins = want;
-        AppSettingsStore.Save(_data);
-
-        _actionError = null;
-        toggle.IsEnabled = false;
-
-        try
-        {
-            await PluginManager.Instance.ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            _actionError = "切换插件开关失败：" + ex.Message;
-        }
-        finally
-        {
-            Refresh();
-        }
-    }
-
-    private Control CreatePluginCard(PluginInfo info)
-    {
-        var body = new StackPanel { Spacing = 10 };
-
-        // ---- 头部：名称 + 状态 ----
-        var titleRow = new StackPanel
-        {
-            Orientation = Avalonia.Layout.Orientation.Horizontal,
-            Spacing = 10,
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = info.Name,
-                    FontSize = 16,
-                    FontWeight = FontWeight.Bold,
-                    Foreground = TextPrimary,
-                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                },
-                CreateStatusBadge(info),
-            },
-        };
-        body.Children.Add(titleRow);
-
-        if (!string.IsNullOrWhiteSpace(info.Description))
-            body.Children.Add(new TextBlock
-            {
-                Text = info.Description,
-                FontSize = 12.5,
-                Foreground = TextMuted,
-                TextWrapping = TextWrapping.Wrap,
-            });
-
-        var meta = string.IsNullOrWhiteSpace(info.Version) ? info.Id : $"{info.Id} · {info.Version}";
-        body.Children.Add(new TextBlock
-        {
-            Text = meta,
-            FontSize = 11,
-            Foreground = TextFaint,
-            TextWrapping = TextWrapping.Wrap,
-        });
+        var body = new StackPanel { Spacing = 12 };
 
         // ---- 错误 / 需重启提示 ----
         if (!string.IsNullOrWhiteSpace(info.Error))
@@ -597,18 +648,8 @@ public partial class PluginsPage : UserControl
                 "或者用了泛型 Storage.Load<T>。详情见插件页的「插件开发文档」。",
                 "#FFF7ED", Warning));
 
-        // ---- 能力清单 ----
-        if (info.Capabilities.Count > 0)
-        {
-            body.Children.Add(new TextBlock
-            {
-                Text = "声明的能力",
-                FontSize = 12,
-                Foreground = TextFaint,
-                Margin = new Thickness(0, 4, 0, 0),
-            });
-            body.Children.Add(CreateCapabilityTags(info.Capabilities));
-        }
+        // ---- 正文：README.md / 简介 ----
+        body.Children.Add(CreateReadmeBlock(info));
 
         // ---- 上下文贡献：这个入口能悄悄改变模型行为，字数必须看得见 ----
         if (info.Capabilities.Any(c => string.Equals(c, PluginCapabilities.PromptContribute, StringComparison.OrdinalIgnoreCase)))
@@ -623,47 +664,6 @@ public partial class PluginsPage : UserControl
                 TextWrapping = TextWrapping.Wrap,
             });
         }
-
-        // ---- 操作区 ----
-        body.Children.Add(new Border
-        {
-            Height = 1,
-            Background = LineBrush,
-            Margin = new Thickness(0, 6, 0, 2),
-        });
-
-        var enabled = new CheckBox
-        {
-            Content = "启用该插件",
-            FontSize = 13,
-            IsChecked = info.Enabled,
-        };
-        enabled.IsCheckedChanged += async (_, _) => await OnEnableToggleAsync(info, enabled);
-
-        body.Children.Add(enabled);
-
-        var autoLoad = new CheckBox
-        {
-            Content = "崩溃后仍自动加载",
-            FontSize = 13,
-            IsChecked = info.AutoLoadAfterCrash,
-            Margin = new Thickness(24, 0, 0, 0),
-        };
-        autoLoad.IsCheckedChanged += (_, _) =>
-        {
-            if (_suppressToggle) return;
-            PluginManager.Instance.SetAutoLoadAfterCrash(info.Id, autoLoad.IsChecked == true);
-        };
-
-        body.Children.Add(autoLoad);
-        body.Children.Add(new TextBlock
-        {
-            Text = "不勾选（默认）：疑似导致崩溃的插件下次启动时会被跳过，避免「一启动就崩、连设置页都进不去」。",
-            FontSize = 11.5,
-            Foreground = TextFaint,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(24, 0, 0, 0),
-        });
 
         // ---- 崩溃记录 ----
         if (info.CrashCount > 0 || info.CrashSuspected)
@@ -695,11 +695,17 @@ public partial class PluginsPage : UserControl
         }
 
         // ---- 目录 ----
+        body.Children.Add(new Border
+        {
+            Height = 1,
+            Background = LineBrush,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+
         var dirRow = new StackPanel
         {
             Orientation = Avalonia.Layout.Orientation.Horizontal,
             Spacing = 10,
-            Margin = new Thickness(0, 6, 0, 0),
         };
         dirRow.Children.Add(new TextBlock
         {
@@ -707,6 +713,7 @@ public partial class PluginsPage : UserControl
             FontSize = 11,
             Foreground = TextFaint,
             TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 520,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         });
         var openBtn = CreateActionButton("打开目录");
@@ -718,7 +725,80 @@ public partial class PluginsPage : UserControl
         dirRow.Children.Add(openBtn);
         body.Children.Add(dirRow);
 
-        return CreateCard("插件详情", null, body);
+        return CreateCard(null, null, body);
+    }
+
+    /// <summary>
+    /// 插件说明：优先 README.md（Markdown 渲染），没有就用清单里的简介。
+    /// </summary>
+    private static Control CreateReadmeBlock(PluginInfo info)
+    {
+        var readme = TryReadReadme(info.Directory);
+        if (readme is not null)
+        {
+            var view = new Controls.Markdown();
+            view.SetMarkdown(StripLeadingTitle(readme, info));
+            return view;
+        }
+
+        return new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(info.Description) ? "（这个插件没有写说明）" : info.Description,
+            FontSize = 12.5,
+            Foreground = TextMuted,
+            TextWrapping = TextWrapping.Wrap,
+        };
+    }
+
+    /// <summary>
+    /// 去掉 README 开头那行与插件同名的 <c># 标题</c>：页头已经写着插件名了，
+    /// 正文再来一个巨大的同名标题，看起来像页面标题重复了。
+    /// <b>只删同名的那行</b>，标题写的是别的内容就保留。
+    /// </summary>
+    private static string StripLeadingTitle(string markdown, PluginInfo info)
+    {
+        var lines = markdown.Replace("\r\n", "\n").Split('\n').ToList();
+
+        var i = 0;
+        while (i < lines.Count && string.IsNullOrWhiteSpace(lines[i])) i++;
+        if (i >= lines.Count) return markdown;
+
+        var line = lines[i].TrimStart();
+        if (!line.StartsWith("# ", StringComparison.Ordinal)) return markdown;
+
+        var heading = line[2..].Trim();
+        if (!string.Equals(heading, info.Name, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(heading, info.Id, StringComparison.OrdinalIgnoreCase))
+            return markdown;
+
+        lines.RemoveAt(i);
+        if (i < lines.Count && string.IsNullOrWhiteSpace(lines[i])) lines.RemoveAt(i);
+
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>读插件目录里的 README（.md / .markdown，大小写都认）。读不到返回 null。</summary>
+    private static string? TryReadReadme(string directory)
+    {
+        try
+        {
+            if (!Directory.Exists(directory)) return null;
+
+            var file = Directory.EnumerateFiles(directory, "README*")
+                .FirstOrDefault(f =>
+                    f.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+                    f.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase));
+
+            if (file is null) return null;
+
+            var text = File.ReadAllText(file);
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+        catch
+        {
+            // 读不了 README 不该让整个详情页打不开
+            return null;
+        }
     }
 
     private Control CreateEmptyCard()
@@ -765,7 +845,7 @@ public partial class PluginsPage : UserControl
 
     // ---- 启用 / 禁用 ----
 
-    private async Task OnEnableToggleAsync(PluginInfo info, CheckBox toggle)
+    private async Task OnEnableToggleAsync(PluginInfo info, ToggleSwitch toggle)
     {
         if (_suppressToggle) return;
 
@@ -874,27 +954,33 @@ public partial class PluginsPage : UserControl
     // 视觉小件（与「常规设置」页保持同一套）
     // ============================================================
 
-    private static Border CreateCard(string title, string? description, Control body)
+    /// <summary>白底圆角卡。<paramref name="title"/> 为 null 时不画标题（详情页正文就是一整张卡）。</summary>
+    private static Border CreateCard(string? title, string? description, Control body)
     {
         var content = new StackPanel { Spacing = 6 };
-        content.Children.Add(new TextBlock
-        {
-            Text = title,
-            FontSize = 16,
-            FontWeight = FontWeight.Bold,
-            Foreground = TextPrimary,
-        });
 
-        if (!string.IsNullOrEmpty(description))
+        if (!string.IsNullOrEmpty(title))
+        {
             content.Children.Add(new TextBlock
             {
-                Text = description,
-                FontSize = 12,
-                Foreground = TextFaint,
-                TextWrapping = TextWrapping.Wrap,
+                Text = title,
+                FontSize = 16,
+                FontWeight = FontWeight.Bold,
+                Foreground = TextPrimary,
             });
 
-        content.Children.Add(new Border { Height = 4 });
+            if (!string.IsNullOrEmpty(description))
+                content.Children.Add(new TextBlock
+                {
+                    Text = description,
+                    FontSize = 12,
+                    Foreground = TextFaint,
+                    TextWrapping = TextWrapping.Wrap,
+                });
+
+            content.Children.Add(new Border { Height = 4 });
+        }
+
         content.Children.Add(body);
 
         return new Border
@@ -905,24 +991,6 @@ public partial class PluginsPage : UserControl
             BorderThickness = new Thickness(1),
             Padding = new Thickness(18, 16),
             Child = content,
-        };
-    }
-
-    private static Border CreateStatusBadge(PluginInfo info)
-    {
-        var color = StateColor(info.State);
-        return new Border
-        {
-            Background = new SolidColorBrush(Color.FromArgb(0x14, color.R, color.G, color.B)),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(8, 2),
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            Child = new TextBlock
-            {
-                Text = info.StateText,
-                FontSize = 11,
-                Foreground = new SolidColorBrush(color),
-            },
         };
     }
 
@@ -953,30 +1021,23 @@ public partial class PluginsPage : UserControl
         VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
     };
 
-    private static Control CreateCapabilityTags(IReadOnlyList<string> capabilities)
+    private static Control CreateTag(string capability)
     {
-        var panel = new WrapPanel { Orientation = Avalonia.Layout.Orientation.Horizontal };
+        var text = PluginCapabilities.Describe(capability) ?? capability;
 
-        foreach (var capability in capabilities)
+        return new Border
         {
-            var text = PluginCapabilities.Describe(capability) ?? capability;
-
-            panel.Children.Add(new Border
+            Background = Surface,
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(8, 3),
+            Margin = new Thickness(0, 0, 6, 6),
+            Child = new TextBlock
             {
-                Background = Surface,
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(8, 3),
-                Margin = new Thickness(0, 0, 6, 6),
-                Child = new TextBlock
-                {
-                    Text = text,
-                    FontSize = 11,
-                    Foreground = TextMuted,
-                },
-            });
-        }
-
-        return panel;
+                Text = text,
+                FontSize = 11,
+                Foreground = TextMuted,
+            },
+        };
     }
 
     private static Border CreateActionButton(string text)

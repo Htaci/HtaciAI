@@ -69,7 +69,7 @@
             </Grid>
         </Border>
 
-        <!-- ====== 右侧：总开关 + 所选插件详情 ====== -->
+        <!-- ====== 右侧：主页（插件卡片）或所选插件的详情 ====== -->
         <Grid Grid.Column="1"
               RowDefinitions="Auto,*"
               Margin="24,20">
@@ -77,10 +77,13 @@
                   ColumnDefinitions="*,Auto"
                   Margin="0,0,0,16">
                 <StackPanel Grid.Column="0">
-                    <TextBlock Text="插件"
+                    <!-- 主页时是「插件」，进某个插件后换成它的名字 -->
+                    <TextBlock x:Name="HeaderTitle"
+                               Text="插件"
                                FontSize="20"
                                FontWeight="Bold"
-                               Foreground="#1A1A2E"/>
+                               Foreground="#1A1A2E"
+                               TextTrimming="CharacterEllipsis"/>
                     <TextBlock x:Name="HeaderDesc"
                                Text="加载第三方扩展，按它们声明的能力生效"
                                FontSize="12"
@@ -88,8 +91,14 @@
                                TextWrapping="Wrap"
                                Margin="0,4,0,0"/>
 
+                    <!-- 详情页：这个插件声明的能力（就放在原来「开发文档」那行的位置） -->
+                    <WrapPanel x:Name="HeaderCaps"
+                               Orientation="Horizontal"
+                               Margin="0,8,0,0"
+                               IsVisible="False"/>
+
                     <!-- 插件开发文档：小字提示，点了才生成到 <数据根>/doc/ 并用浏览器打开。
-                         不点就不占磁盘，也不会在启动时多出几个文件。 -->
+                         不点就不占磁盘，也不会在启动时多出几个文件。只在主页显示。 -->
                     <TextBlock x:Name="DevDocLink"
                                Text="插件开发文档 · 从零写一个插件"
                                FontSize="11.5"
@@ -100,29 +109,41 @@
                                ToolTip.Tip="生成到数据目录的 doc 文件夹，并用浏览器打开（含在 VS 里建 dll 项目的步骤）"/>
                 </StackPanel>
 
-                <Border x:Name="OpenDirectoryButton"
-                        Grid.Column="1"
-                        Height="36"
-                        CornerRadius="18"
-                        Background="Transparent"
-                        BorderBrush="#E5E7EB"
-                        BorderThickness="1"
-                        Padding="16,0"
-                        VerticalAlignment="Top"
-                        Cursor="Hand">
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="8"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center">
-                        <TextBlock Text="&#xF42F;"
-                                   FontFamily="{StaticResource IconFont}"
-                                   FontSize="13"
-                                   Foreground="#4B5563"/>
-                        <TextBlock Text="打开插件目录"
-                                   FontSize="13"
-                                   Foreground="#4B5563"/>
-                    </StackPanel>
-                </Border>
+                <StackPanel x:Name="HeaderActions"
+                            Grid.Column="1"
+                            Orientation="Horizontal"
+                            Spacing="16"
+                            VerticalAlignment="Top">
+                    <!-- 详情页右上角：自动加载 + 启用（开关形式，代码里按选中项重建） -->
+                    <StackPanel x:Name="DetailActions"
+                                Orientation="Horizontal"
+                                Spacing="18"
+                                VerticalAlignment="Center"
+                                IsVisible="False"/>
+
+                    <Border x:Name="OpenDirectoryButton"
+                            Height="36"
+                            CornerRadius="18"
+                            Background="Transparent"
+                            BorderBrush="#E5E7EB"
+                            BorderThickness="1"
+                            Padding="16,0"
+                            VerticalAlignment="Top"
+                            Cursor="Hand">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="8"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="&#xF42F;"
+                                       FontFamily="{StaticResource IconFont}"
+                                       FontSize="13"
+                                       Foreground="#4B5563"/>
+                            <TextBlock Text="打开插件目录"
+                                       FontSize="13"
+                                       Foreground="#4B5563"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
             </Grid>
 
             <controls:SmoothScrollViewer Grid.Row="1"
