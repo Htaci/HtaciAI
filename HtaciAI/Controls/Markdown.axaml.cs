@@ -11,6 +11,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using HtaciAI.Services.Attachments;
 
 namespace HtaciAI.Controls;
 
@@ -116,6 +117,7 @@ public class MarkdownStreamParser
     private Grid? _currentTableGrid;
     private Border? _currentTableBorder;
     private int _tableRowCount = 0;
+    private int _spacersBeforeTable = 0;
 
     // 当前行缓冲
     private StringBuilder _lineBuffer = new();
@@ -180,6 +182,14 @@ public class MarkdownStreamParser
         }
     }
 
+    /// <summary>
+    /// 流式预览：把当前这一行画进一个临时段落。
+    ///
+    /// <b>文件卡片在这一步不建</b>（<c>renderFileCards: false</c>）：流式期间每来一个字符
+    /// 都会清空 Inlines 重建一次，而 <see cref="InlineUIContainer"/> 里放的控件
+    /// 反复摘挂会留下逻辑父级引用，也会每秒建几十个控件。预览期先显示原始标记文本，
+    /// 段落定稿时（<c>ProcessLine</c>）再渲染一次，那时才真正建出卡片。
+    /// </summary>
     private void UpdateCurrentParagraph()
     {
         if (_state == ParserState.CodeBlock || _inTable)
@@ -207,7 +217,7 @@ public class MarkdownStreamParser
         // 创建或更新当前段落
         if (_currentParagraph == null && ! string.IsNullOrWhiteSpace(currentLine))
         {
-            _currentParagraph = CreateInlineBlock(currentLine);
+            _currentParagraph = CreateInlineBlock(currentLine, renderFileCards: false);
             _currentParagraph.Margin = new Thickness(0, 5, 0, 5);
 
             _container.Children.Add(_currentParagraph);
@@ -221,7 +231,7 @@ public class MarkdownStreamParser
 
             // 清空并重新生成行内元素
             _currentParagraph.Inlines?.Clear();
-            AppendInlineRuns(_currentParagraph, currentLine);
+            AppendInlineRuns(_currentParagraph, currentLine, renderFileCards: false);
         }
     }
 
@@ -303,13 +313,19 @@ public class MarkdownStreamParser
                 FinishQuote();
             }
 
+            bool endedTable = _inTable;
             if (_inTable)
             {
                 FinishTable();
             }
 
             _listStack.Clear();
-            AddParagraphSpacing();
+
+            // 表格自己带上下留白，紧跟其后的空行 spacer 会叠成一大条空隙
+            if (!endedTable)
+            {
+                AddParagraphSpacing();
+            }
             return;
         }
 
@@ -373,6 +389,11 @@ public class MarkdownStreamParser
         if (_currentParagraph != null && !_paragraphProcessed)
         {
             _paragraphProcessed = true;
+
+            // 预览期没建文件卡片（见 UpdateCurrentParagraph），这里定稿重绘一次。
+            // 之后这个 block 不会再被改写，卡片上的事件与提示因此不会重复挂。
+            _currentParagraph.Inlines?.Clear();
+            AppendInlineRuns(_currentParagraph, trimmedLine);
         }
         else
         {
@@ -396,7 +417,8 @@ public class MarkdownStreamParser
     /// 横向 StackPanel 会以无限宽度测量子元素，子 TextBlock 的 TextWrapping 直接失效，
     /// 于是段落永不换行、长行溢出容器（超出屏幕右侧）。
     /// </summary>
-    private CustomSelectableTextBlock CreateInlineBlock(string text, double? fontSize = null, bool bold = false)
+    private CustomSelectableTextBlock CreateInlineBlock(
+        string text, double? fontSize = null, bool bold = false, bool renderFileCards = true)
     {
         var block = new CustomSelectableTextBlock
         {
@@ -407,17 +429,71 @@ public class MarkdownStreamParser
         if (fontSize.HasValue) block.FontSize = fontSize.Value;
         if (bold) block.FontWeight = FontWeight.Bold;
 
-        AppendInlineRuns(block, text);
+        AppendInlineRuns(block, text, renderFileCards);
         return block;
     }
 
-    /// <summary>把行内片段追加为 Run。流式刷新段落时先清空 Inlines 再调用。</summary>
-    private void AppendInlineRuns(CustomSelectableTextBlock block, string text)
+    /// <summary>
+    /// 把一段文本追加成行内元素（Run / 文件卡片）。
+    ///
+    /// <b>附件标记必须先切出去再做行内解析</b>：<see cref="ParseInlineSegments"/> 把
+    /// <c>_</c> <c>*</c> <c>`</c> 当行内标记，而路径里合法地含这些字符
+    /// （<c>D:\Project\HtaciAI\_scratch</c> 的下划线就会把后半段变成斜体），
+    /// 解析先行的话路径会显示成一堆残缺的斜体 / 粗体。
+    /// </summary>
+    /// <param name="renderFileCards">
+    /// 是否把 <c>[agent-file:///…]</c> 渲染成可点击卡片。流式预览期传 false，理由见
+    /// <see cref="UpdateCurrentParagraph"/>。
+    /// </param>
+    private void AppendInlineRuns(CustomSelectableTextBlock block, string text, bool renderFileCards = true)
     {
         if (string.IsNullOrEmpty(text)) return;
 
         var inlines = block.Inlines ??= new InlineCollection();
 
+        if (renderFileCards && AttachmentMarker.Contains(text))
+        {
+            AppendInlineWithFileCards(inlines, text);
+            return;
+        }
+
+        AppendSegments(inlines, text);
+    }
+
+    /// <summary>把文本切成「普通片段 + 文件卡片」并追加。</summary>
+    private void AppendInlineWithFileCards(InlineCollection inlines, string text)
+    {
+        var spans = AttachmentMarker.Scan(text);
+        if (spans.Count == 0)
+        {
+            AppendSegments(inlines, text);
+            return;
+        }
+
+        var cursor = 0;
+
+        foreach (var span in spans)
+        {
+            if (span.Start > cursor)
+                AppendSegments(inlines, text[cursor..span.Start]);
+
+            // 路径不存在（模型编的）时退回原始文本：一个点下去什么都没有的卡片，
+            // 比直接显示路径更让人困惑。
+            if (AttachmentStore.DescribeForDisplay(span.Path) is { } info)
+                inlines.Add(new InlineUIContainer(new AttachmentChip(info, null, compact: true, openOnClick: true)));
+            else
+                inlines.Add(new Run(text.Substring(span.Start, span.Length)));
+
+            cursor = span.End;
+        }
+
+        if (cursor < text.Length)
+            AppendSegments(inlines, text[cursor..]);
+    }
+
+    /// <summary>行内标记（粗体 / 斜体 / 行内代码 / 链接）→ Run。</summary>
+    private void AppendSegments(InlineCollection inlines, string text)
+    {
         foreach (var segment in ParseInlineSegments(text))
         {
             // 跳过空文本
@@ -870,20 +946,47 @@ public class MarkdownStreamParser
 
     private void StartTable()
     {
+        // 表格前的空行 spacer 与表格自带留白会叠成一大条空隙，这里先摘掉，表格无效时再补回
+        _spacersBeforeTable = 0;
+        while (_container.Children.Count > 0 && IsSpacer(_container.Children[^1]))
+        {
+            _container.Children.RemoveAt(_container.Children.Count - 1);
+            _spacersBeforeTable++;
+        }
+
+        // 单元格不画边框：Grid 背景色当分隔线（RowSpacing/ColumnSpacing 留出 1px），
+        // 避免外框和内部格子叠成「双线」
         _currentTableGrid = new Grid
         {
-            Margin = new Thickness(0, 5, 0, 5)
+            RowSpacing = 1,
+            ColumnSpacing = 1,
+            Background = new SolidColorBrush(Color.FromRgb(232, 232, 234))
         };
 
+        // 外框描边 + 一层内层圆角 Border 包住 Grid：直接让 Grid 当外框子元素时，
+        // 它的矩形背景会盖掉右侧和下侧描边（圆角处描边也会被裁掉），必须靠这层隔开
         _currentTableBorder = new Border
         {
-            BorderBrush = new SolidColorBrush(Color.FromRgb(220, 220, 220)),
+            Margin = new Thickness(0, 6, 0, 6),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(226, 226, 229)),
             BorderThickness = new Thickness(1),
-            Child = _currentTableGrid
+            CornerRadius = new CornerRadius(8),
+            ClipToBounds = true,
+            Background = new SolidColorBrush(Colors.White),
+            Child = new Border
+            {
+                CornerRadius = new CornerRadius(7),
+                ClipToBounds = true,
+                Child = _currentTableGrid
+            }
         };
 
         _container.Children.Add(_currentTableBorder);
     }
+
+    /// <summary>空行留白 spacer（见 AddParagraphSpacing）：无子元素、无背景、只有高度。</summary>
+    private static bool IsSpacer(Control control)
+        => control is Border { Child: null, Background: null, Height: > 0 };
 
     private void AddTableRowToGrid(List<string> cells, bool isHeader, int rowIndex)
     {
@@ -903,12 +1006,12 @@ public class MarkdownStreamParser
         {
             var cellBorder = new Border
             {
-                Padding = new Thickness(8, 6, 8, 6),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(220, 220, 220)),
-                BorderThickness = new Thickness(0, 0, 1, 1),
-                Background = isHeader
-                    ? new SolidColorBrush(Color.FromRgb(245, 245, 245))
-                    : new SolidColorBrush(Colors.White)
+                Padding = new Thickness(10, 7, 10, 7),
+                Background = new SolidColorBrush(isHeader
+                    ? Color.FromRgb(246, 247, 249)                    // 表头：淡灰
+                    : (rowIndex % 2 == 0
+                        ? Colors.White
+                        : Color.FromRgb(250, 250, 251)))             // 正文：斑马纹
             };
 
             // 单元格正文：单个富文本块（才能按列宽换行，横向 StackPanel 会溢出）
@@ -934,6 +1037,10 @@ public class MarkdownStreamParser
             {
                 // 无效表格，重新渲染为普通段落
                 _container.Children.Remove(_currentTableBorder);
+                for (int i = 0; i < _spacersBeforeTable; i++)
+                {
+                    AddParagraphSpacing();
+                }
                 foreach (var line in _tableLines)
                 {
                     AddParagraph(line);
@@ -946,6 +1053,7 @@ public class MarkdownStreamParser
         _currentTableGrid = null;
         _currentTableBorder = null;
         _tableRowCount = 0;
+        _spacersBeforeTable = 0;
     }
 
     private bool IsTableSeparator(string line)
@@ -977,15 +1085,29 @@ public class MarkdownStreamParser
 
         if (trimmed.StartsWith("|"))
             trimmed = trimmed.Substring(1);
-        if (trimmed.EndsWith("|"))
+        // 结尾的 | 若落在行内代码里（反引号未闭合）就不是列分隔符
+        if (trimmed.EndsWith("|") && trimmed.Count(c => c == '`') % 2 == 0)
             trimmed = trimmed.Substring(0, trimmed.Length - 1);
 
-        var parts = trimmed.Split('|');
-        foreach (var part in parts)
+        // 行内代码里的 | 不是分隔符，否则 `a: "x" | "y"` 会把一个单元格劈成两个
+        var cell = new StringBuilder();
+        bool inCode = false;
+        foreach (char c in trimmed)
         {
-            cells.Add(part.Trim());
+            if (c == '`')
+                inCode = !inCode;
+
+            if (c == '|' && !inCode)
+            {
+                cells.Add(cell.ToString().Trim());
+                cell.Clear();
+                continue;
+            }
+
+            cell.Append(c);
         }
 
+        cells.Add(cell.ToString().Trim());
         return cells;
     }
 

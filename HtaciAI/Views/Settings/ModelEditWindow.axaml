@@ -65,6 +65,24 @@
                              Padding="10,0"
                              CornerRadius="6"
                              PlaceholderText="请求中的模型ID，如：deepseek-v4-flash"/>
+                    <!-- 自动检测：拿这一行的 id 去查内置模型表，把名称/开发商/能力/上下文/思考档位
+                         一次性填对。价格不在表里，所以检测不碰价格。 -->
+                    <Button x:Name="DetectButton"
+                            Content="自动检测"
+                            Height="30"
+                            Padding="12,0"
+                            HorizontalAlignment="Left"
+                            CornerRadius="6"
+                            Background="#E5E7EB"
+                            Foreground="#374151"
+                            FontSize="12"
+                            Cursor="Hand"
+                            Click="OnDetectClick"/>
+                    <TextBlock x:Name="CallIdHint"
+                               FontSize="11"
+                               Foreground="#6B7280"
+                               TextWrapping="Wrap"
+                               IsVisible="False"/>
                 </StackPanel>
 
                 <StackPanel Spacing="6">
@@ -78,10 +96,19 @@
                              CornerRadius="6"
                              TextChanged="OnVendorChanged"
                              PlaceholderText="如 deepseek / openai / qwen，留空 = 未识别"/>
-                    <TextBlock x:Name="VendorHint"
-                               FontSize="11"
-                               Foreground="#6B7280"
-                               TextWrapping="Wrap"/>
+                    <!-- logo 与提示同一行：改开发商 id 时当场就能看到图标换没换，
+                         这正是「这个词认不认得出来」最直接的反馈 -->
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Panel x:Name="VendorLogoHost"
+                               Width="16"
+                               Height="16"
+                               VerticalAlignment="Top"
+                               Margin="0,1,0,0"/>
+                        <TextBlock x:Name="VendorHint"
+                                   FontSize="11"
+                                   Foreground="#6B7280"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
                 </StackPanel>
 
                 <CheckBox x:Name="StreamingCheck"

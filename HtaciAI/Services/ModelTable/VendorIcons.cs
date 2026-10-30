@@ -16,10 +16,10 @@ namespace HtaciAI.Services.ModelTable;
 /// 可用文件名由生成器扫描资源目录写进 <see cref="BuiltinModelTable"/>，
 /// 所以这里判断存在性是查名单，不需要访问文件系统（打包成 avares 之后也查不了）。
 ///
-/// <b>当前 <c>Assets/icon/</c> 下的图标已全部移除</b>（原有那批来自 cherry-studio，
-/// AGPL-3.0 与本项目的 MIT 冲突，清单见 <c>docs/icon-inventory.md</c>）。
-/// 名单为空时这里一律返回 null，界面改为显示开发商名称文本 —— 这是预期状态，
-/// 放入新图标后重跑生成器即可恢复。
+/// <b>当前图标是一批新找的 SVG</b>（见 <c>docs/icon-inventory.md</c>）：21 个开发商里 20 个有图标，
+/// 只差 <c>nousresearch</c>。渲染见 <see cref="Controls.VendorAvatar"/>。
+/// 注意原有那批来自 cherry-studio 的图标已移除 —— AGPL-3.0 与本项目的 MIT 冲突。
+/// 增减图标后必须重跑 <c>tools/ModelTableGen</c>，否则名单不同步，解析会返回 null。
 /// </summary>
 public static class VendorIcons
 {

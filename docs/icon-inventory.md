@@ -1,64 +1,33 @@
-## 一、模型开发商图标（`models/`）
+## 零、命名规则（放图标前先看这一节）
 
-### 1.1 当前内置表**必需**的 21 个
+两个目录，区分的是**图标画的是谁**：
 
-这张清单来自 `Services/ModelTable/models.ini` 的开发商段（`icon` 覆盖优先于开发商 id）。
-**补图标时优先补这些** —— 缺哪个，哪个开发商的模型就没有头像。
+| 目录 | 放什么 | 举例 |
+|---|---|---|
+| `Assets/icon/models/` | **模型品牌**图标，也就是 `models.ini` 里 `icon` 字段引用的那一层 | `claude` `qwen` `glm` `grok` `kimi` `gemini` `mimo` `hunyuan` |
+| `Assets/icon/providers/` | **厂商/公司**图标，以及 API 服务商图标（目前还没有代码读取，备用） | `anthropic` `alibaba` `zhipu` `tencent` `xiaomi` `ollama` |
 
-| # | 开发商 id | 展示名 | 需要的图标名 | 曾有(浅色) | 曾有(深色) |
-|---|---|---|---|---|---|
-| 1 | `anthropic` | Anthropic | `claude.svg` | ✓ | — |
-| 2 | `openai` | OpenAI | `openai.svg` | ✓ | ✓ |
-| 3 | `google` | Google | `google.svg` | ✓ | — |
-| 4 | `deepseek` | DeepSeek | `deepseek.svg` | ✓ | — |
-| 5 | `alibaba` | 阿里通义 | `qwen.svg` | ✓ | — |
-| 6 | `moonshot` | 月之暗面 | `kimi.svg` | ✓ | ✓ |
-| 7 | `zhipu` | 智谱 | `glm.svg` | ✓ | — |
-| 8 | `xai` | xAI | `grok.svg` | ✓ | ✓ |
-| 9 | `meta` | Meta | `meta.svg` | ✓ | — |
-| 10 | `mistral` | Mistral | `mistral.svg` | **缺** | — |
-| 11 | `bytedance` | 字节跳动 | `bytedance.svg` | ✓ | — |
-| 12 | `tencent` | 腾讯 | `hunyuan.svg` | ✓ | — |
-| 13 | `minimax` | MiniMax | `minimax.svg` | ✓ | — |
-| 14 | `xiaomi` | 小米 | `mimo.svg` | ✓ | ✓ |
-| 15 | `baidu` | 百度 | `wenxin.svg` | ✓ | — |
-| 16 | `nvidia` | NVIDIA | `nvidia.svg` | ✓ | — |
-| 17 | `amazon` | Amazon | `nova.svg` | ✓ | — |
-| 18 | `microsoft` | 微软 | `microsoft.svg` | ✓ | — |
-| 19 | `baai` | 智源 | `baai.svg` | ✓ | ✓ |
-| 20 | `meituan` | 美团 | `longcat.svg` | ✓ | ✓ |
-| 21 | `nousresearch` | Nous Research | `nousresearch.svg` | ✓ | ✓ |
+同一个名字如果既是厂商又是模型（MiniMax、Mistral、DeepSeek 这类），两个目录各放一份即可。
 
-浅色已有 20/21，深色已有 7/21。
-深色缺失不是问题：解析时会退回浅色图标（见 `VendorIcons.Resolve`）。
+文件名区分亮暗的规则：
 
-### 1.2 其余曾有、当前表未使用的模型图标（10 个）
+- 带 `-light` / `-dark` 后缀的一对 → 分别放进 `light/` 与 `dark/` 子目录，**去掉后缀**。
+- 不带后缀（只有一份、亮暗通用）→ 只放 `light/`。`VendorIcons.Resolve` 在深色下找不到
+  `dark/` 里的同名文件时会退回 `light/`，所以不需要复制一份到 `dark/`。
+- 文件名一律**小写**：代码里比较名字不区分大小写，但拼出来的 avares 路径是照名字拼的，
+  `Qwen.svg` 这种大小写混排会在资源查找时踩坑。
 
-这些大多是**同一厂商的另一种品牌写法**（如 `anthropic` vs `claude`、`google` vs `gemini`、
-`moonshot` vs `kimi`），留着备用即可，不是必须补。
-
-| 图标名 | 说明 |
-|---|---|
-| `anthropic.svg` | Anthropic 公司图标（当前用品牌图标 `claude`） |
-| `aws.svg` | 亚马逊云 / Bedrock |
-| `bilibili.svg` | 哔哩哔哩 |
-| `codegeex.svg` | 智谱的代码模型品牌（当前用 `glm`） |
-| `gemini.svg` | Google 模型品牌（当前用 `google`） |
-| `gemma.svg` | Google 开源模型线 |
-| `jimeng.svg` | 字节即梦 |
-| `moonshot.svg` | 月之暗面公司图标（当前用品牌图标 `kimi`） |
-| `sora.svg` | OpenAI 视频模型 |
-| `tencent.svg` | 腾讯公司图标（当前用品牌图标 `hunyuan`） |
-
-另有 11 个深色图标：
-
-`anthropic` `aws` `baai` `grok` `kimi` `longcat` `mimo` `moonshot` `nousresearch` `openai` `zai`
+改完之后必须重跑生成器（见第三节）。
 
 ---
 
 ## 二、模型服务商图标（`providers/`）
 
-共 162 个名字（浅色 162 个，深色 50 个）。
+当前只有 13 个（浅色 11 个、深色 4 个）：`alibaba` `amazon` `anthropic` `baidu` `ollama`
+`tencent` `xai` `xiaomi` `zhipu`（浅色）；`amazon` `anthropic` `ollama` `xai`（深色）。
+
+下面 2.1 / 2.2 那两份长名单是**历史上的完整清单**，本身来自 cherry-studio（AGPL），
+已随图标一起移除，只作为「以后要补哪些」的参照，不代表现在存在。
 
 **这些目前没有被任何代码使用。** 服务商卡片用的是「名称首字 + 稳定底色」的自绘头像
 （`ModelServicePage.CreateAvatar`），不读图标文件。所以这批图标优先级最低，
@@ -302,7 +271,30 @@ dotnet run --project tools/ModelTableGen
 
 **不重跑生成器的话，图标放了也不会生效** —— 名单里没有它，解析会返回空。
 
-另外注意：项目目前**没有 SVG 渲染器**（依赖里没有 `Avalonia.Svg.Skia`），
-所以即使图标到位，也还显示不出来。要让头像真正出现，需要先引入该依赖，
-然后在 UI 里把 `VendorIcons.Resolve(…)` 返回的路径加载成图片。
+### 渲染
+
+SVG 由 `Svg.Controls.Skia.Avalonia` 渲染（`HtaciAI.csproj` 里的包引用）。
+统一入口是 `Controls/VendorAvatar.cs`：
+
+```csharp
+// 有图标就返回一个 16/20/40px 的 Image，没有就返回 null（调用方留空，不给空白方块）
+if (VendorAvatar.CreateLogo(model.Vendor, 16) is { } logo) row.Children.Add(logo);
+```
+
+`SvgSource` 按资源路径缓存 —— 设置页里模型行动辄几十条，不缓存的话每次重建都要重新解析 XML。
+解析失败按「没有图标」处理，坏一个文件不该让整页崩掉。
+
+接上的位置：
+- `Views/Settings/ModelServicePage.axaml.cs` —— 模型列表行，模型名前 16px logo；
+- `Views/Settings/ModelEditWindow.axaml.cs` —— 改「开发商」时旁边实时预览 16px logo。
+
+菜单（模型选择器）**刻意不加图标**：菜单行本来就密，加图标反而更乱。
+
+### 当前状态
+
+`models/light` 22 个、`models/dark` 6 个；`providers/light` 11 个、`providers/dark` 4 个。
+
+21 个开发商里 **20 个有模型图标**，只差 `nousresearch`（表里没有覆盖 `icon`，
+所以文件名必须就是 `nousresearch.svg`）。`providers/` 那批目前没有代码读取
+（服务商头像仍用「首字 + 底色」的自绘头像），留着备用。
 

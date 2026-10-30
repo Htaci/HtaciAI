@@ -252,10 +252,18 @@ public partial class ToolsPage : UserControl
         PanelDesc.Text = _selectedToolset switch
         {
             null => "管理工具与工具集，为 AI 提供可调用的能力",
-            { IsAuto: true } ts => $"{ts.Description} · 自动集合，成员由规则决定",
+
+            // 「全部」「内置」：成员由规则算出来
+            // 插件带的集合：成员由插件声明，用户改不了（插件卸载时一起消失）
+            { IsBuiltin: true } ts => Join(ts.Description, "随插件提供，成员由插件决定"),
+            { IsAuto: true } ts => Join(ts.Description, "自动集合，成员由规则决定"),
             var ts => string.IsNullOrWhiteSpace(ts.Description) ? "自建工具集" : ts.Description,
         };
     }
+
+    /// <summary>把两段说明拼起来，前一段为空时不留一个孤零零的分隔点。</summary>
+    private static string Join(string? head, string tail)
+        => string.IsNullOrWhiteSpace(head) ? tail : $"{head} · {tail}";
 
     private void BuildToolList(IReadOnlyList<ToolDefinition> tools)
     {

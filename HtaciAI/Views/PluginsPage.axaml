@@ -97,6 +97,13 @@
                                Margin="0,8,0,0"
                                IsVisible="False"/>
 
+                    <!-- 详情页的分页切换：介绍（README）/ 工具（这个插件登记给宿主的工具） -->
+                    <StackPanel x:Name="DetailTabs"
+                                Orientation="Horizontal"
+                                Spacing="18"
+                                Margin="0,12,0,0"
+                                IsVisible="False"/>
+
                     <!-- 插件开发文档：小字提示，点了才生成到 <数据根>/doc/ 并用浏览器打开。
                          不点就不占磁盘，也不会在启动时多出几个文件。只在主页显示。 -->
                     <TextBlock x:Name="DevDocLink"

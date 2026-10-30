@@ -15,6 +15,9 @@ public static class ConversationTitle
     /// <summary>未命名会话的占位标题。</summary>
     public const string Placeholder = "新会话";
 
+    /// <summary>把消息正文转成标题：附件标记先换成「图片 / 文本文件」这类标签，再截断。</summary>
+    public static string FromMessage(string? text) => Truncate(AttachmentMarker.StripMarkers(text));
+
     /// <summary>按最大长度截断，超出部分用省略号代替。</summary>
     public static string Truncate(string? text, int max = MaxLength)
     {
@@ -42,9 +45,7 @@ public static class ConversationTitle
 
         if (!settings.AutoTopicNaming) return Placeholder;
 
-        var text = AttachmentMarker.StripMarkers(firstMessage);
-
-        if (string.IsNullOrWhiteSpace(settings.TopicNamingModelId)) return Truncate(text);
+        if (string.IsNullOrWhiteSpace(settings.TopicNamingModelId)) return FromMessage(firstMessage);
 
         return Placeholder;
     }

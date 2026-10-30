@@ -25,6 +25,8 @@
     </PackageReference>
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <!-- 开发商图标是 SVG，靠它的 Svg 控件渲染（见 Controls/VendorAvatar.cs） -->
+    <PackageReference Include="Svg.Controls.Skia.Avalonia" />
   </ItemGroup>
 
   <ItemGroup>

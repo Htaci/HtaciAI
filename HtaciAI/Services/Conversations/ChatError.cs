@@ -10,7 +10,7 @@ namespace HtaciAI.Services.Conversations;
 /// 界面据此拆出错误卡的标题与可展开的详情（见 <c>Controls/ErrorCard</c>）。
 ///
 /// 这是与 user / assistant / tool 并列的第四个 role，但它<b>永远不会发给模型</b>：
-/// <c>OpenAiExClient.BuildMessages</c> 只认那三种，其余静默跳过。它纯粹是留给人看的排查记录。
+/// <c>OpenAiChatClient.BuildMessages</c> 只认那三种，其余静默跳过。它纯粹是留给人看的排查记录。
 /// </summary>
 public static class ChatError
 {

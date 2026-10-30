@@ -445,6 +445,50 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         return answers;
     }
 
+    /// <summary>
+    /// ask_user_continue 的等待入口：插一张「请你去操作」的卡片，等用户点继续。
+    ///
+    /// <b>和提问卡片共用同一套插入/移除逻辑</b>（<see cref="AddInlineCard"/>），
+    /// 因为它们都要求「这一轮暂停，等人在界面上做一个动作」，位置与生命周期完全一致。
+    /// </summary>
+    public async Task<bool?> WaitForUserAsync(string title, string instructions, CancellationToken ct)
+    {
+        ContinueCard? card = null;
+        ReportActivity(SessionActivity.WaitingConfirm);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            card = new ContinueCard(title, instructions);
+            AddInlineCard(card);
+        });
+        if (card is null) return null;
+
+        // 提醒要说清「在等你动手」。用 Question 这一类而不是 Done：
+        // 它是「需要你介入」的信号，走同一套高亮逻辑。
+        SessionNotifier.Notify(SessionNoticeKind.Question, Profile.State.SessionId, Profile.State.Title,
+            title,
+            workspaceName: Profile.WorkspaceName);
+
+        bool? answered;
+        try
+        {
+            answered = await card.Answer.WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // 用户点了「停止」：这一轮结束，不该再等一张没人会点的卡
+            await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
+            ReportActivity(SessionActivity.Running);
+            throw;
+        }
+        finally
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => RemoveInlineCard(card));
+        }
+
+        ReportActivity(SessionActivity.Running);
+        return answered;
+    }
+
     /// <summary>把交互卡片挂到当前轮次的正文流末尾；没有活动轮次时挂到消息面板末尾。</summary>
     private void AddInlineCard(Control card)
     {
@@ -488,7 +532,13 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         if (m.Role == "user")
             AddMessage(m);
         else if (m.Role == "assistant")
+        {
             IndexToolCallInputs(m);
+
+            // 一批工具循环里每次请求的输入都在变长，所以每落一条 assistant 就刷一次用量：
+            // 只在整轮结束时刷的话，中途读数会一直停在上一轮（用户看不到「快到上限了」）。
+            RefreshContextUsage();
+        }
         else if (m.Role == "tool")
             UpsertToolCard(m);
         else if (ChatError.IsError(m))
@@ -641,7 +691,8 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     }
 
     /// <summary>
-    /// 刷新上下文用量环：占用取自最后一条带 usage 的 assistant 消息（口径见 <see cref="TryGetContextUsage"/>）。
+    /// 刷新上下文用量环：占用取自最新一条带 usage 的消息（口径见 <see cref="TryGetContextUsage"/>）——
+    /// 普通 assistant 取 total，压缩记录取摘要的输出 token。
     /// 模型未声明上下文长度或历史里没有任何 usage 时自动隐藏。
     /// </summary>
     private void RefreshContextUsage()
@@ -988,6 +1039,10 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         {
             // 回复结束：聚合卡翻为用时统计并折叠；操作栏（含原文按钮）追加到蓝框外
             FinishActivityCard();
+
+            // 本轮改动过的文件：与历史渲染同一位置（正文之后、操作栏之前）
+            if (CreateFileChangesCard(Messages.Where(m => m.TurnId == _activeTurnId)) is { } files)
+                _activeTurnRoot.Children.Add(files);
 
             var turnAssistants = Messages
                 .Where(m => m.Role == "assistant" && m.TurnId == _activeTurnId)
@@ -1504,13 +1559,13 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         if (first.Role == "user")
             return CreateUserMessageBlock(first);
 
-        var (displayName, providerName) = ModelInfo(first.ModelName ?? "");
+        var (displayName, providerName, vendorId) = ModelInfo(first.ModelName ?? "");
         var rootPanel = new StackPanel
         {
             Margin = new Thickness(20, 2, 20, 2),
             Spacing = 10,
         };
-        rootPanel.Children.Add(CreateModelHeader(displayName, providerName, first.CreatedAt));
+        rootPanel.Children.Add(CreateModelHeader(displayName, providerName, vendorId, first.CreatedAt));
 
         // 内容区（思考/工具聚合卡 + 各正文块）统一放进蓝框宿主，供原文模式切换
         var host = new TurnSelectionHost { BuildFullRawText = () => BuildFullRawText(turnId) };
@@ -1585,10 +1640,24 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         // 历史记录：聚合卡显示推算出的用时并保持折叠
         card?.SetFinished(toolCount, thinkingCount, TurnDuration(msgs));
 
+        // 本轮改动过的文件：排在正文之后、操作栏之前
+        if (CreateFileChangesCard(msgs) is { } files)
+            rootPanel.Children.Add(files);
+
         if (turnId is not null)
             rootPanel.Children.Add(CreateAiReplyOps(turnId, msgs.Where(m => m.Role == "assistant").ToList(), host));
 
         return rootPanel;
+    }
+
+    /// <summary>
+    /// 这一轮改动了哪些文件（新增 / 修改 / 删除）。没有改动时返回 null，界面上不留空卡。
+    /// 路径与类型全部从工具结果里反推（见 <see cref="FileChanges"/>），历史轮与实时轮同一套逻辑。
+    /// </summary>
+    private Control? CreateFileChangesCard(IEnumerable<ChatMessage> turnMessages)
+    {
+        var changes = FileChanges.Collect(turnMessages, FindToolCallInput);
+        return changes.Count == 0 ? null : new FileChangeCard(changes);
     }
 
     /// <summary>
@@ -2083,7 +2152,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     /// </summary>
     private void OnRoundStarted(ChatMessage assistantMsg)
     {
-        var (displayName, providerName) = ModelInfo(assistantMsg.ModelName ?? "");
+        var (displayName, providerName, vendorId) = ModelInfo(assistantMsg.ModelName ?? "");
 
         // 上一轮的工具卡到这里已经收尾（结果已经回填），按 id 的索引可以清掉了。
         // 每轮都要清：不同轮的 index 都从 0 开始，留着上一轮的会串卡。
@@ -2098,7 +2167,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
                 Margin = new Thickness(20, 2, 20, 2),
                 Spacing = 10,
             };
-            root.Children.Add(CreateModelHeader(displayName, providerName, assistantMsg.CreatedAt));
+            root.Children.Add(CreateModelHeader(displayName, providerName, vendorId, assistantMsg.CreatedAt));
 
             var turnId = assistantMsg.TurnId;
             var host = new TurnSelectionHost { BuildFullRawText = () => BuildFullRawText(turnId) };
@@ -2244,7 +2313,14 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         return (bubble, block);
     }
 
-    private Control CreateModelHeader(string modelName, string providerName, long createdAt)
+    /// <summary>
+    /// 一轮回复的头：开发商头像 +「模型名 | 服务商」+ 时间。
+    ///
+    /// 头像优先用开发商 logo（<c>Assets/icon/models/</c> 里的 SVG）：认得出是谁家的模型，
+    /// 比一个固定的「Ht」方块有信息量。认不出（或那个开发商还没有图标文件）时退回字母块 ——
+    /// 留个空白方块比放字母更难看。
+    /// </summary>
+    private Control CreateModelHeader(string modelName, string providerName, string vendorId, long createdAt)
     {
         var grid = new Grid
         {
@@ -2257,10 +2333,21 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             Width = 35,
             Height = 35,
             CornerRadius = new CornerRadius(6),
-            Background = new SolidColorBrush(Color.Parse("#E5E7EB")),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(-45, 0, 10, 0),
-            Child = new TextBlock
+        };
+
+        if (VendorAvatar.CreateLogo(vendorId, 24) is { } logo)
+        {
+            // 有 logo 时不铺底色：这些 SVG 自带配色，垫一块灰底反而发脏。
+            // 24px 是因为 35 的方块里留一圈呼吸，直接撑满会显得很挤。
+            avatar.Background = Brushes.Transparent;
+            avatar.Child = logo;
+        }
+        else
+        {
+            avatar.Background = new SolidColorBrush(Color.Parse("#E5E7EB"));
+            avatar.Child = new TextBlock
             {
                 Text = "Ht",
                 FontSize = 12,
@@ -2268,8 +2355,9 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
                 Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-            },
-        };
+            };
+        }
+
         Grid.SetColumn(avatar, 0);
         grid.Children.Add(avatar);
 
@@ -2306,13 +2394,13 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     /// 可能压根没记模型名，或者记的那个模型后来被删了 —— 两种情况都原样显示能拿到的信息，
     /// 不猜、也不回退到任何写死的模型上。
     /// </summary>
-    private (string DisplayName, string ProviderName) ModelInfo(string callId)
+    private (string DisplayName, string ProviderName, string VendorId) ModelInfo(string callId)
     {
-        if (string.IsNullOrEmpty(callId)) return ("未知模型", "");
+        if (string.IsNullOrEmpty(callId)) return ("未知模型", "", "");
         var m = Input.ModelSelector.Models.FirstOrDefault(x => x.ModelName == callId);
         return m is not null
-            ? (m.DisplayName, m.ProviderName)
-            : (callId, "未知服务商");
+            ? (m.DisplayName, m.ProviderName, m.Vendor)
+            : (callId, "未知服务商", "");
     }
 
     private static string FormatTime(long unixMs)

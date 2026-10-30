@@ -117,7 +117,8 @@ public static class ModelTableIndex
 
     /// <summary>
     /// 把一个模型 id 折叠成匹配用的规范形式。只做<b>无歧义的机械变换</b>：
-    /// 小写、去命名空间前缀、下划线转连字符、去变体后缀（:free / (beta) …）、去日期快照。
+    /// 小写、去命名空间前缀、下划线转连字符、版本号里的点转连字符、去变体后缀（:free / (beta) …）、
+    /// 去日期快照与后训练快照号（-1017 这类小版本号）。
     ///
     /// 刻意<b>不做</b>判断类变换 —— 「-thinking 到底算不算同一个模型」这种问题没有确定答案，
     /// 交给表里的 <c>aliases</c> 显式声明。多归一化一步就可能把两个不同型号折叠成一个，
@@ -136,7 +137,12 @@ public static class ModelTableIndex
 
         s = s.Replace('_', '-');
 
-        // 变体后缀和日期快照会互相遮挡（gpt-4o-2024-08-06:free），迭代到稳定为止。
+        // 版本号里的点和连字符是同一件事：deepseek-v4.1-flash 与 deepseek-v4-1-flash 指的是同一个
+        // 型号，只是一部分厂商把它划成了后者。只折叠<b>两个数字之间</b>的点，
+        // 其余位置的点保持原样，避免把不相干的 id 折叠到一起。
+        s = VersionDot.Replace(s, "-");
+
+        // 变体后缀、版本点和日期快照会互相遮挡（gpt-4o-2024-08-06:free），迭代到稳定为止。
         for (; ; )
         {
             var before = s;
@@ -169,6 +175,10 @@ public static class ModelTableIndex
         return id;
     }
 
+    // 版本号里的点：deepseek-v4.1-flash 与 deepseek-v4-1-flash 是同一型号的两处写法。
+    // 只认两个数字之间的点，其余位置的点不动。
+    private static readonly Regex VersionDot = new(@"(?<=\d)\.(?=\d)", RegexOptions.Compiled);
+
     // 日期快照：claude-sonnet-4-5-20250929 / gpt-4o-2024-08-06 / kimi-k2-250905。
     // 月份限定 01-12、日期限定 01-31，这样参数量（-30b）和版本号（-4-5）不会被误吃。
     private static readonly Regex FullDateSnapshot = new(
@@ -182,11 +192,17 @@ public static class ModelTableIndex
     // 尾随的 @ 修订标记（gemini-2-0@001）。
     private static readonly Regex AtRevision = new(@"@.*$", RegexOptions.Compiled);
 
+    // 后训练快照号：deepseek-v4.1-flash-1017 / gpt-4-0613 / claude-3-5-haiku-20241022 的尾段。
+    // 这类小版本是同一模型重新后训练出来的，能力与上下文不变，所以一并剥掉。
+    // 只认 4~8 位纯数字，参数量（-30b）和版本段（-4-1）碰不到。
+    private static readonly Regex NumericSnapshot = new(@"-\d{4,8}$", RegexOptions.Compiled);
+
     private static string StripDateSnapshot(string id)
     {
         var s = AtRevision.Replace(id, "");
         s = FullDateSnapshot.Replace(s, "");
         s = ShortDateSnapshot.Replace(s, "");
+        s = NumericSnapshot.Replace(s, "");
         return s;
     }
 }

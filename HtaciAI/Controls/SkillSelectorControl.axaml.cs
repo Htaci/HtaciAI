@@ -26,6 +26,7 @@ public partial class SkillSelectorControl : UserControl
     public SkillSelectorControl()
     {
         InitializeComponent();
+        MenuTheme.Apply(RootBtn.Flyout as MenuFlyout);
         RebuildMenu();
     }
 

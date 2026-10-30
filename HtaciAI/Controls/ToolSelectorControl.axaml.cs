@@ -26,6 +26,7 @@ public partial class ToolSelectorControl : UserControl
     public ToolSelectorControl()
     {
         InitializeComponent();
+        MenuTheme.Apply(RootBtn.Flyout as MenuFlyout);
         RebuildMenu();
     }
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -43,6 +43,15 @@ public static class PromptComposer
         IConversationProfile profile, string modelId, string sessionId, CancellationToken ct)
     {
         var builder = new StringBuilder(profile.BuildSystemPrompt(modelId));
+
+        // 「直接执行任务」是用户自己的偏好，排在档案提示词之后、插件贡献之前：
+        // 插件贡献是附加信息，不该插在用户偏好与档案之间。它也不占插件的字数配额。
+        var directive = TaskExecutionDirective.Build();
+        if (directive.Length > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine(directive);
+        }
 
         var contributors = PluginPromptRegistry.Snapshot();
         if (contributors.Count == 0) return builder.ToString();

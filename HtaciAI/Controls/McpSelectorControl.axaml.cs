@@ -23,6 +23,7 @@ public partial class McpSelectorControl : UserControl
     public McpSelectorControl()
     {
         InitializeComponent();
+        MenuTheme.Apply(RootBtn.Flyout as MenuFlyout);
         RebuildMenu();
     }
 

@@ -3,49 +3,51 @@
         xmlns:controls="clr-namespace:HtaciAI.Controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="480" d:DesignHeight="660"
-        x:Class="HtaciAI.Views.Settings.ProviderEditWindow"
+        mc:Ignorable="d" d:DesignWidth="480" d:DesignHeight="560"
+        x:Class="HtaciAI.Views.Settings.ProviderSettingsWindow"
         Icon="/Assets/logo.ico"
-        Title="服务商"
+        Title="服务商设置"
         Width="480" MinWidth="480" MaxWidth="480"
-        Height="660" MinHeight="660"
+        Height="560" MinHeight="560"
         Background="#F7F8FA"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
 
-    
-        <Window.Styles>
-            <Style Selector="Window">
-                <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
-                <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
-                <Setter Property="WindowDecorations" Value="BorderOnly"/>
-                <Setter Property="CanResize" Value="True"/>
-                <Setter Property="Background">
-                    <Setter.Value>
-                        <SolidColorBrush Color="Transparent" Opacity="1"/>
-                    </Setter.Value>
-                </Setter>
-            </Style>
-        </Window.Styles>
+    <Window.Styles>
+        <Style Selector="Window">
+            <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+            <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+            <Setter Property="WindowDecorations" Value="BorderOnly"/>
+            <Setter Property="CanResize" Value="True"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <SolidColorBrush Color="Transparent" Opacity="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Styles>
 
+    <!--
+        服务商级设置：名称、思考开关字段、多模态 / 流式开关、描述。
+        密钥与端点仍留在详情页里就地改 —— 那几个是配服务商时手脚最频繁的地方，
+        来回开窗反而更烦；名称这类「定下来就不动」的，放这里更妥。
+    -->
     <Grid RowDefinitions="Auto,*,Auto">
-        <!-- 标题 -->
         <TextBlock x:Name="TitleText"
                    Grid.Row="0"
-                   Text="添加服务商"
+                   Text="服务商设置"
                    FontSize="18"
                    FontWeight="Bold"
                    Foreground="#1A1A2E"
                    Margin="24,18,24,6"/>
 
-        <!-- 表单 -->
         <controls:SmoothScrollViewer Grid.Row="1"
-                      Margin="24,8,24,8"
-                      HorizontalScrollBarVisibility="Disabled"
-                      VerticalScrollBarVisibility="Auto">
+                                     Margin="24,8,24,8"
+                                     HorizontalScrollBarVisibility="Disabled"
+                                     VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="12">
                 <StackPanel Spacing="6">
-                    <TextBlock Text="服务商名称"
+                    <TextBlock Text="名称"
                                FontSize="13"
                                FontWeight="SemiBold"
                                Foreground="#374151"/>
@@ -53,35 +55,11 @@
                              Height="34"
                              Padding="10,0"
                              CornerRadius="6"
-                             PlaceholderText="如：月之暗面"/>
-                </StackPanel>
-
-                <StackPanel Spacing="6">
-                    <TextBlock Text="API 类型"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="#374151"/>
-                    <ComboBox x:Name="ProtocolCombo" Height="34" CornerRadius="6"/>
-                </StackPanel>
-
-                <StackPanel Spacing="6">
-                    <TextBlock Text="目标 URL 地址"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="#374151"/>
-                    <TextBox x:Name="EndpointBox"
-                             Height="34"
-                             Padding="10,0"
-                             CornerRadius="6"
-                             PlaceholderText="https://api.example.com/v1/chat/completions"/>
-                </StackPanel>
-
-                <StackPanel Spacing="6">
-                    <TextBlock Text="API Key"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="#374151"/>
-                    <TextBox x:Name="ApiKeyBox" Height="34" Padding="10,0" CornerRadius="6"/>
+                             PlaceholderText="如：深度求索"/>
+                    <TextBlock Text="显示在服务商卡片、模型选择器与模型表格的归属里。"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
                 </StackPanel>
 
                 <StackPanel Spacing="6">
@@ -90,7 +68,7 @@
                                FontWeight="SemiBold"
                                Foreground="#374151"/>
                     <ComboBox x:Name="ThinkingCombo" Height="34" CornerRadius="6"/>
-                    <TextBlock Text="think：thinking: enabled/disabled；enable_thinking：true/false；reasoning_effort：LM Studio 控制强度；none：不支持该字段"
+                    <TextBlock Text="think：thinking: enabled/disabled；enable_thinking：true/false；reasoning_effort：只用强度控制；none：不支持该字段。仅对 OpenAI 协议生效——Responses 与 LM Studio 固定走推理强度。"
                                FontSize="11"
                                Foreground="#9CA3AF"
                                TextWrapping="Wrap"/>
@@ -120,7 +98,6 @@
             </StackPanel>
         </controls:SmoothScrollViewer>
 
-        <!-- 底部按钮 -->
         <Grid Grid.Row="2"
               ColumnDefinitions="*,Auto,Auto"
               Margin="24,8,24,18">

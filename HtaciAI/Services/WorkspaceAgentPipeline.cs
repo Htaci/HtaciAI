@@ -78,6 +78,8 @@ public static class WorkspaceAgentPipeline
             "工具被拒后应调整，若不明白拒绝原因，用 ask_user_question 询问。\r\n" +
             "用户消息里出现的文件路径是用户附加的文件：图片用 view_image 查看内容后再回答，其他文件用 read 读取。");
 
+        sb.AppendLine(FileCardDirective.Text);
+
         sb.AppendLine($"当前系统环境：{Environment.OSVersion}，模型id为： {modelId}，当前工作目录：{(string.IsNullOrWhiteSpace(workspaceDir) ? "/" : workspaceDir)}");
 
         if (workspace is not null && !string.IsNullOrWhiteSpace(workspace.SystemPrompt))

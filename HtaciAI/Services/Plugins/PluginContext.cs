@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using HtaciAI.Plugin.Abstractions;
@@ -18,7 +18,9 @@ internal sealed record PluginFacades(
     IChatEventBus? Chat = null,
     IPluginWindowHost? Windows = null,
     IUiExtensionRegistry? Slots = null,
-    IToolRegistryApi? Tools = null);
+    IPluginTabHost? Tabs = null,
+    IToolRegistryApi? Tools = null,
+    IConversationDock? Dock = null);
 
 /// <summary>
 /// <see cref="IPluginContext"/> 的宿主实现。<b>只提供这份清单声明了的能力</b> ——
@@ -40,7 +42,9 @@ internal sealed partial class PluginContext : IPluginContext
         Chat = facades.Chat;
         Windows = facades.Windows;
         Slots = facades.Slots;
+        Tabs = facades.Tabs;
         Tools = facades.Tools;
+        Dock = facades.Dock;
     }
 
     public string PluginId { get; }
@@ -55,7 +59,9 @@ internal sealed partial class PluginContext : IPluginContext
     public IChatEventBus? Chat { get; }
     public IPluginWindowHost? Windows { get; }
     public IUiExtensionRegistry? Slots { get; }
+    public IPluginTabHost? Tabs { get; }
     public IToolRegistryApi? Tools { get; }
+    public IConversationDock? Dock { get; }
 
     // ---- 日志 ----
 

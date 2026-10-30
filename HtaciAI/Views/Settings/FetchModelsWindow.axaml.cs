@@ -50,7 +50,7 @@ public partial class FetchModelsWindow : Window
         _added = new HashSet<string>(StringComparer.Ordinal);
 
         Title = "获取模型";
-        SubtitleText.Text = $"{provider.Name} · {OpenAiExClient.ModelsUrl(provider.Endpoint)}";
+        SubtitleText.Text = $"{provider.Name} · {OpenAiChatClient.ModelsUrl(provider.Endpoint)}";
     }
 
     protected override void OnOpened(EventArgs e)

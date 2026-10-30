@@ -1,6 +1,9 @@
-using System;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using HtaciAI.Models;
@@ -60,6 +63,105 @@ public static class AttachmentStore
         catch
         {
             return null;
+        }
+    }
+
+    // ── 助手回复里的「可点击文件卡片」 ──────────────────────────────────────
+    //
+    // AI 输出的路径可能是文件、也可能是目录，而且可能根本不存在（模型凭印象编的）。
+    // 这两个判断都要碰磁盘，而渲染层在长会话里会问上几百次 —— 所以按路径缓存一次结果。
+    //
+    // 缓存不设过期：路径的种类（文件 / 目录）在会话期间不会变，真变了也只是卡片文字旧一点，
+    // 而「每次渲染都 stat 一遍磁盘」的代价是实打实的。
+
+    /// <summary>缓存值：空串 = 不存在；<c>folder</c> = 目录；其余是 <see cref="KindFor"/> 的结果。</summary>
+    private static readonly ConcurrentDictionary<string, string> DisplayKindCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>这些后缀点下去会「运行」而不是「打开」，卡片因此只做定位，不直接执行。</summary>
+    private static readonly HashSet<string> ExecutableExts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".bat", ".cmd", ".com", ".scr", ".msi", ".ps1", ".vbs", ".vbe", ".js", ".jse",
+        ".wsf", ".wsh", ".lnk", ".url", ".reg", ".hta", ".cpl", ".msc", ".jar",
+    };
+
+    /// <summary>
+    /// 把一个「正文里出现的路径」描述成可点击卡片；路径不存在时返回 <c>null</c>，
+    /// 调用方据此退回普通文本。
+    ///
+    /// <b>为什么要校验存在性</b>：助手回复里的路径是模型写的，可能压根不存在。
+    /// 给一个点下去什么都没有的卡片，比直接显示路径更让人困惑。
+    /// （用户气泡里的附件不走这里 —— 那些是用户真选过的文件，删了也该照常显示。）
+    /// </summary>
+    public static ChatAttachment? DescribeForDisplay(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+
+        string full;
+        try { full = Path.GetFullPath(path.Trim().Trim('"', '\'')); }
+        catch { return null; }
+
+        var kind = DisplayKindCache.GetOrAdd(full, Classify);
+
+        return kind.Length == 0
+            ? null
+            : new ChatAttachment
+            {
+                Path = full,
+                Kind = kind,
+                Label = kind == "folder" ? "文件夹" : LabelFor(full),
+            };
+
+        static string Classify(string candidate)
+        {
+            try
+            {
+                if (Directory.Exists(candidate)) return "folder";
+                if (File.Exists(candidate)) return KindFor(candidate);
+            }
+            catch
+            {
+                // 无权访问 / 路径过长等：当作不存在
+            }
+
+            return "";
+        }
+    }
+
+    /// <summary>点这个路径会运行程序而不是打开文档。</summary>
+    public static bool IsExecutable(string path)
+        => ExecutableExts.Contains(Path.GetExtension(path));
+
+    /// <summary>
+    /// 打开一个路径：目录 → 资源管理器；普通文件 → 系统默认程序；
+    /// <b>可执行文件只做定位</b>（见 <see cref="IsExecutable"/>）。
+    /// </summary>
+    public static void OpenOrReveal(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                if (OperatingSystem.IsWindows())
+                    Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+                else
+                    Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+
+                return;
+            }
+
+            // 可执行文件不直接跑：这个入口的文字来自模型输出，别人让它写一个路径进来就是一次点击即执行
+            if (IsExecutable(path))
+            {
+                RevealInExplorer(path);
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+        }
+        catch
+        {
+            // 打不开就算了，不值得弹错（与 RevealInExplorer 同一个立场）
         }
     }
 

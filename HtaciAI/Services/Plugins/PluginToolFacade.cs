@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -25,10 +26,25 @@ public static class PluginToolRegistry
     private static readonly object Gate = new();
     private static readonly Dictionary<string, Entry> ByName = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// 插件声明的工具集 id → 插件 id。
+    ///
+    /// <b>这些工具集不落库</b>：它们随插件存在而存在、随插件消失而消失。
+    /// 落库会留下「插件已卸载但集合还在」的幽灵行，而用户下次装回同一个插件时
+    /// 还得处理旧行与新声明的冲突 —— 内存态反而更省事，也不会污染用户的库。
+    /// </summary>
+    private static readonly Dictionary<string, string> ToolsetsByPlugin = new(StringComparer.Ordinal);
+
     internal sealed record Entry(string PluginId, PluginToolHandler Handler);
 
     /// <summary>工具名规则。与 AI 自举创建工具的规则保持一致：小写字母开头，只含小写字母数字下划线。</summary>
     private static readonly Regex NamePattern = new("^[a-z][a-z0-9_]{1,63}$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// 工具集 key 的允许范围。比工具名宽松（允许大写与点/横线）：
+    /// 它只用于拼接 id 与显示，不参与模型调用，没有重名歧义的风险。
+    /// </summary>
+    private static readonly Regex ToolsetKeyPattern = new("^[A-Za-z0-9._-]{1,48}$", RegexOptions.Compiled);
 
     /// <summary>
     /// 登记一个插件的工具：校验 → 写进 <see cref="ToolRegistry"/>（让模型与工具页看见）→ 记下执行体。
@@ -64,8 +80,12 @@ public static class PluginToolRegistry
         // 工具 id 带上插件 id：状态存储、会话里选中的工具 id 都靠它区分是谁的
         var toolId = BuildToolId(pluginId, name);
 
+        // 归属工具集：没有它，用户只能在「全部」里一个一个勾
+        var toolsetId = RegisterToolset(pluginId, definition.Toolset);
+
         var tool = new ToolDefinition
         {
+            ToolsetIds = toolsetId is null ? new List<string>() : new List<string> { toolsetId },
             Id = toolId,
             Name = name,
             Description = definition.Description ?? "",
@@ -114,6 +134,23 @@ public static class PluginToolRegistry
         foreach (var name in names)
             ToolRegistry.Instance.Unregister(BuildToolId(pluginId, name));
 
+        // 工具集跟着插件走：插件没了，那组工具也没了，留一个空集合只会让选择器里
+        // 多出一条永远是空的项。
+        List<string> toolsetIds;
+        lock (Gate)
+        {
+            toolsetIds = ToolsetsByPlugin
+                .Where(kv => string.Equals(kv.Value, pluginId, StringComparison.Ordinal))
+                .Select(kv => kv.Key)
+                .ToList();
+
+            foreach (var id in toolsetIds)
+                ToolsetsByPlugin.Remove(id);
+        }
+
+        foreach (var id in toolsetIds)
+            ToolRegistry.Instance.UnregisterToolset(id);
+
         if (names.Count > 0)
             PluginLog.Info(pluginId, $"已注销 {names.Count} 个工具：{string.Join(", ", names)}");
     }
@@ -122,7 +159,7 @@ public static class PluginToolRegistry
     /// 执行一个插件工具。找不到执行体（插件刚被禁用）时如实失败，让模型知道这个工具不可用。
     /// </summary>
     public static async Task<ToolExecution> InvokeAsync(
-        ToolDefinition tool, ChatToolCall call, CancellationToken ct)
+        ToolDefinition tool, ChatToolCall call, string sessionId, CancellationToken ct)
     {
         Entry? entry;
         lock (Gate)
@@ -137,6 +174,8 @@ public static class PluginToolRegistry
             {
                 Name = tool.Name,
                 ArgumentsJson = call.Arguments ?? "",
+                // 插件要靠它做「这个窗口是否授权给这个会话」这类判断
+                SessionId = sessionId,
             }, ct);
 
             return result.Success
@@ -186,6 +225,66 @@ public static class PluginToolRegistry
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 注册（或复用）插件声明的工具集，返回它的 id；<paramref name="declared"/> 为 null 时返回 null。
+    ///
+    /// <b>为什么要加前缀</b>：工具集 id 是全局唯一的，两个插件都想用 <c>browser</c> 这个 key
+    /// 是很正常的事。与其要求每个作者去发明不撞的名字，不如由宿主统一拼
+    /// <c>plugin:&lt;插件id&gt;:&lt;key&gt;</c>。
+    /// </summary>
+    private static string? RegisterToolset(string pluginId, PluginToolset? declared)
+    {
+        if (declared is null) return null;
+
+        var key = (declared.Key ?? "").Trim();
+        if (key.Length == 0)
+        {
+            PluginLog.Warn(pluginId, "声明了工具集但 Key 为空，已忽略（该工具只会出现在「全部」里）");
+            return null;
+        }
+
+        // 前缀里已经带了插件 id，这里只挡真正的非法字符
+        if (!ToolsetKeyPattern.IsMatch(key))
+        {
+            PluginLog.Warn(pluginId,
+                $"工具集 Key 不合规（只允许字母、数字与 - _ .）：{key}，已忽略");
+            return null;
+        }
+
+        var toolsetId = $"plugin:{pluginId}:{key}";
+
+        // 已注册过（同一个插件的多个工具共用同一个集合）：直接复用，别重复登记
+        lock (Gate)
+        {
+            if (ToolsetsByPlugin.TryGetValue(toolsetId, out var owner) &&
+                string.Equals(owner, pluginId, StringComparison.Ordinal))
+                return toolsetId;
+
+            ToolsetsByPlugin[toolsetId] = pluginId;
+        }
+
+        ToolRegistry.Instance.RegisterToolset(new Toolset
+        {
+            Id = toolsetId,
+            Name = string.IsNullOrWhiteSpace(declared.Name) ? key : declared.Name,
+            Description = declared.Description ?? "",
+
+            // 随插件提供：不可删、不可改名，卸载插件时自动消失
+            IsBuiltin = true,
+
+            // 当成自动集合处理：成员只能是插件自己声明的那些工具。
+            // 若标成「可编辑」，工具页会把「添加工具」按钮开放出来，
+            // 用户就能把别家的工具塞进「内置浏览器」这个集合 —— 那没有意义。
+            IsAuto = true,
+
+            // 排在「全部」「内置」之后（它们分别是 0 和 1）
+            SortOrder = 100,
+        });
+
+        PluginLog.Info(pluginId, $"已登记工具集「{declared.Name}」（{toolsetId}）");
+        return toolsetId;
     }
 
     private static ToolDangerLevel Map(PluginToolDangerLevel level) => level switch

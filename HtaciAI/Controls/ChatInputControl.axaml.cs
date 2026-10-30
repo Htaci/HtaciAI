@@ -105,8 +105,52 @@ public partial class ChatInputControl : UserControl
             _ = SaveDraftAsync();
         };
 
+        MenuTheme.Apply(PermModeBtn.Flyout as MenuFlyout);
+        MenuTheme.Apply(MoreMenu);
+
+        // 点输入区外面 = 输入框失焦。TextBox 不会因为点了别处就自动掉焦点，
+        // 于是它的蓝色聚焦描边会一直亮着，看起来像还在编辑。
+        AttachedToVisualTree += (_, _) => HookOutsideClick();
+        DetachedFromVisualTree += (_, _) => UnhookOutsideClick();
+
         LoadTools();
         SetupPermissionMode();
+    }
+
+    // ============================================================
+    // 点外面让输入框失焦
+    // ============================================================
+
+    private TopLevel? _outsideTopLevel;
+
+    private void HookOutsideClick()
+    {
+        var top = TopLevel.GetTopLevel(this);
+        if (top is null || ReferenceEquals(top, _outsideTopLevel)) return;
+
+        UnhookOutsideClick();
+        _outsideTopLevel = top;
+        top.AddHandler(InputElement.PointerPressedEvent, OnOutsidePointerPressed, RoutingStrategies.Tunnel);
+    }
+
+    private void UnhookOutsideClick()
+    {
+        if (_outsideTopLevel is null) return;
+        _outsideTopLevel.RemoveHandler(InputElement.PointerPressedEvent, OnOutsidePointerPressed);
+        _outsideTopLevel = null;
+    }
+
+    private void OnOutsidePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var point = e.GetPosition(InputShell);
+        if (point.X >= 0 && point.Y >= 0 && point.X <= InputShell.Bounds.Width && point.Y <= InputShell.Bounds.Height)
+            return;   // 点在输入框 / 工具条上：那是它自己的交互，别抢焦点
+
+        // 延后一拍：焦点是隧道阶段由 FocusManager 分配的，当场清会被随后那次赋值盖掉
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (InputBox.IsFocused) TopLevel.GetTopLevel(this)?.FocusManager?.Focus(null);
+        }, DispatcherPriority.Background);
     }
 
     // ============================================================

@@ -26,6 +26,12 @@ public sealed class BuiltinToolContext
     /// <summary>相对路径解析的基准目录（默认应用当前目录）。</summary>
     public string BaseDirectory { get; set; } = Environment.CurrentDirectory;
 
+    /// <summary>
+    /// 当前会话 id。插件工具会带上它，用来判断「这个资源是否被授权给了这个会话」
+    /// （内置浏览器把窗口授权给会话就是这个用法）。空串表示没有会话上下文。
+    /// </summary>
+    public string SessionId { get; set; } = "";
+
     /// <summary>读取当前会话已启用技能（可能为 null）。</summary>
     public Func<Task<List<SessionSkill>?>>? GetSessionSkills { get; set; }
 
@@ -38,6 +44,13 @@ public sealed class BuiltinToolContext
     /// 取消令牌同样要传下去：点了「停止」之后不该再继续等一张没人会答的卡。
     /// </summary>
     public Func<List<AskQuestion>, CancellationToken, Task<List<AskAnswer>?>>? AskUser { get; set; }
+
+    /// <summary>
+    /// 请用户去做一件模型做不了的事（扫码、输验证码），等他说做完再继续。
+    /// 返回 true = 已完成，false = 用户取消，null = 没等到人（会话窗口没开）。
+    /// 为 null 时 ask_user_continue 工具不可用。
+    /// </summary>
+    public Func<string, string, CancellationToken, Task<bool?>>? WaitForUser { get; set; }
 
     /// <summary>
     /// 当前模型是否支持视觉。由会话视图在每次发送前按所选模型刷新；
@@ -147,6 +160,7 @@ public sealed class BuiltinToolExecutor
                 "load_skill" => await LoadSkillAsync(call, ctx),
                 "unload_skill" => await UnloadSkillAsync(call, ctx),
                 "ask_user_question" => await AskUserQuestionAsync(call, ctx, ct),
+        "ask_user_continue" => await AskUserContinueAsync(call, ctx, ct),
                 "view_image" => ViewImage(call, ctx),
                 BuiltinTools.CreateToolName => await CreateToolAsync(call),
                 BuiltinTools.CreateSkillName => await CreateSkillAsync(call),
@@ -881,6 +895,81 @@ public sealed class BuiltinToolExecutor
         return ToolExecution.Ok(answers is null
             ? AskUserQuestionTool.CancelledText
             : AskUserQuestionTool.FormatAnswers(questions, answers));
+    }
+
+    // ---- ask_user_continue ----
+
+    /// <summary>默认等多久。用户做现实操作常要好几分钟，别给太小；上限一小时。</summary>
+    private const int DefaultContinueSeconds = 900;
+    private const int MaxContinueSeconds = 3600;
+
+    private static async Task<ToolExecution> AskUserContinueAsync(
+        ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
+    {
+        if (ctx.WaitForUser is null)
+            return ToolExecution.Fail("当前会话不支持「等待用户操作」");
+
+        var title = BuiltinToolContext.GetArg(call, "title") ?? "";
+        var instructions = BuiltinToolContext.GetArg(call, "instructions") ?? "";
+
+        if (string.IsNullOrWhiteSpace(instructions))
+            return ToolExecution.Fail("缺少 instructions：要写清用户该怎么做。");
+
+        var seconds = ReadIntArg(call, "timeout_seconds") ?? DefaultContinueSeconds;
+        seconds = Math.Clamp(seconds, 30, MaxContinueSeconds);
+
+        // 这里刻意不套工具统一的 5 分钟超时：那是给「跑得快」的工具用的，
+        // 而这个工具的耗时取决于人在现实里做多快。所以自己管时间，并且
+        // 超时后不是「被取消」，而是如实告诉模型还没等到 —— 让他自己决定要不要再等。
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(seconds));
+
+        try
+        {
+            var answered = await ctx.WaitForUser(title, instructions, timeout.Token);
+
+            return answered switch
+            {
+                true => ToolExecution.Ok(
+                    "用户已完成操作，可以继续。" +
+                    "（如果下一步依赖刚才的变化，先重新观察页面，不要假设已经生效。）"),
+                false => ToolExecution.Ok(
+                    "用户取消了这次操作，没有完成。" +
+                    "不要再重复同一个请求；问清他的意图，或者换一条不需要他动手的路。"),
+                null => ToolExecution.Ok(
+                    "没有等到用户（会话窗口没打开，或他离开了）。不要假设操作已经完成。"),
+            };
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // 自己的超时：如实说「还在等」，把决定权交回给模型
+            return ToolExecution.Fail(
+                $"等满了 {seconds} 秒，用户还没点「继续」。可以再调一次继续等，或者先问他还需要什么。");
+        }
+    }
+
+    /// <summary>读一个整数参数；缺失或不是数字时返回 null（调用方自己决定默认值）。</summary>
+    private static int? ReadIntArg(ChatToolCall call, string name)
+    {
+        if (string.IsNullOrWhiteSpace(call.Arguments)) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(call.Arguments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (!doc.RootElement.TryGetProperty(name, out var value)) return null;
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.Number when value.TryGetInt32(out var n) => n,
+                JsonValueKind.String when int.TryParse(value.GetString(), out var n) => n,
+                _ => null,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     // ---- invalid ----

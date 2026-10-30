@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace HtaciAI.Models;
 
@@ -83,6 +83,15 @@ public sealed class AppSettingsData
     /// 静默回退默认值，int 没有这个风险。
     /// </summary>
     public int AutoCompressThresholdPercent { get; set; } = 80;
+
+    /// <summary>
+    /// 直接执行任务：在 system 提示词里追加一段「按用户明确要求执行、不空泛推脱」的指令。
+    ///
+    /// <b>默认关闭</b>：关着时提示词与以前一字不差，行为不会因为升级而变化。
+    /// 打开后仍然保留「真实危害」那几条底线（见 <see cref="Services.TaskExecutionDirective"/>）——
+    /// 这个开关管的是「少打太极」，不是「闭眼执行」。
+    /// </summary>
+    public bool ObeyUserTasks { get; set; }
 
     /// <summary>
     /// 一次用户消息内允许的工具调用最大轮数。

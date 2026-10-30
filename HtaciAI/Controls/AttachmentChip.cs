@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using Avalonia;
 using Avalonia.Controls;
@@ -14,8 +14,15 @@ using HtaciAI.Services;
 namespace HtaciAI.Controls;
 
 /// <summary>
-/// 输入框上方的附件 chip：图标 + 文字标签（图片 / 文本 / Word / 后缀名…）。
-/// 悬停显示真实路径，点击在资源管理器中定位该文件，右侧 × 从待发送列表里移除。
+/// 附件 chip：图标 + 文字标签（图片 / 文本 / Word / 文件夹 / 后缀名…）。
+///
+/// 三种用法共用这一个控件：
+/// <list type="bullet">
+///   <item>输入框上方：<c>onRemove</c> 非空（右侧 × 移除待发送项），点击定位文件；</item>
+///   <item>用户气泡内联：<c>compact</c> 且 <c>onRemove</c> 为 null，点击定位文件；</item>
+///   <item>助手回复里的可点击卡片：<c>compact</c>、无 ×，<c>openOnClick</c> 让点击直接打开
+///         文件 / 文件夹（见 <see cref="AttachmentStore.OpenOrReveal"/>）。</item>
+/// </list>
 /// </summary>
 public sealed class AttachmentChip : Border
 {
@@ -24,8 +31,10 @@ public sealed class AttachmentChip : Border
 
     /// <summary>
     /// <paramref name="compact"/> 用于消息气泡里的内联卡片：尺寸压到能塞进一行文字而不撑高行距。
+    /// <paramref name="openOnClick"/> 为 true 时点击<b>直接打开</b>该文件 / 文件夹
+    /// （可执行文件仍只定位，理由见 <see cref="AttachmentStore.IsExecutable"/>）。
     /// </summary>
-    public AttachmentChip(ChatAttachment item, Action? onRemove, bool compact = false)
+    public AttachmentChip(ChatAttachment item, Action? onRemove, bool compact = false, bool openOnClick = false)
     {
         Height = compact ? 19 : 26;
         CornerRadius = new CornerRadius(compact ? 5 : 6);
@@ -66,7 +75,7 @@ public sealed class AttachmentChip : Border
         Child = row;
 
         // 界面上不显示路径，但需要时悬停能看到是哪一份文件
-        ToolTip.SetTip(this, item.Path);
+        ToolTip.SetTip(this, openOnClick ? ClickHint(item) + Environment.NewLine + item.Path : item.Path);
         ToolTip.SetPlacement(this, PlacementMode.Bottom);
 
         PointerEntered += (_, _) =>
@@ -76,17 +85,28 @@ public sealed class AttachmentChip : Border
             // 文件是否存在在悬停时才查，不在构造时查：卡片是随历史消息成批建出来的，
             // 每条都做一次 File.Exists 是白白的系统调用（长会话里成百上千次），
             // 而这个信息只有真正悬停看提示的那一刻才有用。
-            ToolTip.SetTip(this, BuildTooltip(item.Path));
+            var state = BuildTooltip(item.Path);
+            ToolTip.SetTip(this, openOnClick ? ClickHint(item) + Environment.NewLine + state : state);
         };
 
         PointerExited += (_, _) => Background = IdleBg;
         PointerPressed += (_, e) =>
         {
             if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
-            AttachmentStore.RevealInExplorer(item.Path);
+
+            if (openOnClick) AttachmentStore.OpenOrReveal(item.Path);
+            else AttachmentStore.RevealInExplorer(item.Path);
+
             e.Handled = true;
         };
     }
+
+    /// <summary>悬停提示的第一行：点下去会发生什么。</summary>
+    private static string ClickHint(ChatAttachment item) => item.Kind == "folder"
+        ? "点击打开文件夹"
+        : AttachmentStore.IsExecutable(item.Path)
+            ? "点击在资源管理器中定位"
+            : "点击打开文件";
 
     /// <summary>
     /// 悬停提示。文件已被删除或挪走时在路径前加一行说明。
@@ -132,11 +152,12 @@ public sealed class AttachmentChip : Border
         return close;
     }
 
-    /// <summary>种类图标（Fluent System Icons）。</summary>
+    /// <summary>种类图标（Fluent System Icons）。码位对照见 <c>docs/icon-glyphs.md</c>。</summary>
     private static string GlyphFor(string kind) => kind switch
     {
-        "image" => "\uF489",    // Picture
+        "image" => "\uF489",     // Picture
+        "folder" => "\uF419",    // Folder
         "office" or "text" => "\uF379",   // Document
-        _ => "\uF379",          // Page
+        _ => "\uF379",           // Page
     };
 }

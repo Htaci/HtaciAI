@@ -367,8 +367,7 @@ internal static class BuiltinModelTable
         {
             Id = "deepseek-flash",
             Vendor = "deepseek",
-            Name = "DeepSeek V4.1 Flash",
-            Aliases = new[] { "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4.1-flash" },
+            Name = "DeepSeek Flash",
             ContextWindow = 1000000,
             MaxOutputTokens = 393216,
             Capabilities = new[] { "tools", "completion", "vision", "reasoning" },
@@ -377,7 +376,24 @@ internal static class BuiltinModelTable
             ThinkingStrengths = new[] { "low", "high", "max" },
             Temperature = TriState.No,
             Source = "https://api-docs.deepseek.com/guides/thinking_mode",
-            Note = "文档原文写「1M」，按约定读作 1000000；393216 是文档给的精确上限。旧 id deepseek-v4-flash / deepseek-v4-flash-vision-exp 已退役但仍受理，由本条目承载（已写进 aliases）。支持 reasoning_effort=none 关闭思考，应用侧表达不出。默认 effort=high。思考模式下 tool_choice 的 required/指定工具会 400。",
+            Note = "官方新 id 不带版本号：deepseek-flash 指开放平台当前的旗舰模型，版本换掉也还是这个名字。所以备注名也刻意不带版本 —— 写死版本只会在官方更新那天变成假消息。当前它指向的能力集与 deepseek-v4.1-flash 相同（1M 上下文 / 393216 输出），官方换模型时改本条目即可。文档原文写「1M」，按约定读作 1000000；393216 是文档给的精确上限。支持 reasoning_effort=none 关闭思考，应用侧表达不出。默认 effort=high。思考模式下 tool_choice 的 required/指定工具会 400。",
+        },
+        // deepseek-v4.1-flash
+        new()
+        {
+            Id = "deepseek-v4.1-flash",
+            Vendor = "deepseek",
+            Name = "DeepSeek V4.1 Flash",
+            Aliases = new[] { "deepseek-v4-1-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp" },
+            ContextWindow = 1000000,
+            MaxOutputTokens = 393216,
+            Capabilities = new[] { "tools", "completion", "vision", "reasoning" },
+            ArrayContent = TriState.Yes,
+            SupportsThinking = true,
+            ThinkingStrengths = new[] { "low", "high", "max" },
+            Temperature = TriState.No,
+            Source = "https://api-docs.deepseek.com/guides/thinking_mode",
+            Note = "同一型号的两处写法：官方和多数中转写 deepseek-v4.1-flash，部分厂商把它划成 deepseek-v4-1-flash（版本号里的点与连字符由索引统一折叠，所以只需登记一个别名）。后训练的小版本号 deepseek-v4.1-flash-1017 / deepseek-v4-1-flash-1017 能力与上下文完全一致，索引按「尾随快照号」剥掉后归到本条，不必逐条登记。旧 id deepseek-v4-flash / deepseek-v4-flash-vision-exp 已退役但仍受理，也由本条承载。与 deepseek-flash 的区别只在后者不带版本号。",
         },
         // deepseek-v4-pro
         new()
@@ -1276,8 +1292,8 @@ internal static class BuiltinModelTable
     };
 
     /// <summary>Assets/icon/models/light 下实际存在的图标名（生成时扫描目录得到）。</summary>
-    public static readonly string[] IconNamesLight = Array.Empty<string>();
+    public static readonly string[] IconNamesLight = new[] { "baai", "bytedance", "claude", "deepseek", "gemini", "gemma", "glm", "google", "grok", "hunyuan", "kimi", "longcat", "meta", "microsoft", "mimo", "minimax", "mistral", "nova", "nvidia", "openai", "qwen", "wenxin" };
 
     /// <summary>Assets/icon/models/dark 下实际存在的图标名。通常是 light 的子集，缺的走浅色兜底。</summary>
-    public static readonly string[] IconNamesDark = Array.Empty<string>();
+    public static readonly string[] IconNamesDark = new[] { "baai", "deepseek", "glm", "grok", "mimo", "openai" };
 }

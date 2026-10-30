@@ -13,6 +13,12 @@ public static class BuiltinTools
     /// <summary>ask_user_question 的工具名。会话视图要按它把工具卡渲染成问答卡片。</summary>
     public const string AskUserName = "ask_user_question";
 
+    /// <summary>
+    /// ask_user_continue 的工具名。
+    /// 工具分派器要按它免掉统一超时：这个工具等的是「人做完一件事」，长度由人决定。
+    /// </summary>
+    public const string AskContinueName = "ask_user_continue";
+
     private const string IdBash = "builtin-bash";
     private const string IdRead = "builtin-read";
     private const string IdEdit = "builtin-edit";
@@ -23,6 +29,7 @@ public static class BuiltinTools
     private const string IdLoadSkill = "builtin-load-skill";
     private const string IdUnloadSkill = "builtin-unload-skill";
     private const string IdAskUser = "builtin-ask-user";
+    private const string IdAskContinue = "builtin-ask-continue";
     private const string IdViewImage = "builtin-view-image";
     private const string IdCreateTool = "builtin-create-tool";
     private const string IdCreateSkill = "builtin-create-skill";
@@ -175,6 +182,21 @@ public static class BuiltinTools
             SkipApproval = true,
             InputSchemaJson = """
                 {"type":"object","properties":{"questions":{"type":"array","description":"要询问的问题列表（1-4 个）","items":{"type":"object","properties":{"question":{"type":"string","description":"问题本身，要具体、聚焦决策，不要问「我该怎么做」这类空泛问题；也不要写「（可多选）」之类的提示，单选还是多选由界面标注"},"header":{"type":"string","description":"极短标签，不超过 12 字"},"multiSelect":{"type":"boolean","description":"是否多选，默认 false（单选）。界面会在题干旁自动标注「单选 / 多选」；多选时用户可勾多个选项并同时补充自定义回答"},"options":{"type":"array","description":"候选项（1-6 个）。用户始终可以改用自定义输入作答，因此不必把「其他」写成选项。","items":{"type":"object","properties":{"label":{"type":"string","description":"选项文字"},"description":{"type":"string","description":"该选项意味着什么"}},"required":["label"]}}},"required":["question","options"]}}},"required":["questions"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdAskContinue,
+            Name = AskContinueName,
+            Description =
+                "请用户去做一件你做不了的事（扫码、输验证码、在手机上确认、手动登录等），" +
+                "并在会话里显示一张卡片说明要做什么；用户点「我已做完，继续」后你才继续。" +
+                "适合需要人实际操作才能推进的步骤。安全：只读，不改变任何状态。",
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Safe,
+            SkipApproval = true,
+            InputSchemaJson = """
+                {"type":"object","properties":{"title":{"type":"string","description":"一行标题，说明这一步要做什么（如「请在手机上确认登录」）"},"instructions":{"type":"string","description":"要用户怎么做。按行写具体步骤，用户会照着做，所以要写清在哪、点什么、做完什么算完成"},"timeout_seconds":{"type":"integer","description":"最多等多久（秒）。默认 900，上限 3600。用户做现实操作常常要好几分钟，别给太小"}},"required":["title","instructions"]}
                 """,
         },
         new ToolDefinition

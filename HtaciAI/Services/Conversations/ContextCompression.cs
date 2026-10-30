@@ -104,7 +104,7 @@ public static class ContextCompression
     /// <summary>
     /// 压缩记录转成真正发给模型的那条消息。
     ///
-    /// ⚠️ 必须把 role 换成 <c>user</c>：客户端（<c>OpenAiExClient.BuildMessages</c>）的 role 分支只认
+    /// ⚠️ 必须把 role 换成 <c>user</c>：客户端（<c>OpenAiChatClient.BuildMessages</c>）的 role 分支只认
     /// user / assistant / tool，<see cref="CompressRole"/> 会<b>被静默丢弃</b>——摘要等于白生成。
     /// </summary>
     private static ChatMessage ToWireMessage(ChatMessage source) => new()
@@ -192,6 +192,13 @@ public static class ContextCompression
         - 某节确实没有内容时写「无」，不要省略这一节。
         - 直接输出摘要正文，不要写「好的」「以下是摘要」这类前言后语。
         """;
+
+    /// <summary>
+    /// 粗略估算一段文本的 token 数，<b>只在服务商没回 usage 时兜底</b>。
+    /// 中文字约占 0.75 个 token，按字数取这个偏保守的比例即可，不追求准确。
+    /// </summary>
+    public static long EstimateTokens(string? text)
+        => string.IsNullOrEmpty(text) ? 0 : (long)Math.Ceiling(text.Length * 0.75);
 
     private static string Truncate(string? text, int limit)
     {

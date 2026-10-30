@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -67,11 +67,41 @@ public partial class GeneralSettingsPage : UserControl
         ContentPanel.Children.Add(CreateSessionCacheCard());
         ContentPanel.Children.Add(CreateToolRoundsCard());
         ContentPanel.Children.Add(CreateSelfExtensionCard());
+        ContentPanel.Children.Add(CreateTaskObedienceCard());
         ContentPanel.Children.Add(CreatePluginsCard());
         ContentPanel.Children.Add(CreateCompressionCard());
         ContentPanel.Children.Add(CreateUpdateCard());
         RefreshCacheRows();
         RefreshThresholdRows();
+    }
+
+    // ---- 卡片：直接执行任务 ----
+
+    /// <summary>
+    /// 「直接执行任务」。
+    ///
+    /// 关着时提示词与以前一字不差；打开后在 system 末尾追加一段要求「按用户明确要求执行、
+    /// 不用空泛理由推脱、不要在信息齐全时反复确认」的指令（见
+    /// <see cref="Services.TaskExecutionDirective"/>）。
+    ///
+    /// <b>它不是「关掉安全」</b>：真实危害那几条底线仍写在追加段里。
+    /// 工具审批与权限档位也不受它影响 —— 那是另一套、在工具调用时生效的机制。
+    /// </summary>
+    private Control CreateTaskObedienceCard()
+    {
+        var body = CreateSwitch(
+            "直接执行我要求的任务",
+            "开启后会在系统提示词里追加一段要求：把你说的事当作主线任务直接做，不要用「我是 AI」「这可能违规」" +
+            "这类理由推脱，也不要在信息已经足够时反复征求同意。适合用来测试自动化类任务。" +
+            "违法内容、攻击他人系统、窃取凭据这类请求仍然会被拒绝；工具的权限审批也不受影响。",
+            _data.ObeyUserTasks,
+            value =>
+            {
+                _data.ObeyUserTasks = value;
+                Persist();
+            });
+
+        return CreateCard("执行方式", "控制模型是「先问再做」还是「直接做」。下一轮发消息起生效。", body);
     }
 
     // ---- 卡片：AI 自我扩展 ----

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Models;
+using HtaciAI.Services.Attachments;
 using HtaciAI.Services.Mcp;
 using HtaciAI.Services.Notifications;
 using HtaciAI.Services.Plugins;
@@ -195,8 +196,11 @@ public sealed class ConversationRuntime
 
         try
         {
-            // 标题还是占位说明此前没定过名：按设置补一个（配了命名模型时先留占位，等首轮回复再生成）
-            if (ConversationTitle.IsPlaceholder(Profile.State.Title) && request.Text is not null)
+            // 标题还是占位说明此前没定过名：按设置补一个（配了命名模型时先留占位，等首轮回复再生成）。
+            // 记下「这一轮之前标题是不是占位」：不是占位就是用户手动改过名，
+            // 首轮的自动命名不许覆盖它 —— 否则「改名 → 发第一条消息」名字又被打回自动生成的。
+            var mayAutoTitle = ConversationTitle.IsPlaceholder(Profile.State.Title);
+            if (mayAutoTitle && request.Text is not null)
                 Profile.State.Title = ConversationTitle.InitialTitle(request.Text);
 
             Profile.State.Model = request.Settings.Model.ModelName;
@@ -213,7 +217,8 @@ public sealed class ConversationRuntime
             var turn = await RunTurnAsync(request);
 
             // 自动话题命名只跑首轮一次：首轮之后 Messages 非空，isFirstTurn 恒为假。
-            if (isFirstTurn) _ = ApplyAutoTitleAsync(turn, firstText);
+            // 首轮之前标题就不是占位的，说明用户自己起了名，同样不覆盖。
+            if (isFirstTurn && mayAutoTitle) _ = ApplyAutoTitleAsync(turn, firstText);
 
             return turn;
         }
@@ -246,6 +251,11 @@ public sealed class ConversationRuntime
         try
         {
             await Profile.LoadAsync();
+
+            // 档案读回来才知道这个会话选的是哪一档。构造时 ConfigureToolExecutor 拿到的
+            // 只是默认值（Normal），不同步的话「自由」存档在打开会话后仍然会弹审批卡，
+            // 得再点一次菜单才生效。
+            _toolExecutor.Mode = Profile.State.PermissionMode;
 
             Messages.Clear();
             try
@@ -281,6 +291,24 @@ public sealed class ConversationRuntime
     public async Task PersistSessionAsync()
     {
         try { await Profile.SaveAsync(); } catch { /* 忽略 */ }
+    }
+
+    /// <summary>
+    /// 用户手动改名。
+    ///
+    /// <b>为什么必须走运行时而不是直接改库</b>：一轮对话的收尾会
+    /// <see cref="PersistSessionAsync"/> 把档案<b>整份</b>写回去，而档案是打开会话时从库里读的<b>快照</b>。
+    /// 只改库的话，下一轮收尾就把旧标题原样覆盖回去 —— 用户看到的是「改完名跑一次任务，名字又变回去了」。
+    ///
+    /// 先 <see cref="EnsureReadyAsync"/>：运行时可能刚被插件借出来、档案还是空的，
+    /// 这时候落库会把模型、工具这些一并写成空值。
+    /// </summary>
+    public async Task SetTitleAsync(string title)
+    {
+        await EnsureReadyAsync();
+
+        Profile.State.Title = title;
+        await PersistSessionAsync();
     }
 
     // ============================================================
@@ -703,7 +731,7 @@ public sealed class ConversationRuntime
             };
 
             var builder = new StringBuilder();
-            await client.StreamAsync(
+            var result = await client.StreamAsync(
                 history,
                 ContextCompression.SummarySystemPrompt,
                 options,
@@ -723,6 +751,9 @@ public sealed class ConversationRuntime
                 Role = ContextCompression.CompressRole,
                 Content = summary,
                 Metadata = ContextCompression.SerializeMetadata(),
+                // 这次请求的输入是「被压掉的整段历史」，比压缩前还大，取它算占用是反的；
+                // 真正有用的是输出 —— 摘要本身就是压缩之后进入上下文的那部分。
+                UsageJson = ChatGateway.BuildUsageJson(result),
                 Status = "completed",
                 ModelName = client.ModelName,
                 CreatedAt = now,
@@ -770,7 +801,14 @@ public sealed class ConversationRuntime
 
     /// <summary>
     /// 当前上下文占用的 token 数与窗口上限。无上限（模型未声明）或历史里没有任何 usage 时返回 false。
-    /// 无状态 API 的最后一次输入已包含之前所有轮的输入与输出，所以最后一个 usage 就是当前占用。
+    ///
+    /// 取<b>最新一条有 usage 的来源</b>，两种口径二选一：
+    /// <list type="bullet">
+    ///   <item>普通 assistant 消息：无状态 API 的最后一次输入已包含之前所有轮的输入与输出，
+    ///   所以 <c>total</c> 就是当前占用；</item>
+    ///   <item>压缩记录：它之前的历史已经不再进入上下文，<b>它自己才是新的上下文起点</b>，
+    ///   所以取摘要的输出 token —— 它的输入是「被压掉的全部原文」，比压缩前还大，不能拿来当占用。</item>
+    /// </list>
     /// </summary>
     public bool TryGetContextUsage(out long used, out long total)
     {
@@ -781,8 +819,24 @@ public sealed class ConversationRuntime
         for (var i = Messages.Count - 1; i >= 0; i--)
         {
             var m = Messages[i];
-            if (m.Role != "assistant" || string.IsNullOrWhiteSpace(m.UsageJson)) continue;
+            if (string.IsNullOrWhiteSpace(m.UsageJson)) continue;
             if (TokenUsage.FromStoredJson(m.UsageJson) is not { } usage) continue;
+
+            if (ContextCompression.IsCompression(m))
+            {
+                // 服务商没回 usage（少数兼容实现如此）时按摘要字数估一个：
+                // 绝不能因此退回压缩前那个大数，那会让用量环一直顶在阈值上、每次发送都再压一遍
+                var summaryTokens = usage.OutputTokens > 0
+                    ? usage.OutputTokens
+                    : ContextCompression.EstimateTokens(m.Content);
+
+                if (summaryTokens <= 0) continue;
+
+                used = summaryTokens;
+                return true;
+            }
+
+            if (m.Role != "assistant") continue;
 
             used = usage.TotalTokens;
             return true;
@@ -869,9 +923,9 @@ public sealed class ConversationRuntime
             if (!settings.AutoTopicNaming)
                 title = ConversationTitle.Placeholder;
             else if (string.IsNullOrWhiteSpace(settings.TopicNamingModelId))
-                title = ConversationTitle.Truncate(firstText);
+                title = ConversationTitle.FromMessage(firstText);
             else
-                title = ConversationTitle.Truncate(await GenerateTitleAsync(turn) ?? firstText);
+                title = ConversationTitle.FromMessage(await GenerateTitleAsync(turn) ?? firstText);
 
             if (string.IsNullOrEmpty(title)) return;
 
@@ -904,7 +958,7 @@ public sealed class ConversationRuntime
             "你是会话标题生成器。根据用户的第一条消息和助手的回复，给出一个简短的会话标题。" +
             "要求：不超过 12 个字，只输出标题本身，不要引号、标点、序号或任何解释。";
 
-        var body = $"用户：{turn.User?.Content}\n助手：{ConversationTitle.Truncate(turn.FinalAssistant?.Content, 500)}";
+        var body = $"用户：{AttachmentMarker.StripMarkers(turn.User?.Content)}\n助手：{ConversationTitle.Truncate(turn.FinalAssistant?.Content, 500)}";
         var history = new List<ChatMessage> { new() { Role = "user", Content = body } };
 
         var options = new ChatRequestOptions
@@ -962,12 +1016,18 @@ public sealed class ConversationRuntime
         _toolExecutor.Context = new BuiltinToolContext
         {
             BaseDirectory = Profile.BaseDirectory,
+            // 插件工具会带上它：判断「这个资源是否授权给了这个会话」全靠这个值
+            SessionId = SessionId,
             GetSessionSkills = () => Task.FromResult<List<SessionSkill>?>(Profile.State.EnabledSkills),
             SaveSessionSkills = SaveSessionSkillsAsync,
             // 没有交互宿主时返回 null：工具链会据此把「用户不在」如实回给模型
             AskUser = (questions, token) => Interaction is { } host
                 ? host.AskAsync(questions, token)
                 : Task.FromResult<List<AskAnswer>?>(null),
+            // 同理：没窗口时返回 null（「没等到人」），而不是让这一轮永远悬着
+            WaitForUser = (title, instructions, token) => Interaction is { } host
+                ? host.WaitForUserAsync(title, instructions, token)
+                : Task.FromResult<bool?>(null),
         };
 
         _toolExecutor.ApprovalGate = (call, tool, token) => Interaction is { } host

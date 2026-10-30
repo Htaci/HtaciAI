@@ -207,6 +207,13 @@ public static class DatabaseService
             version = 21;
             SetVersion(conn, version);
         }
+
+        if (version < 22)
+        {
+            RunMigrationV22(conn);
+            version = 22;
+            SetVersion(conn, version);
+        }
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -274,7 +281,7 @@ public static class DatabaseService
                 id                     TEXT PRIMARY KEY,
                 name                   TEXT NOT NULL,
                 description            TEXT,
-                protocol               TEXT NOT NULL DEFAULT 'OpenAIEx',
+                protocol               TEXT NOT NULL DEFAULT 'OpenAI',
                 endpoint               TEXT NOT NULL,
                 api_key                TEXT,
                 thinking_field         TEXT NOT NULL DEFAULT 'think',
@@ -631,6 +638,43 @@ public static class DatabaseService
             ALTER TABLE ai_model ADD COLUMN temperature_supported INTEGER;
             ALTER TABLE ai_model ADD COLUMN config_origin INTEGER NOT NULL DEFAULT 3;
             """;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 服务商多端点：新建 ai_provider_endpoint 表，并把每个服务商原有的
+    /// protocol / endpoint 迁成它的第一个端点（默认端点）。
+    ///
+    /// 为什么把端点拆出来：同一家（尤其中转站）常常同时提供 /chat/completions 与 /responses
+    /// 两套接口，只留一个协议就只能二选一。ai_provider.protocol / endpoint 保留为
+    /// <b>默认端点的镜像</b> —— 请求层照旧只读这两列，不必知道端点表的存在。
+    /// </summary>
+    private static void RunMigrationV22(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS ai_provider_endpoint (
+                id          TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                protocol    TEXT NOT NULL DEFAULT 'OpenAI',
+                endpoint    TEXT NOT NULL,
+                is_default  INTEGER NOT NULL DEFAULT 0,
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL,
+                FOREIGN KEY (provider_id) REFERENCES ai_provider(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_endpoint_provider ON ai_provider_endpoint(provider_id);
+
+            INSERT INTO ai_provider_endpoint
+                (id, provider_id, protocol, endpoint, is_default, sort_order, created_at, updated_at)
+            SELECT lower(hex(randomblob(16))), id, protocol, endpoint, 1, 0, created_at, updated_at
+            FROM ai_provider
+            WHERE endpoint IS NOT NULL AND endpoint <> ''
+              AND NOT EXISTS (SELECT 1 FROM ai_provider_endpoint e WHERE e.provider_id = ai_provider.id);
+            """;
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
         cmd.ExecuteNonQuery();
     }
 

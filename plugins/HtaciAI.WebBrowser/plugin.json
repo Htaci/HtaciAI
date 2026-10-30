@@ -1,0 +1,24 @@
+{
+  "id": "htaci.browser",
+  "name": "内置浏览器",
+  "version": "0.6.0",
+  "description": "在宿主标签页里嵌一个 Chromium 内核：多标签、工具栏、共享授权，以及页面自动化工具（快照/点击/填表/执行 JS）",
+  "author": "HtaciAI",
+  "tags": [
+    "浏览器",
+    "自动化"
+  ],
+  "minHostVersion": "1.4.0",
+  "entry": "HtaciAI.WebBrowser.dll",
+  "entryType": "HtaciAI.WebBrowser.WebBrowserPlugin",
+  "capabilities": [
+    "ui.tab",
+    "ui.settings",
+    "ui.slot",
+    "tools.provide",
+    "chat.control"
+  ],
+  "platforms": [
+    "windows"
+  ]
+}

@@ -64,7 +64,7 @@
 
     <Border BorderBrush="LightGray"
             BorderThickness="0,1,0,0">
-        <Grid ColumnDefinitions="280,*">
+        <Grid ColumnDefinitions="280,*,Auto">
             <!-- ====== 左侧导航：工作空间（树形）+ 普通对话 ====== -->
             <Border Grid.Column="0"
                     Background="#99F9FAFB"
@@ -127,6 +127,18 @@
             <ContentControl x:Name="RightPanel"
                             Grid.Column="1"
                             Background="#99FFFFFF"/>
+
+            <!-- 会话页右侧插槽（插件可在这里放「与当前会话并排看」的内容；没内容时整列隐藏） -->
+            <Border x:Name="RightSidebarSlot"
+                    Grid.Column="2"
+                    Background="#99FFFFFF"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1,0,0,0"
+                    IsVisible="False">
+                <StackPanel x:Name="RightSidebarSlotPanel"
+                            Spacing="8"
+                            Margin="12"/>
+            </Border>
         </Grid>
     </Border>
 </UserControl>

@@ -110,13 +110,26 @@ public static class PluginCapabilities
     /// <summary>往宿主页面的插槽里插入控件、新标签页入口卡片。</summary>
     public const string UiSlot = "ui.slot";
 
+    /// <summary>在宿主主窗口里开自己的标签页（不是独立窗口）。</summary>
+    public const string UiTab = "ui.tab";
+
+    /// <summary>
+    /// 在插件页（插件详情）里提供一页自己的设置界面。
+    /// 实现 <see cref="IPluginSettingsProvider"/> 才有意义，详见该接口的说明。
+    /// </summary>
+    public const string UiSettings = "ui.settings";
+
     /// <summary>向工具注册表注册工具。</summary>
     public const string ToolsProvide = "tools.provide";
+
+    /// <summary>把会话的对话视图借到自己的界面里显示（内置浏览器那种「网页 + 对话」并排）。</summary>
+    public const string ConversationDock = "conversation.dock";
 
     /// <summary>已知能力的全集，供设置页把「声明了什么」翻译成人话。</summary>
     public static IReadOnlyList<string> All { get; } = new[]
     {
-        PromptContribute, ChatObserve, ChatControl, UiWindow, UiSlot, ToolsProvide,
+        PromptContribute, ChatObserve, ChatControl, UiWindow, UiSlot, UiTab, UiSettings, ToolsProvide,
+        ConversationDock,
     };
 
     /// <summary>把能力标识翻译成中文短语；不认识的返回 null（设置页原样显示标识）。</summary>
@@ -127,7 +140,10 @@ public static class PluginCapabilities
         ChatControl => "主动发起对话",
         UiWindow => "创建自己的窗口",
         UiSlot => "在界面中插入内容",
+        UiTab => "在主窗口里开标签页",
+        UiSettings => "在插件页提供设置界面",
         ToolsProvide => "提供工具",
+        ConversationDock => "把对话借到自己的界面里显示",
         _ => null,
     };
 }

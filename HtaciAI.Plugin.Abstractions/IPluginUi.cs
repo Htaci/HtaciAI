@@ -141,9 +141,16 @@ public static class PluginSlots
     /// <summary>主窗口标题栏右侧（在「检查更新」左边）。</summary>
     public const string MainWindowTitlebarRight = "mainwindow.titlebar.right";
 
+    /// <summary>
+    /// 会话页右侧（消息区右边）的侧栏，宽度由内容决定，空时整列隐藏。
+    /// 适合放「与当前会话并排看」的东西：网页预览、笔记、图片。
+    /// </summary>
+    public const string ConversationSidebar = "conversation.sidebar";
+
     /// <summary>全部插槽 id，供插件页展示与文档引用。</summary>
     public static IReadOnlyList<string> All { get; } = new[]
     {
         NewTabCards, ConversationHeader, ConversationInputSide, SidebarBelow, MainWindowTitlebarRight,
+        ConversationSidebar,
     };
 }

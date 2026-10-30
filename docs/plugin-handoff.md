@@ -2,7 +2,8 @@
 
 > 用途：上下文压缩 / 换人接手时，只读这一份就能接着干。
 > 最后更新：2026-10（M8 之后又按用户反馈改了一版插件页：去掉总开关、加安全警示条、
-> 卡片直接排列、详情页换成 README + 版本号 + 能力标签 + 右上角开关）
+> 卡片直接排列、详情页换成 README + 版本号 + 能力标签 + 右上角开关；
+> 再之后加了 M9：会话视图借出 `conversation.dock` + 会话页右侧插槽 `conversation.sidebar`）
 
 ---
 
@@ -46,6 +47,7 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 | 插件能不能往上下文里加东西 | ✅ M2（`PromptComposer` + `IPromptRegistry`） |
 | 插件能不能建窗口 / 插控件 | ✅ M4（`IPluginWindowHost` + `IUiExtensionRegistry`） |
 | 插件能不能提供工具给模型 | ✅ M7（`IToolRegistryApi` + `ToolSource.Plugin`） |
+| 插件能不能把某个会话的对话视图借到自己界面里 | ✅ M9（`IConversationDock` + `conversation.dock`） |
 | 清单能不能声明平台/前置/互斥 | ✅ M7（含拓扑加载、循环依赖、连带停用） |
 | 用户能不能在界面里看到开发文档 | ✅ M7（插件页小字入口 → `<数据根>/doc/`） |
 | 桌宠插件本体 | ⬜ M5（M2/M3/M4 已全部就绪） |
@@ -583,6 +585,47 @@ M8 先把它从详情页挪到主页；**随后按用户反馈整张卡删掉了
 
 ---
 
+### 14. 会话视图借出（M9）
+
+**出发点**：内置浏览器要「一边看网页一边聊」，而会话视图只有一个。让插件自己用
+`ISessionFacade` 再搭一份对话界面，等于同一个会话两份窗口 —— 一份在跑、另一份是从库里读的快照，
+用户点哪份都像丢消息（与 `SessionViewCache` 里「一个会话只有一个窗口」是同一条规则）。
+
+**形态**（契约 `HtaciAI.Plugin.Abstractions/IPluginDock.cs`，能力 `conversation.dock`）：
+
+| 成员 | 说明 |
+| --- | --- |
+| `IConversationDock.AttachAsync(sessionId, hostLabel, ct)` | 把视图从原宿主摘下来交给插件，返回 `ConversationDockResult(Success, View, Error)` |
+| `IConversationDock.Release(sessionId)` | 还回去（插件侧的正常收尾） |
+| `Released` 事件（在宿主门面上） | 视图被**宿主**收回时通知插件（用户点了召回） |
+| `ConversationDockInfo` / `ConversationDockHost.Find/DockChanged` | **宿主内部**：会话页据此画占位；`Recall(sessionId)` 是页面侧的「召回」 |
+| `PluginSlots.ConversationSidebar`（`conversation.sidebar`） | 会话页右侧插槽（`Grid` 的第三列，空时整列隐藏） |
+
+**几条设计上的取舍**：
+
+| 取舍 | 为什么 |
+| --- | --- |
+| 搬的是缓存里那**一份真窗口**，不是新建一个 | 滚动位置、正在跑的一轮、输入框草稿都在里面；复制一份必然与真实状态脱节 |
+| 占位与召回按钮由**宿主**画 | 插件只说「我把 sessionId 借走了，我叫内置浏览器」；所有插件的占位体验一致，插件也不必知道会话页长什么样 |
+| 一个会话同时只允许一个插件 | 两个宿主各自以为自己拥有同一个窗口，最后两个面板都不对 |
+| 同一插件重复借是幂等的 | 插件重建自己的面板（关掉再打开）属于正常操作，不该报错 |
+| `ConversationPage.OpenSessionAsync` 遇到被借走的会话只放占位 | 否则页面会把视图从插件的容器里抢回来（`DetachFromOtherHost` 只认 ContentControl/Panel，正好会摘掉插件的容器） |
+| 借出期间在缓存里 `Claim` | 否则页面的淘汰器按「很久没显示」把正在插件里显示的窗口清掉 |
+| 门面 Dispose 收回全部借出 | 与窗口 / 标签页 / 插槽同一条约定：不指望插件的 `ShutdownAsync` 记得 |
+| `hostLabel` 由插件传、宿主截断到 40 字 | 占位文案要写用户看得懂的名字，不该出现插件 id |
+| 会话档案解析抽成 `SessionProfileResolver` | 原本这段「先普通后工作空间」的判断长在 `PluginSessionFacade` 里，借视图也要用同一份，抄出去将来加会话类型必然漏改 |
+
+**已验证**（`Avalonia.Headless` 真建页面，22 项全过）：借出成功且 `View.Parent` 为 null；
+会话页换成占位（文案含 `hostLabel`、有「召回」按钮）；第二个插件借不走且 `Error` 指名占着的人；
+同一插件重复借拿到同一个实例；插件 `Release` 后视图回页面；页面「召回」后视图回页面并触发插件 `Released`；
+插件 `Dispose` 后视图被收回、登记表清空；`conversation.sidebar` 插了内容后右列出现、撤销后隐藏；
+不存在的会话返回失败与原因；停用后的门面拒绝借出。
+
+**没验证**：人眼看占位与右侧栏的排版；真实 WebView2 面板里借出的会话（浏览器插件还没接这个 API）；
+工作空间会话的借出（解析走的是同一段代码，但没单独跑）。
+
+---
+
 ## 二、M0 踩过的坑（别再踩）
 
 ### 坑 1：`LoadFromAssemblyPath` 会锁死文件
@@ -625,7 +668,7 @@ async 方法的 Task 就是状态机对象；写在里面的 `Assembly` / `Type`
 
 ## 三、待办
 
-M0 / M1 / M2 / M3 / M4 / M6 / M7 / M8 已完成，只剩 **M5（桌宠插件本体）**。
+M0 / M1 / M2 / M3 / M4 / M6 / M7 / M8 / M9 已完成，只剩 **M5（桌宠插件本体）**。
 它需要的底层能力现在全部齐备：
 
 | 桌宠要做的事 | 用哪个出口 |

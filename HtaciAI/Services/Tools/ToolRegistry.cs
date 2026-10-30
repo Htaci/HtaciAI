@@ -145,6 +145,29 @@ public sealed class ToolRegistry
         _toolsetMembers.TryAdd(ts.Id, new HashSet<string>());
     }
 
+    /// <summary>
+    /// 注销一个工具集（插件卸载时用）。
+    ///
+    /// <b>只允许注销非内置集合</b>：「全部」「内置」是代码定义出来的，
+    /// 删掉之后 <see cref="GetToolsets"/> 会少两项、选择器也会少两行 ——
+    /// 那不是插件该能造成的影响。
+    /// </summary>
+    public void UnregisterToolset(string id)
+    {
+        if (Toolset.IsAutoId(id)) return;
+        if (!_toolsets.Remove(id)) return;
+
+        _toolsetMembers.Remove(id);
+
+        // 成员工具上的归属链接也要摘掉：留着的话下次同名工具复用同一个 id
+        // 时会莫名其妙地「已经在某个集合里」。
+        foreach (var tool in _byId.Values)
+        {
+            if (tool.ToolsetIds.Contains(id))
+                tool.ToolsetIds = tool.ToolsetIds.Where(x => x != id).ToList();
+        }
+    }
+
     /// <summary>全部集合：自动集合固定在最前（全部 → 内置），其余按名称排。</summary>
     public IReadOnlyList<Toolset> GetToolsets()
         => _toolsets.Values

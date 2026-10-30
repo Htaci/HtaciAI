@@ -217,6 +217,10 @@ public interface IToolRegistryApi
 
 **e) UI**
 
+> **M9 追加**：会话视图可以整份借走（`conversation.dock`）——
+> 插件把某个 `sessionId` 的对话视图搬进自己的界面，占位与召回由宿主统一画；
+> 另加了会话页右侧插槽 `conversation.sidebar`。契约与取舍见交接文档第 14 节。
+
 插件**可以自由使用 Avalonia**：自己写 `UserControl`、自己画、自己动画、自己 `new Window`。
 宿主只负责三件事——在哪里插、给什么容器、退出时谁来收。
 
@@ -461,6 +465,7 @@ public sealed class WindowOptions
 | M5 | 桌宠插件（先窗口+气泡，后主动发起） | M2、M3、M4 | ⬜ 未开始 |
 | M7 | 插件工具（`IToolRegistryApi` + `tools.provide`）、清单的 `platforms`/`requires`/`conflicts`/`tags`/`author` 与拓扑加载、内置开发文档（`<数据根>/doc/`） | M0、M4 | ✅ 已完成 |
 | M6 | 「插件」页（新标签页入口）：列表、启用/禁用、能力清单、错误状态、需重启提示、崩溃记录与崩溃日志、崩溃后仍自动加载；与设置页总开关联动 | M0 | ✅ 已完成（含「最近一次贡献字数」） |
+| M9 | 会话视图借出（`conversation.dock`：`IConversationDock` + 会话页占位/召回）+ 会话页右侧插槽（`conversation.sidebar`） | M1、M4 | ✅ 已完成（见交接文档第 14 节） |
 
 **下一步**：M5（桌宠插件本体）。`IPluginContext` 上的门面已全部就绪，
 开工要点写在 [`plugin-handoff.md`](./plugin-handoff.md) 的「三、待办」里。

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -17,12 +18,41 @@ namespace HtaciAI.Views;
 public partial class MainWindow : Window
 {
     private int _selectedIndex;
-    private readonly List<Control> _tabContents = new();
-    private readonly List<Border> _tabHeaders = new();
-    private readonly List<TextBlock> _tabTitleBlocks = new();
+
+    /// <summary>
+    /// 全部标签页。每一项把「页面 / 容器 / 标签头 / 标题块」绑成一体。
+    ///
+    /// <b>为什么不再用三个按同一下标对齐的平行数组</b>：加一个数组就多一处必须同步的地方，
+    /// 漏一处就变成「标题对、内容错」这种极难查的错位。而且现在还要再维护
+    /// <see cref="TabStage"/> 的 Children 顺序 —— 四个平行列表同步是不可接受的。
+    /// </summary>
+    private readonly List<TabSlot> _tabs = new();
+
+    /// <summary>插件开的标签页句柄。用户点 × 关掉时要把 Closed 事件补上。</summary>
+    private readonly List<PluginTabHandle> _pluginTabs = new();
 
     /// <summary>标题栏右侧插槽的订阅。窗口关掉时释放。</summary>
     private readonly System.IDisposable _titlebarSlotSubscription;
+
+    /// <summary>
+    /// 一个标签页的全部组成部分。
+    ///
+    /// <see cref="Host"/> 是常驻在 <see cref="TabStage"/> 里的容器，
+    /// <b>切换标签只改它的 <c>IsVisible</c></b>：这样页面本身永远不脱离可视树，
+    /// 嵌在里面的原生控件（WebView2）也就不会被销毁。
+    /// </summary>
+    private sealed class TabSlot(Border host, Control content, Border header, TextBlock titleBlock)
+    {
+        /// <summary>常驻容器。<c>IsVisible</c> 挂在它上面。</summary>
+        public Border Host { get; } = host;
+
+        /// <summary>页面本身。就地替换时改它的父容器的 Child。</summary>
+        public Control Content { get; set; } = content;
+
+        public Border Header { get; } = header;
+
+        public TextBlock TitleBlock { get; } = titleBlock;
+    }
 
     public MainWindow()
     {
@@ -84,13 +114,13 @@ public partial class MainWindow : Window
     /// <summary>跳到某个会话：切到（没有就先用已有的）智能对话标签页，把窗口叫到前台，再打开会话。</summary>
     private async Task JumpToSessionAsync(string sessionId)
     {
-        var index = _tabContents.FindIndex(c => c is ConversationPage);
+        var index = _tabs.FindIndex(t => t.Content is ConversationPage);
         if (index < 0) return;
 
         SelectTab(index);
         BringToFront();
 
-        if (_tabContents[index] is ConversationPage page)
+        if (_tabs[index].Content is ConversationPage page)
             await page.OpenSessionAsync(sessionId);
     }
 
@@ -272,14 +302,10 @@ public partial class MainWindow : Window
         {
             newTabPage.SmartChatSelected -= OnConversationSelected;
 
-            var index = _tabContents.IndexOf(newTabPage);
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
             if (index < 0) return;
 
-            _tabContents[index] = new ConversationPage();
-            _tabTitleBlocks[index].Text = "智能对话";
-
-            if (index == GetSelectedIndex())
-                TabContent.Content = _tabContents[index];
+            ReplaceTabContent(index, new ConversationPage(), "智能对话");
         }
     }
 
@@ -289,14 +315,10 @@ public partial class MainWindow : Window
         {
             newTabPage.ToolsSelected -= OnToolsSelected;
 
-            var index = _tabContents.IndexOf(newTabPage);
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
             if (index < 0) return;
 
-            _tabContents[index] = new ToolsPage();
-            _tabTitleBlocks[index].Text = "工具";
-
-            if (index == GetSelectedIndex())
-                TabContent.Content = _tabContents[index];
+            ReplaceTabContent(index, new ToolsPage(), "工具");
         }
     }
 
@@ -306,14 +328,10 @@ public partial class MainWindow : Window
         {
             newTabPage.SkillsSelected -= OnSkillsSelected;
 
-            var index = _tabContents.IndexOf(newTabPage);
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
             if (index < 0) return;
 
-            _tabContents[index] = new SkillsPage();
-            _tabTitleBlocks[index].Text = "技能";
-
-            if (index == GetSelectedIndex())
-                TabContent.Content = _tabContents[index];
+            ReplaceTabContent(index, new SkillsPage(), "技能");
         }
     }
 
@@ -323,14 +341,10 @@ public partial class MainWindow : Window
         {
             newTabPage.PluginsSelected -= OnPluginsSelected;
 
-            var index = _tabContents.IndexOf(newTabPage);
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
             if (index < 0) return;
 
-            _tabContents[index] = new PluginsPage();
-            _tabTitleBlocks[index].Text = "插件";
-
-            if (index == GetSelectedIndex())
-                TabContent.Content = _tabContents[index];
+            ReplaceTabContent(index, new PluginsPage(), "插件");
         }
     }
 
@@ -340,14 +354,10 @@ public partial class MainWindow : Window
         {
             newTabPage.McpSelected -= OnMcpSelected;
 
-            var index = _tabContents.IndexOf(newTabPage);
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
             if (index < 0) return;
 
-            _tabContents[index] = new McpPage();
-            _tabTitleBlocks[index].Text = "MCP服务";
-
-            if (index == GetSelectedIndex())
-                TabContent.Content = _tabContents[index];
+            ReplaceTabContent(index, new McpPage(), "MCP服务");
         }
     }
 
@@ -358,13 +368,104 @@ public partial class MainWindow : Window
     /// <param name="content"></param>
     private void AddTab(string title, Control content)
     {
-        var index = _tabHeaders.Count;
-        var header = CreateTabHeader(title, index);
-        _tabHeaders.Add(header);
-        _tabContents.Add(content);
+        var index = _tabs.Count;
+        var (header, titleBlock) = CreateTabHeader(title, index);
 
+        // 容器常驻 Stage。先给 IsVisible=false，SelectTab 会把它打开 ——
+        // 这样中途不会闪一下「上一个页面还在这、新页面也在这」的重叠。
+        var host = new Border { Child = content, IsVisible = false };
+
+        _tabs.Add(new TabSlot(host, content, header, titleBlock));
+        TabStage.Children.Add(host);
         TabHeaderPanel.Children.Insert(TabHeaderPanel.Children.Count - 1, header);
+
         SelectTab(index);
+    }
+
+    /// <summary>
+    /// 就地换掉某个标签页的页面（「新标签页」卡片点进去时用）。
+    ///
+    /// <b>只能改 Host.Child，不能把 Host 从 Stage 里摘了重加</b>：
+    /// 摘了重加等于让整棵子树脱离再挂回可视树，嵌着的原生控件会先被销毁再重建 ——
+    /// 那正是这次改造要消灭的行为。
+    /// </summary>
+    private void ReplaceTabContent(int index, Control content, string title)
+    {
+        if (index < 0 || index >= _tabs.Count) return;
+
+        var slot = _tabs[index];
+        slot.Content = content;
+        slot.Host.Child = content;   // 旧页面由 Avalonia 自己解除父级
+        slot.TitleBlock.Text = title;
+    }
+
+    /// <summary>
+    /// 插件开标签页的入口（<see cref="HtaciAI.Services.Plugins.PluginTabHost"/> 调这里）。
+    ///
+    /// 与 <see cref="AddTab"/> 的区别只在返回句柄：插件需要之后改标题、切过来、关掉。
+    /// </summary>
+    internal PluginTabHandle AddPluginTab(string title, Control content)
+    {
+        AddTab(title, content);
+
+        // 用 Host 而不是 content 做身份：页面可以被就地替换（ReplaceTabContent），
+        // 但 Host 永远不变，所以按 Host 反查下标不会因为换页面而失效。
+        var host = _tabs[^1].Host;
+        var handle = new PluginTabHandle(this, host, title);
+        _pluginTabs.Add(handle);
+
+        // 句柄自己关掉时也要从表里摘掉，否则会一直堆着已经关掉的标签
+        handle.Closed += () => _pluginTabs.Remove(handle);
+
+        return handle;
+    }
+
+    /// <summary>
+    /// 插件标签页的句柄。
+    ///
+    /// <b>不缓存下标</b>：用户在中间关掉一个标签，后面的全部前移，缓存的旧下标会改到
+    /// 别人的标题上。所以每次操作都按<b>常驻容器</b>在 <c>_tabs</c> 里反查当前位置
+    /// （不用页面实例：页面会被 <c>ReplaceTabContent</c> 换掉，容器不会）。
+    /// </summary>
+    internal sealed class PluginTabHandle(MainWindow window, Border host, string title) : IPluginTab
+    {
+        public string Title { get; private set; } = title;
+
+        public event Action? Closed;
+
+        /// <summary>本句柄对应的常驻容器，MainWindow 用它反查下标。</summary>
+        internal Border Host { get; } = host;
+
+        /// <summary>容器还在列表里就说明标签还活着。</summary>
+        private int IndexOf() => window._tabs.FindIndex(t => ReferenceEquals(t.Host, host));
+
+        public void SetTitle(string newTitle)
+        {
+            var index = IndexOf();
+            if (index < 0) return;
+
+            Title = newTitle ?? "";
+            window._tabs[index].TitleBlock.Text = Title;
+        }
+
+        public void Activate()
+        {
+            var index = IndexOf();
+            if (index >= 0) window.SelectTab(index);
+        }
+
+        public void Close()
+        {
+            var index = IndexOf();
+
+            // 第 0 个是「智能对话」，RemoveTab 也拦着不让关 —— 插件不该造出第二个首页
+            if (index <= 0) return;
+
+            window.RemoveTab(index);
+        }
+
+        /// <summary>由 <see cref="MainWindow.RemoveTab"/> 在标签真的消失后调用。</summary>
+        internal void NotifyClosed() => Closed?.Invoke();
     }
     /// <summary>
     /// 创建标签页头部
@@ -372,7 +473,7 @@ public partial class MainWindow : Window
     /// <param name="title"></param>
     /// <param name="index"></param>
     /// <returns></returns>
-    private Border CreateTabHeader(string title, int index)
+    private (Border Header, TextBlock TitleBlock) CreateTabHeader(string title, int index)
     {
         var titleBlock = new TextBlock
         {
@@ -381,7 +482,6 @@ public partial class MainWindow : Window
             Margin = new Avalonia.Thickness(10, 0),
             FontSize = 12,
         };
-        _tabTitleBlocks.Add(titleBlock);
 
         var closeBtn = new Button
         {
@@ -457,7 +557,7 @@ public partial class MainWindow : Window
         };
 
         border.PointerPressed += OnTabHeaderClick;
-        return border;
+        return (border, titleBlock);
     }
 
     /// <summary>
@@ -477,18 +577,30 @@ public partial class MainWindow : Window
 
     private void RemoveTab(int index)
     {
-        _tabHeaders.RemoveAt(index);
-        _tabContents.RemoveAt(index);
-        _tabTitleBlocks.RemoveAt(index);
+        if (index < 0 || index >= _tabs.Count) return;
+
+        // 先通知插件句柄：它需要在「容器还在列表里」的时候把 Closed 发出去。
+        // 反过来（先删再通知）会让句柄反查不到自己，事件就发不出来了。
+        var closing = _tabs[index];
+        var closingHandle = _pluginTabs.FirstOrDefault(h => ReferenceEquals(h.Host, closing.Host));
+        if (closingHandle is not null)
+        {
+            _pluginTabs.Remove(closingHandle);
+            closingHandle.NotifyClosed();
+        }
+
+        // Stage 与标签栏都必须按同一个下标删，删完两边顺序仍然一致 ——
+        // 这依赖「加的时候都是 Append」这个不变量。若以后有人改成中间插入，
+        // 这里要跟着变成 Insert，否则内容会整段错位。
+        TabStage.Children.RemoveAt(index);
         TabHeaderPanel.Children.RemoveAt(index);
+        _tabs.RemoveAt(index);
 
-        for (int i = 0; i < _tabHeaders.Count; i++)
-            _tabHeaders[i].Tag = i;
+        for (int i = 0; i < _tabs.Count; i++)
+            _tabs[i].Header.Tag = i;
 
-        if (_selectedIndex > index)
-            _selectedIndex--;
-        else if (_selectedIndex >= _tabContents.Count)
-            _selectedIndex = _tabContents.Count - 1;
+        if (_selectedIndex > index) _selectedIndex--;
+        else if (_selectedIndex >= _tabs.Count) _selectedIndex = _tabs.Count - 1;
 
         SelectTab(_selectedIndex);
     }
@@ -501,11 +613,20 @@ public partial class MainWindow : Window
 
     private void SelectTab(int index)
     {
-        if (index < 0 || index >= _tabHeaders.Count) return;
+        if (index < 0 || index >= _tabs.Count) return;
 
-        for (int i = 0; i < _tabHeaders.Count; i++)
+        for (int i = 0; i < _tabs.Count; i++)
         {
-            var header = _tabHeaders[i];
+            // 关键：只切 IsVisible。
+            //
+            // NativeControlHost 的 UpdateHost 里只有这一条分支会走 HideWithSize
+            // （隐藏、但内核与原生子窗口都留着）；被移出可视树则会 DestroyNativeControl，
+            // 也就是 WebView2 的 controller 被关、渲染进程回收、页面状态全丢。
+            // 换成 Opacity 或挪出屏幕都不行：前者仍参与布局与命中测试、原生窗口照样显示，
+            // 后者会让所有页面继续布局绘制。
+            _tabs[i].Host.IsVisible = i == index;
+
+            var header = _tabs[i].Header;
             if (i == index)
             {
                 header.Background = new SolidColorBrush(Color.Parse("#FFFFFF"));
@@ -527,14 +648,13 @@ public partial class MainWindow : Window
         }
 
         _selectedIndex = index;
-        TabContent.Content = _tabContents[index];
     }
 
     private int GetSelectedIndex() => _selectedIndex;
 
     private void OnSettingsClick(object? sender, RoutedEventArgs e)
     {
-        var index = _tabContents.FindIndex(c => c is SettingsPage);
+        var index = _tabs.FindIndex(t => t.Content is SettingsPage);
         if (index >= 0)
         {
             SelectTab(index);

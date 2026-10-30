@@ -50,7 +50,21 @@ public interface ISessionFacade
     /// </summary>
     Task<IReadOnlyList<SessionMessageSnapshot>> GetRecentMessagesAsync(
         string sessionId, int take, CancellationToken ct = default);
+
+    /// <summary>
+    /// 列出会话（按最近更新倒序），最多 <paramref name="take"/> 个。
+    ///
+    /// 给「挑一个会话把东西送过去」这类界面用 —— 插件不该硬编码会话 id，
+    /// 那东西只有用户知道。
+    /// </summary>
+    Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int take = 50, CancellationToken ct = default);
 }
+
+/// <summary>会话列表里的一项。只够画一个下拉列表，不含正文。</summary>
+/// <param name="SessionId">会话 id，之后传给 <c>SendAsync</c> 用这个。</param>
+/// <param name="Title">标题（可能为空，取决于宿主当前的自动命名状态）。</param>
+/// <param name="UpdatedAt">最近更新时间，Unix 毫秒。</param>
+public sealed record SessionSummary(string SessionId, string Title, long UpdatedAt);
 
 /// <summary><see cref="ISessionFacade.SendAsync"/> 的结果。</summary>
 public enum SessionSendStatus

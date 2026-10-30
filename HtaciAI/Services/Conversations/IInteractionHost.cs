@@ -22,6 +22,16 @@ public interface IInteractionHost
     /// <summary>向用户提问并等待作答。返回 null = 用户没答（关掉了或取消了）。</summary>
     Task<List<AskAnswer>?> AskAsync(List<AskQuestion> questions, CancellationToken ct);
 
+    /// <summary>
+    /// 请用户去做一件模型自己做不了的事，等他做完再继续。
+    /// 返回 null = 用户取消了（或关掉了这张卡）。
+    ///
+    /// <b>与 <see cref="AskAsync"/> 的区别是「等什么」</b>：提问等的是一个答案，
+    /// 这里等的是「人在现实里做完了一件事」——扫码、输验证码、在手机上确认。
+    /// 所以界面上不该出现选项，只有一段说清要做什么的话和两个按钮。
+    /// </summary>
+    Task<bool?> WaitForUserAsync(string title, string instructions, CancellationToken ct);
+
     /// <summary>工具改动了本会话启用的技能（load_skill / unload_skill），宿主据此刷新显示。</summary>
     void OnSessionSkillsChanged(IReadOnlyList<SessionSkill>? skills);
 }

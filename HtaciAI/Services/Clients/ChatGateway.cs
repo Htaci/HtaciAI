@@ -342,8 +342,10 @@ public sealed class ChatGateway
     /// <summary>
     /// 落库格式：只存 input / cache_hit / output + 原始对象；
     /// cache_miss 与 total 由减法/加法现算，不单独存。
+    /// 压缩请求也用它落库（见 <c>ConversationRuntime.CompressAsync</c>）：摘要的输出 token
+    /// 就是压缩之后上下文的实际占用，两处口径必须一致。
     /// </summary>
-    private static string BuildUsageJson(ChatStreamResult result)
+    internal static string BuildUsageJson(ChatStreamResult result)
     {
         object? raw = null;
         if (!string.IsNullOrEmpty(result.RawUsageJson))
@@ -417,7 +419,7 @@ public sealed class ModelDetails
     public string ModelId { get; init; } = "";
     public string DisplayName { get; init; } = "";
     public string ProviderName { get; init; } = "";
-    public ModelProtocol Protocol { get; init; } = ModelProtocol.OpenAIEx;
+    public ModelProtocol Protocol { get; init; } = ModelProtocol.OpenAI;
     public string Endpoint { get; init; } = "";
     public string ApiKey { get; init; } = "";
     /// <summary>发送给 API 的模型名（模型调用 id）。</summary>

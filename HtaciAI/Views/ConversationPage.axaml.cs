@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -18,6 +18,7 @@ using HtaciAI.Models;
 using HtaciAI.Services;
 using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services.Conversations;
+using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Tools;
 
@@ -68,6 +69,15 @@ public partial class ConversationPage : UserControl
     /// <summary>每个导航项的统一行高（工作空间节点与会话项一致，避免高度参差）。</summary>
     private const double RowHeight = 36;
 
+    /// <summary>分级展开时每一级多显示多少条会话。</summary>
+    private const int SessionsPerLevel = 5;
+
+    /// <summary>
+    /// 工作空间会话列表的分级展开级别：工作空间 id → 级别（1 级起）。
+    /// 显示条数恒为「级别 × 5」，期间新增的会话只把队尾挤下去，不会撑破当前级别。
+    /// </summary>
+    private readonly Dictionary<string, int> _workspaceSessionLevels = new();
+
     /// <summary>列表右侧留白，给滚动条留出独立槽位，避免按钮贴着滚动条。</summary>
     private const double RightGutter = 12;
 
@@ -106,6 +116,15 @@ public partial class ConversationPage : UserControl
 
     /// <summary>左侧导航底部插槽的订阅。离开可视树时释放。</summary>
     private IDisposable? _sidebarSlotSubscription;
+
+    /// <summary>右侧插槽的订阅。离开可视树时释放。</summary>
+    private IDisposable? _rightSidebarSlotSubscription;
+
+    /// <summary>右侧现在放的是「这个会话正显示在别处」的占位（而不是会话视图）。</summary>
+    private bool _showingDockPlaceholder;
+
+    /// <summary>是否已订阅「会话视图被插件借走 / 还回来」。离开可视树时退订。</summary>
+    private bool _dockSubscribed;
 
     /// <summary>
     /// 保留时长。每次淘汰时现读设置，所以改设置立刻生效、不用重启。
@@ -156,6 +175,118 @@ public partial class ConversationPage : UserControl
     private void RefreshSidebarSlot()
         => PluginSlotPanel.Fill(SidebarBelowSlot, PluginSlots.SidebarBelow);
 
+    // ============================================================
+    // 右侧插槽
+    // ============================================================
+
+    private void HookRightSidebarSlot()
+    {
+        if (_rightSidebarSlotSubscription is not null) return;
+
+        RefreshRightSidebarSlot();
+        _rightSidebarSlotSubscription = PluginSlotPanel.Subscribe(RefreshRightSidebarSlot);
+    }
+
+    private void UnhookRightSidebarSlot()
+    {
+        _rightSidebarSlotSubscription?.Dispose();
+        _rightSidebarSlotSubscription = null;
+    }
+
+    private void RefreshRightSidebarSlot()
+    {
+        PluginSlotPanel.Fill(RightSidebarSlotPanel, PluginSlots.ConversationSidebar);
+
+        // Fill 只管内层面板：外面那层 Border 带着分隔线，没内容时整列都要收掉
+        RightSidebarSlot.IsVisible = RightSidebarSlotPanel.Children.Count > 0;
+    }
+
+    // ============================================================
+    // 会话视图被插件借走（conversation.dock）
+    // ============================================================
+
+    private void HookDock()
+    {
+        if (_dockSubscribed) return;
+
+        ConversationDockHost.Instance.DockChanged += OnDockChanged;
+        _dockSubscribed = true;
+    }
+
+    private void UnhookDock()
+    {
+        if (!_dockSubscribed) return;
+
+        ConversationDockHost.Instance.DockChanged -= OnDockChanged;
+        _dockSubscribed = false;
+    }
+
+    /// <summary>
+    /// 某个会话的视图被借走 / 还回来了。
+    ///
+    /// <b>借走</b>：本页把视图交出去（它在插件那边显示），换上一块由宿主生成的占位；
+    /// <b>还回来</b>：按会话 id 重新挂上 —— 缓存命中就是原来那一份，滚动位置都在。
+    /// </summary>
+    private void OnDockChanged(string sessionId)
+    {
+        if (!string.Equals(sessionId, _activeSessionId, StringComparison.Ordinal)) return;
+
+        if (ConversationDockHost.Instance.Find(sessionId) is { } docked)
+        {
+            _viewCache.ReleaseHolder(this);
+            _cacheKey = null;
+            _showingDockPlaceholder = true;
+            RightPanel.Content = CreateDockPlaceholder(docked);
+            return;
+        }
+
+        // 还回来了：只处理「本页正显示着这个会话的占位」的情况，别把用户刚切到的别的东西顶掉
+        if (!_showingDockPlaceholder) return;
+
+        _showingDockPlaceholder = false;
+        _ = OpenSessionAsync(sessionId);
+    }
+
+    /// <summary>
+    /// 「这个会话正在别处显示」的占位。
+    ///
+    /// <b>由宿主统一生成</b>，插件只说「我叫什么」：这样每个插件免费得到一致的提示，
+    /// 也不必知道会话页长什么样。召回按钮也是宿主的 —— 用户的意思优先于插件的。
+    /// </summary>
+    private Control CreateDockPlaceholder(ConversationDockInfo info)
+    {
+        var recall = new Button
+        {
+            Content = "召回",
+            FontSize = 12.5,
+            Padding = new Thickness(14, 5),
+            CornerRadius = new CornerRadius(6),
+            Background = new SolidColorBrush(Color.Parse("#4A90D9")),
+            Foreground = Brushes.White,
+            BorderThickness = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        recall.Click += (_, _) => ConversationDockHost.Instance.Recall(info.SessionId);
+
+        return new StackPanel
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Spacing = 12,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = $"这个会话正在「{info.HostLabel}」中显示",
+                    FontSize = 13.5,
+                    Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                },
+                recall,
+            },
+        };
+    }
+
     /// <summary>
     /// 这个窗口不许被淘汰：它的会话还有一轮任务在跑（或在等用户授权 / 作答）。
     ///
@@ -179,10 +310,13 @@ public partial class ConversationPage : UserControl
         base.OnAttachedToVisualTree(e);
         _cacheSweeper?.Start();
         HookSidebarSlot();
+        HookRightSidebarSlot();
+        HookDock();
 
         // 切回这个标签页时右侧是空的（见下面 OnDetachedFromVisualTree）：
         // 按会话 id 重新挂一次 —— 缓存命中就把原来那个窗口原样挂回来（滚动位置都还在），
         // 已过期就用注册表里可能还活着的运行时重绘，都没了才重新读库。
+        // 被插件借走的会话会走 OpenSessionAsync 里的占位分支（不会把视图抢回来）。
         if (_activeSessionId is { } id && RightPanel.Content is null)
             _ = OpenSessionAsync(id);
     }
@@ -199,6 +333,8 @@ public partial class ConversationPage : UserControl
     {
         _cacheSweeper?.Stop();
         UnhookSidebarSlot();
+        UnhookRightSidebarSlot();
+        UnhookDock();
 
         // 只交回「缓存里的会话窗口」；「新建会话」页与空提示不在缓存里，也不会过期，
         // 清掉它们只会让切回标签页时看到一片空白。
@@ -322,6 +458,22 @@ public partial class ConversationPage : UserControl
     public async Task OpenSessionAsync(string sessionId)
     {
         if (string.IsNullOrEmpty(sessionId)) return;
+
+        // 这个会话的视图正被插件借走显示着：本页只放占位。
+        // <b>不能把视图抢回来</b> —— 那会让插件的面板突然空掉，而且抢回来之后
+        // 它还以为自己占着，两个宿主各自以为自己拥有同一个窗口。
+        if (ConversationDockHost.Instance.Find(sessionId) is { } docked)
+        {
+            _activeSessionId = sessionId;
+            _cacheKey = null;
+            _viewCache.ReleaseHolder(this);
+            _showingDockPlaceholder = true;
+            RightPanel.Content = CreateDockPlaceholder(docked);
+            await ReloadAsync();
+            return;
+        }
+
+        _showingDockPlaceholder = false;
 
         if (_plainSessions.FirstOrDefault(s => s.Id == sessionId) is not null
             || await ChatRepository.GetAsync(sessionId) is not null)
@@ -645,10 +797,15 @@ public partial class ConversationPage : UserControl
         var group = new StackPanel { Spacing = 2 };
         group.Children.Add(header);
 
-        if (!_workspaceSessions.TryGetValue(ws.Id, out var sessions) || sessions.Count == 0)
+        // 分级展开：默认一级（5 条），点「展开更多」加一级。级别按工作空间记住，
+        // 重建导航（发消息、重命名、状态刷新）不会打回一级。
+        // 条数只按「级别 × 5」算：期间新增的会话把队尾挤掉，不会让当前级别多出一条。
+        var level = _workspaceSessionLevels.TryGetValue(ws.Id, out var lv) && lv > 0 ? lv : 1;
+
+        if (!_workspaceSessions.TryGetValue(ws.Id, out var sessions) || sessions.Count == 0)
             group.Children.Add(EmptyHint("暂无会话，点击「+」新建", indent: 34));
         else
-            foreach (var s in sessions)
+            foreach (var s in sessions.Take(Math.Min(sessions.Count, level * SessionsPerLevel)))
                 group.Children.Add(SessionItem(
                     new SessionRef(s.Id, s.Title, s.LastMessageAt ?? s.CreatedAt, false, ws.Id),
                     indent: 34,
@@ -656,7 +813,63 @@ public partial class ConversationPage : UserControl
                     onDelete: () => DeleteWorkspaceSessionAsync(s),
                     onRename: t => RenameWorkspaceSessionAsync(s, t)));
 
+        // 不足一级时不出按钮；已有级别就保留「收起」，哪怕删到只剩几条也能点回一级
+        if (sessions is not null && (sessions.Count > SessionsPerLevel || level > 1))
+            group.Children.Add(SessionLevelRow(ws.Id, level, sessions.Count));
+
         return group;
+    }
+
+    /// <summary>
+    /// 会话列表底部的「展开更多 / 收起」。这里的「收起」只回到一级，
+    /// 与工作空间节点上那个「收起整个工作空间」不是一回事。
+    /// </summary>
+    private Control SessionLevelRow(string workspaceId, int level, int total)
+    {
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 14,
+            // 缩进 = 会话项的 indent(34) + 行内左内边距(12)，文字才和上面的会话标题对齐
+            Margin = new Thickness(34 + 12, 4, RightGutter, 2),
+        };
+
+        if (total > level * SessionsPerLevel)
+            row.Children.Add(LevelLink("展开更多", () =>
+            {
+                _workspaceSessionLevels[workspaceId] = level + 1;
+                RebuildNav();
+            }));
+
+        // 「收起」只在超过一级时出现；一级时自然就是收起的，给了反而点不出效果
+        if (level > 1)
+            row.Children.Add(LevelLink("收起", () =>
+            {
+                _workspaceSessionLevels[workspaceId] = 1;
+                RebuildNav();
+            }));
+
+        return row;
+    }
+
+    /// <summary>分级展开用的文字链：无底色，悬停只把字调深。</summary>
+    private static TextBlock LevelLink(string text, Action onClick)
+    {
+        var idle = new SolidColorBrush(Color.Parse("#9CA3AF"));
+        var hover = new SolidColorBrush(Color.Parse("#1A1A2E"));
+
+        var link = new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            Foreground = idle,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        link.PointerEntered += (_, _) => link.Foreground = hover;
+        link.PointerExited += (_, _) => link.Foreground = idle;
+        link.PointerPressed += (_, e) => { e.Handled = true; onClick(); };
+        return link;
     }
 
     /// <summary>会话列表项（普通对话与工作空间会话共用一套样式）。</summary>
@@ -1254,14 +1467,35 @@ public partial class ConversationPage : UserControl
     private async Task RenamePlainSessionAsync(ChatSession session, string title)
     {
         session.Title = title;
-        try { await ChatRepository.UpdateAsync(session); } catch { /* 忽略 */ }
+
+        if (ConversationRuntimeRegistry.Shared.Find(session.Id) is { } runtime)
+        {
+            // 会话的运行时手里有一份档案快照：只改库的话，下一轮收尾会把旧标题整份写回去
+            // （见 ConversationRuntime.SetTitleAsync）。
+            await runtime.SetTitleAsync(title);
+        }
+        else
+        {
+            try { await ChatRepository.UpdateAsync(session); } catch { /* 忽略 */ }
+        }
+
         await ReloadAsync();
     }
 
     private async Task RenameWorkspaceSessionAsync(WorkspaceChatSession session, string title)
     {
         session.Title = title;
-        try { await WorkspaceSessionRepository.UpdateAsync(session); } catch { /* 忽略 */ }
+
+        if (ConversationRuntimeRegistry.Shared.Find(session.Id) is { } runtime)
+        {
+            // 同上：工作空间会话的档案也是快照，落库走运行时才不会在下一轮被覆盖
+            await runtime.SetTitleAsync(title);
+        }
+        else
+        {
+            try { await WorkspaceSessionRepository.UpdateAsync(session); } catch { /* 忽略 */ }
+        }
+
         await ReloadAsync();
     }
 

@@ -67,11 +67,25 @@ public interface IPluginContext
     IUiExtensionRegistry? Slots { get; }
 
     /// <summary>
+    /// 在宿主主窗口里开自己的标签页（与会话标签并排，共用同一个窗口）。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.UiTab"/> 时才不是 null。</b>
+    /// </summary>
+    IPluginTabHost? Tabs { get; }
+
+    /// <summary>
     /// 向工具注册表登记自己的工具（登记后模型能调用、用户能在工具页看见并调危险等级）。
     ///
     /// <b>只有清单里声明了 <see cref="PluginCapabilities.ToolsProvide"/> 时才不是 null。</b>
     /// </summary>
     IToolRegistryApi? Tools { get; }
+
+    /// <summary>
+    /// 把会话的对话视图借到自己的界面里显示（内置浏览器那类「网页 + 对话」并排的形态）。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.ConversationDock"/> 时才不是 null。</b>
+    /// </summary>
+    IConversationDock? Dock { get; }
 }
 
 /// <summary>

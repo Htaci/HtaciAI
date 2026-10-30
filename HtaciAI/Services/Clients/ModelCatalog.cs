@@ -52,10 +52,12 @@ public static class ModelCatalog
     {
         return details.Protocol switch
         {
-            ModelProtocol.OpenAIEx => new OpenAiExClient(
+            ModelProtocol.OpenAI => new OpenAiChatClient(
                 details.Endpoint, details.ApiKey, details.ModelName, details.ThinkingField),
+            ModelProtocol.OpenAIResponses => new OpenAiResponsesClient(
+                details.Endpoint, details.ApiKey, details.ModelName),
             // LM Studio：OpenAI 兼容，但思考/强度走 reasoning_effort 而非 thinking 开关对象，固定用 ReasoningEffort。
-            ModelProtocol.LMStudio => new OpenAiExClient(
+            ModelProtocol.LMStudio => new OpenAiChatClient(
                 details.Endpoint, details.ApiKey, details.ModelName, ThinkingFieldKind.ReasoningEffort),
             _ => throw new NotSupportedException($"暂不支持协议：{details.Protocol}"),
         };

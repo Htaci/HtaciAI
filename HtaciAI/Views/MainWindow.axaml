@@ -211,11 +211,15 @@
             </Grid>
         </Border>
 
-        <!-- 内容区域 -->
-        <ContentControl x:Name="TabContent"
-                        Margin="0,40,0,0">
-            
-        </ContentControl>
+        <!-- 内容区域。
+             用 Panel 而不是 ContentControl：所有标签页的页面都常驻在可视树里，切标签只切
+             IsVisible。ContentControl + 整体换 Content 会让每次切换都把旧页面摘下可视树 ——
+             对普通控件只是重建，但嵌了 NativeControlHost（内置浏览器的 WebView2）时，
+             意味着原生子窗口被销毁、渲染进程回收、页面状态全丢，切回来要重新加载。
+             用 Panel 叠放正是「同一位置只显示一个」想要的效果。 -->
+        <Panel x:Name="TabStage"
+               Margin="0,40,0,0"
+               ClipToBounds="True" />
         </Grid>
     </Panel>
 

@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Media;
+using HtaciAI.Controls;
 using HtaciAI.Models;
+using HtaciAI.Services;
 using HtaciAI.Services.ModelTable;
 
 namespace HtaciAI.Views.Settings;
@@ -26,8 +29,19 @@ public partial class ModelEditWindow : Window
     private static readonly IReadOnlyDictionary<string, string> LabelToWire =
         ModelCapabilities.Options.ToDictionary(o => o.Label, o => o.Wire, StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>自动检测的提示配色：黄=缺配置，绿=认全了。黄与设置页的黄叹号同色。</summary>
+    private static readonly string WarnColor = "#D97706";
+    private static readonly string OkColor = "#059669";
+
     private readonly string _providerId;
     private readonly AiModel? _existing;
+
+    /// <summary>
+    /// 点过「自动检测」之后由内置表给出的来源。非 null 表示这一行不是用户凭空填的，
+    /// 保存时据此还原 <see cref="AiModel.ConfigOrigin"/>，黄叹号 / 灰问号才不会因为顺手保存一下就被抹掉。
+    /// </summary>
+    private ModelConfigOrigin? _detectedOrigin;
+
 
     public AiModel? Result { get; private set; }
 
@@ -102,6 +116,12 @@ public partial class ModelEditWindow : Window
         if (VendorHint is null) return;
 
         var id = VendorBox?.Text?.Trim() ?? "";
+
+        // 图标是最直观的反馈：认得出来就当场显示，认不出来就留空（而不是留个通用方块）
+        VendorLogoHost?.Children.Clear();
+        if (VendorAvatar.CreateLogo(id, 16) is { } logo && VendorLogoHost is not null)
+            VendorLogoHost.Children.Add(logo);
+
         if (id.Length == 0)
         {
             VendorHint.Text = "未设置：模型头像用通用图标。";
@@ -115,6 +135,83 @@ public partial class ModelEditWindow : Window
             ? $"内置表里没有登记「{id}」，将按同名图标文件查找：" +
               (hasIcon ? "已找到图标。" : "没有找到图标，头像用通用图标。")
             : $"已识别为 {name}（{id}）" + (hasIcon ? "。" : "，但没有对应图标文件，头像用通用图标。");
+    }
+
+    /// <summary>
+    /// 按当前填写（或已存的）模型调用 id 重新查一次内置模型表，把配置整行刷新成表里的值。
+    ///
+    /// 存在的理由：模型是先「获取模型」批量加进来的，那时表里可能还没收录它，
+    /// 或者当时收录的内容已经过时。没有这个按钮，唯一的更新途径是删掉重加，
+    /// 用户填过的价格也就跟着丢了 —— 所以价格一栏这里刻意不碰。
+    ///
+    /// 三种命中结果与「获取模型」批添加完全一致，且走同一个落库函数
+    /// （<see cref="BuiltinModelConfigs.ApplyModelInfo"/>），免得两边各算一套。
+    /// </summary>
+    private void OnDetectClick(object? sender, RoutedEventArgs e)
+    {
+        var callId = CallIdBox.Text?.Trim() ?? "";
+        if (callId.Length == 0)
+        {
+            SetCallIdHint("先填模型调用 id，再点自动检测。", WarnColor);
+            return;
+        }
+
+        var match = ModelTableIndex.Resolve(callId);
+        _detectedOrigin = match.Kind switch
+        {
+            TableMatchKind.Model => ModelConfigOrigin.Builtin,
+            TableMatchKind.VendorOnly => ModelConfigOrigin.VendorOnly,
+            _ => ModelConfigOrigin.Unmatched,
+        };
+
+        // 开发商是两级共有的：只命中开发商时也该把头像摆对。
+        if (match.Vendor is { } vendor) VendorBox.Text = vendor.Id;
+
+        if (match.Model is not { } info)
+        {
+            SetCallIdHint(
+                match.Vendor is { } known
+                    ? $"只认出了开发商 {known.Name}，其余配置内置表里没有，仍需手动补充。"
+                    : "内置模型表里没有这个模型，配置保持原样。",
+                WarnColor);
+            return;
+        }
+
+        var detected = new AiModel();
+        BuiltinModelConfigs.ApplyModelInfo(detected, info, callId);
+        WriteForm(detected);
+
+        SetCallIdHint($"已识别为 {detected.DisplayName}：名称、能力、上下文、思考档位已按内置表更新。", OkColor);
+    }
+
+    /// <summary>
+    /// 把检测结果写回表单。价格不在内置表里所以一概不碰；
+    /// 表里没给数字（上下文 / 最大输出）或三态为未知时，也保留用户已经填好的值 ——
+    /// 「表里没写」不等于「确定是零」，检测不该把已有信息抹成空白。
+    /// </summary>
+    private void WriteForm(AiModel m)
+    {
+        DisplayNameBox.Text = m.DisplayName;
+        ThinkingCheck.IsChecked = m.SupportsThinking;
+        StrengthsPicker.SelectedItems = m.ThinkingStrengths;
+        CapsPicker.SelectedItems = m.Capabilities
+            .Select(c => ModelCapabilities.Labels.TryGetValue(c, out var label) ? label : c)
+            .ToList();
+
+        if (m.ContextWindow > 0) CtxBox.Text = m.ContextWindow.ToString();
+        if (m.MaxOutputTokens > 0) MaxOutBox.Text = m.MaxOutputTokens.ToString();
+        if (m.SupportsArrayContent is { } arrayContent)
+            ArrayContentCombo.SelectedIndex = IndexFromTriState(arrayContent);
+        if (m.TemperatureSupported is { } temperature)
+            TemperatureCombo.SelectedIndex = IndexFromTriState(temperature);
+    }
+
+    /// <summary>自动检测的结果就地反馈在 id 下方：认全了是绿的，缺配置是黄的。</summary>
+    private void SetCallIdHint(string text, string color)
+    {
+        CallIdHint.Text = text;
+        CallIdHint.Foreground = new SolidColorBrush(Color.Parse(color));
+        CallIdHint.IsVisible = true;
     }
 
     private void OnCancelClick(object? sender, RoutedEventArgs e)
@@ -146,10 +243,10 @@ public partial class ModelEditWindow : Window
         m.SupportsArrayContent = TriStateFromIndex(ArrayContentCombo.SelectedIndex);
         m.TemperatureSupported = TriStateFromIndex(TemperatureCombo.SelectedIndex);
 
-        // 用户亲手保存过，这一行就归他了：内置表不再对它提任何意见，
-        // 黄叹号/灰问号也随之消失。这是「提示可被消除」的关键一步 ——
+        // 点过自动检测就沿用检测结果：配置确实是照内置表刷出来的，来源也该如实记成表里的那一档。
+        // 没检测过则是用户亲手填的，保存过就归他了 —— 内置表不再提意见，黄叹号/灰问号随之消失。
         // 一个点了也不会消失的警告，用户很快就会学会无视它。
-        m.ConfigOrigin = ModelConfigOrigin.Manual;
+        m.ConfigOrigin = _detectedOrigin ?? ModelConfigOrigin.Manual;
 
         m.PriceInput = ParseDouble(InputBox.Text);
         m.PriceCacheHit = ParseDouble(CacheBox.Text);

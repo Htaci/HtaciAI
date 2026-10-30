@@ -10,7 +10,7 @@ using HtaciAI.Models;
 namespace HtaciAI.Services;
 
 /// <summary>
-/// 从服务商拉取可用模型列表（OpenAI 兼容 <c>GET /models</c>，见 <see cref="OpenAiExClient.ModelsUrl"/>）。
+/// 从服务商拉取可用模型列表（OpenAI 兼容 <c>GET /models</c>，见 <see cref="OpenAiChatClient.ModelsUrl"/>）。
 ///
 /// 只负责「把 id 拿回来」，不写库：批量添加的决策（跳过已有的、用什么默认配置）
 /// 留给调用方，这样这里保持成纯粹的只读探测，测试时也好替换。
@@ -29,16 +29,23 @@ public static class ModelDiscovery
     public sealed record FetchResult(bool Ok, List<string> ModelIds, string? Error);
 
     public static async Task<FetchResult> FetchAsync(AiProvider provider, CancellationToken ct = default)
+        => await FetchAsync(provider.Endpoint, provider.ApiKey, ct);
+
+    /// <summary>
+    /// 直接按地址 + 密钥探测。<paramref name="endpoint"/> 可以是服务商的默认地址，
+    /// 也可以是某一个具体端点 —— 多端点时连接测试要能指定测哪一个。
+    /// </summary>
+    public static async Task<FetchResult> FetchAsync(string endpoint, string? apiKey, CancellationToken ct = default)
     {
-        var url = OpenAiExClient.ModelsUrl(provider.Endpoint);
+        var url = OpenAiChatClient.ModelsUrl(endpoint);
         if (string.IsNullOrWhiteSpace(url))
             return new FetchResult(false, new(), "该服务商没有填写目标 URL 地址。");
 
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            if (!string.IsNullOrWhiteSpace(provider.ApiKey))
-                request.Headers.Add("Authorization", $"Bearer {provider.ApiKey}");
+            if (!string.IsNullOrWhiteSpace(apiKey))
+                request.Headers.Add("Authorization", $"Bearer {apiKey}");
 
             using var response = await Http.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)

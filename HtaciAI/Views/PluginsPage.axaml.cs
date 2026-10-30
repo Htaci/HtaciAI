@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -13,6 +14,7 @@ using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services;
 using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Storage;
+using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Views;
 
@@ -33,11 +35,29 @@ public partial class PluginsPage : UserControl
     private static readonly IBrush Danger = new SolidColorBrush(Color.Parse("#DC2626"));
     private static readonly IBrush Warning = new SolidColorBrush(Color.Parse("#B45309"));
     private static readonly IBrush Ok = new SolidColorBrush(Color.Parse("#16A34A"));
+    private static readonly IBrush Accent = new SolidColorBrush(Color.Parse("#4A90D9"));
+
+    /// <summary>详情页的正文分页。</summary>
+    private enum DetailTab
+    {
+        /// <summary>介绍：README / 简介，以及插件自身的状态信息。</summary>
+        Intro,
+        /// <summary>工具：这个插件登记给宿主的工具清单。</summary>
+        Tools,
+        /// <summary>
+        /// 设置：插件自己画的一页（清单声明 ui.settings 且实现了 IPluginSettingsProvider 才有）。
+        /// <b>只有插件提供时才出现这个分页</b> —— 空着的一页比没有这一页更让人困惑。
+        /// </summary>
+        Settings,
+    }
 
     /// <summary>
     /// 当前选中的插件 id。<c>null</c> = 停在主页（插件卡片总览）。
     /// </summary>
     private string? _selectedId;
+
+    /// <summary>详情页当前分页。换插件时回到「介绍」。</summary>
+    private DetailTab _detailTab = DetailTab.Intro;
 
     /// <summary>程序在改勾选框（还原状态）时置位，避免被当成用户点击。</summary>
     private bool _suppressToggle;
@@ -131,6 +151,15 @@ public partial class PluginsPage : UserControl
     private void ShowHome()
     {
         _selectedId = null;
+        _detailTab = DetailTab.Intro;
+        Refresh();
+    }
+
+    /// <summary>进某个插件的详情。<b>换插件就回到「介绍」</b>：上一个插件停在「工具」不该延续到下一个。</summary>
+    private void SelectPlugin(string id)
+    {
+        if (_selectedId != id) _detailTab = DetailTab.Intro;
+        _selectedId = id;
         Refresh();
     }
 
@@ -172,6 +201,8 @@ public partial class PluginsPage : UserControl
             DevDocLink.IsVisible = true;
             HeaderCaps.IsVisible = false;
             HeaderCaps.Children.Clear();
+            DetailTabs.IsVisible = false;
+            DetailTabs.Children.Clear();
             DetailActions.IsVisible = false;
             DetailActions.Children.Clear();
 
@@ -199,6 +230,90 @@ public partial class PluginsPage : UserControl
         HeaderCaps.IsVisible = HeaderCaps.Children.Count > 0;
 
         BuildDetailActions(selected);
+        BuildDetailTabs(selected);
+    }
+
+    /// <summary>
+    /// 详情页的分页切换：介绍 / 工具。
+    /// 工具清单以前无处可见 —— 插件在插件页只看得到 README，而它到底给模型提供了哪些工具、
+    /// 什么等级，得去工具页一层层翻。<b>放在这里</b>是因为它属于「这个插件能做什么」的一部分。
+    /// </summary>
+    private void BuildDetailTabs(PluginInfo info)
+    {
+        DetailTabs.Children.Clear();
+        DetailTabs.Children.Add(CreateDetailTab("介绍", DetailTab.Intro));
+        DetailTabs.Children.Add(CreateDetailTab("工具", DetailTab.Tools));
+
+        // 「设置」只在插件真的提供了界面时出现。清单声明了 ui.settings 却没实现接口时
+        // 也要藏着 —— 那种情况点进去只会看到一句「没有实现」，对用户毫无价值。
+        if (PluginManager.Instance.GetSettingsProvider(info.Id) is not null ||
+            (WattsSettingsDeclared(info) && info.State == PluginRunState.Loaded))
+        {
+            DetailTabs.Children.Add(CreateDetailTab("设置", DetailTab.Settings));
+        }
+        else if (_detailTab == DetailTab.Settings)
+        {
+            // 插件被停用后停在「设置」页：分页没了，内容得回到「介绍」，
+            // 否则会出现「没有选中任何分页，但正文是设置」的怪状态。
+            _detailTab = DetailTab.Intro;
+        }
+
+        DetailTabs.IsVisible = true;
+    }
+
+    /// <summary>清单里声明了 ui.settings 但插件此刻没在运行（用它决定是否显示「未运行」的说明）。</summary>
+    private static bool WattsSettingsDeclared(PluginInfo info)
+        => info.Capabilities.Contains(PluginCapabilities.UiSettings);
+
+    private Control CreateDetailTab(string text, DetailTab tab)
+    {
+        var active = _detailTab == tab;
+
+        var underline = new Border
+        {
+            Height = 2,
+            CornerRadius = new CornerRadius(1),
+            Margin = new Thickness(0, 6, 0, 0),
+            Background = active ? Accent : Brushes.Transparent,
+        };
+
+        var host = new Border
+        {
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = text,
+                        FontSize = 13,
+                        FontWeight = active ? FontWeight.SemiBold : FontWeight.Normal,
+                        Foreground = active ? TextPrimary : TextMuted,
+                    },
+                    underline,
+                },
+            },
+        };
+
+        if (!active)
+        {
+            host.PointerEntered += (_, _) =>
+            {
+                underline.Background = new SolidColorBrush(Color.Parse("#D8DEE8"));
+            };
+            host.PointerExited += (_, _) => underline.Background = Brushes.Transparent;
+        }
+
+        host.PointerPressed += (_, e) =>
+        {
+            e.Handled = true;
+            if (_detailTab == tab) return;
+            _detailTab = tab;
+            Refresh();
+        };
+
+        return host;
     }
 
     /// <summary>
@@ -393,8 +508,7 @@ public partial class PluginsPage : UserControl
         };
         item.PointerPressed += (_, e) =>
         {
-            _selectedId = info.Id;
-            Refresh();
+            SelectPlugin(info.Id);
             e.Handled = true;
         };
 
@@ -450,7 +564,12 @@ public partial class PluginsPage : UserControl
 
         if (all.FirstOrDefault(p => p.Id == _selectedId) is { } info)
         {
-            DetailPanel.Children.Add(CreateDetailCard(info));
+            DetailPanel.Children.Add(_detailTab switch
+            {
+                DetailTab.Tools => CreateToolsBlock(info),
+                DetailTab.Settings => CreateSettingsBlock(info),
+                _ => CreateDetailCard(info),
+            });
             return;
         }
 
@@ -618,8 +737,7 @@ public partial class PluginsPage : UserControl
         };
         tile.PointerPressed += (_, e) =>
         {
-            _selectedId = info.Id;
-            Refresh();
+            SelectPlugin(info.Id);
             e.Handled = true;
         };
 
@@ -726,6 +844,219 @@ public partial class PluginsPage : UserControl
         body.Children.Add(dirRow);
 
         return CreateCard(null, null, body);
+    }
+
+    /// <summary>
+    /// 详情页「设置」分页：<b>把插件自己画的控件放进来</b>。
+    ///
+    /// 宿主只负责三件事：给它一块宽度受限的区域、兜住它的异常、在插件没跑起来时说清楚原因。
+    /// 具体有什么开关由插件决定 —— 宿主不该知道「清理缓存」这种词。
+    ///
+    /// <b>每次翻到这个分页都会重新问插件要一次控件</b>：插件里的瞬时状态（「算大小中…」）
+    /// 不该跨次留存；持久状态应由插件自己写盘。旧控件随 <c>DetailPanel.Children.Clear()</c> 一起丢弃，
+    /// 插件若在控件上挂了定时器，应在 <c>DetachedFromVisualTree</c> 里自己停掉。
+    /// </summary>
+    private static Control CreateSettingsBlock(PluginInfo info)
+    {
+        var provider = PluginManager.Instance.GetSettingsProvider(info.Id);
+
+        if (provider is null)
+        {
+            var why = info.State == PluginRunState.Loaded
+                ? "这个插件声明了 ui.settings，但没有实现 IPluginSettingsProvider，因此没有设置界面。"
+                : $"插件当前没有运行（{ShortStateText(info.State)}），设置界面要等它运行起来才能显示。";
+
+            return CreateCard(null, null, new TextBlock
+            {
+                Text = why,
+                FontSize = 12.5,
+                Foreground = TextMuted,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        Control view;
+        try
+        {
+            view = provider.CreateSettingsView();
+        }
+        catch (Exception ex)
+        {
+            // 插件画界面时炸了：这里必须兜住 —— 插件页是用户「修好插件」的地方，
+            // 它自己变成一片空白的话，用户连停用按钮都点不到。
+            return CreateCard(null, null, new TextBlock
+            {
+                Text = $"设置界面显示失败：{ex.Message}",
+                FontSize = 12.5,
+                Foreground = Danger,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        // 插件给的东西未必自带背景/内边距：统一套一层，避免它和页面底色糊在一起
+        return CreateCard(null, null, new Border
+        {
+            Padding = new Thickness(0),
+            Child = view,
+        });
+    }
+
+    /// <summary>
+    /// 详情页「工具」分页：这个插件登记给宿主的工具（名字、权限等级、说明、参数）。
+    ///
+    /// 数据取自 <see cref="ToolRegistry"/>（登记的只有它）；插件被禁用时它的工具会一并注销，
+    /// 所以这里看到的就是「此刻真正可用的」，不是清单里声称过的。
+    /// </summary>
+    private static Control CreateToolsBlock(PluginInfo info)
+    {
+        var tools = ToolRegistry.Instance.GetAll()
+            .Where(t => t.Source == ToolSource.Plugin &&
+                        string.Equals(t.Target, info.Id, StringComparison.Ordinal))
+            .OrderBy(t => t.Name, StringComparer.Ordinal)
+            .ToList();
+
+        var body = new StackPanel { Spacing = 10 };
+
+        if (tools.Count == 0)
+        {
+            body.Children.Add(new TextBlock
+            {
+                Text = info.State == PluginRunState.Loaded
+                    ? "这个插件没有向宿主登记工具。"
+                    : $"插件当前没有运行（{ShortStateText(info.State)}），它登记过的工具已经一并注销。启用后回到这里可以看到。",
+                FontSize = 12.5,
+                Foreground = TextMuted,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            return CreateCard(null, null, body);
+        }
+
+        body.Children.Add(new TextBlock
+        {
+            Text = $"共 {tools.Count} 个工具。工具还要在对话的工具栏里勾选才会传给模型；调用时按会话的权限档位决定是否先问你。",
+            FontSize = 11.5,
+            Foreground = TextFaint,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        for (var i = 0; i < tools.Count; i++)
+        {
+            if (i > 0)
+                body.Children.Add(new Border { Height = 1, Background = LineBrush, Margin = new Thickness(0, 2, 0, 6) });
+            body.Children.Add(CreateToolRow(tools[i]));
+        }
+
+        return CreateCard(null, null, body);
+    }
+
+    private static Control CreateToolRow(ToolDefinition tool)
+    {
+        var head = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = tool.Name,
+                    FontSize = 13,
+                    FontWeight = FontWeight.SemiBold,
+                    Foreground = TextPrimary,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                },
+                CreateLevelBadge(tool.DangerLevel),
+            },
+        };
+
+        var body = new StackPanel { Spacing = 4 };
+        body.Children.Add(head);
+        body.Children.Add(new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(tool.Description) ? "（没有写说明）" : tool.Description,
+            FontSize = 12,
+            Foreground = TextMuted,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        if (DescribeToolArgs(tool) is { } args)
+            body.Children.Add(new TextBlock
+            {
+                Text = args,
+                FontSize = 11,
+                Foreground = TextFaint,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+        return body;
+    }
+
+    /// <summary>权限等级小标签：安全=绿 / 风险=橙 / 危险=红（与工具页同一套配色）。</summary>
+    private static Border CreateLevelBadge(ToolDangerLevel level)
+    {
+        var (color, text) = level switch
+        {
+            ToolDangerLevel.Safe => ("#16A34A", "安全"),
+            ToolDangerLevel.Risk => ("#D97706", "风险"),
+            _ => ("#DC2626", "危险"),
+        };
+
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.Parse(color)),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(6, 2),
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = text,
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(Color.Parse("#FFFFFF")),
+            },
+        };
+    }
+
+    /// <summary>
+    /// 把入参 schema 压成一行「参数：query（string，必填）、limit（integer）」。
+    /// 没有可读的参数说明时返回 null（页面上就不出现这一行）。
+    /// </summary>
+    private static string? DescribeToolArgs(ToolDefinition tool)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(tool.InputSchemaJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+
+            if (!doc.RootElement.TryGetProperty("properties", out var props) ||
+                props.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var required = new HashSet<string>(StringComparer.Ordinal);
+            if (doc.RootElement.TryGetProperty("required", out var req) && req.ValueKind == JsonValueKind.Array)
+                foreach (var item in req.EnumerateArray())
+                    if (item.ValueKind == JsonValueKind.String && item.GetString() is { } name)
+                        required.Add(name);
+
+            var parts = new List<string>();
+            foreach (var prop in props.EnumerateObject())
+            {
+                var type = prop.Value.ValueKind == JsonValueKind.Object &&
+                           prop.Value.TryGetProperty("type", out var t) &&
+                           t.ValueKind == JsonValueKind.String
+                    ? t.GetString()
+                    : null;
+
+                var text = type is null ? prop.Name : $"{prop.Name}（{type}）";
+                parts.Add(required.Contains(prop.Name) ? $"{text} 必填" : text);
+            }
+
+            return parts.Count == 0 ? "参数：无" : "参数：" + string.Join("、", parts);
+        }
+        catch
+        {
+            // schema 解析不了就不显示参数行：工具本身照样能用
+            return null;
+        }
     }
 
     /// <summary>

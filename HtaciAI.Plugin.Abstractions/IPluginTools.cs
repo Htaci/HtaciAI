@@ -39,6 +39,32 @@ public interface IToolRegistryApi
 public delegate Task<PluginToolResult> PluginToolHandler(PluginToolCall call, CancellationToken ct);
 
 /// <summary>
+/// 插件为它的一组工具声明的「工具集」。
+///
+/// <b>为什么需要</b>：会话里的工具选择器支持按工具集整组勾选（「内置浏览器（3）」一下全开），
+/// 但那只对「有归属的工具」成立。插件不声明归属时，它的工具只出现在「全部」里，
+/// 用户只能一个一个勾 —— 工具一多就没法用了。
+///
+/// <b>id 由宿主统一加前缀</b>：你只写 <see cref="Key"/>，宿主拼成
+/// <c>plugin:&lt;插件id&gt;:&lt;Key&gt;</c>。这样两个插件用同一个 key 也不会撞，
+/// 你也不必为了避让而发明奇怪的名字。
+/// </summary>
+public sealed class PluginToolset
+{
+    /// <summary>
+    /// 短标识，如 <c>"browser"</c>。只允许字母、数字与 <c>- _ .</c>。
+    /// 同一个插件里多个工具用同一个 key 就归进同一个集合。
+    /// </summary>
+    public string Key { get; init; } = "";
+
+    /// <summary>给人看的名字，如「内置浏览器」。工具选择器里显示的就是它。</summary>
+    public string Name { get; init; } = "";
+
+    /// <summary>一句话说明这组工具能做什么，显示在工具页。</summary>
+    public string Description { get; init; } = "";
+}
+
+/// <summary>
 /// 一个插件工具的定义。<b>宿主会对这些字段做校验</b>：名字不合规、schema 不是合法 JSON、
 /// 与已有工具重名，都会被拒绝并记日志（而不是悄悄登记一个调不到的工具）。
 /// </summary>
@@ -55,6 +81,14 @@ public sealed class PluginToolDefinition
 
     /// <summary>入参 JSON Schema（根必须是 <c>type=object</c>）。无参数时给 <c>{"type":"object","properties":{}}</c>。</summary>
     public string InputSchemaJson { get; init; } = "{\"type\":\"object\",\"properties\":{}}";
+
+    /// <summary>
+    /// 这个工具归属的工具集。<b>强烈建议填</b>：不填的话用户只能在「全部」里
+    /// 一个一个勾你的工具，没法整组开关。同一次插件加载里，同 key 的工具会归进同一个集合。
+    ///
+    /// 工具集随插件生命周期存在：插件被禁用时它和工具一起消失，不需要你自己清理。
+    /// </summary>
+    public PluginToolset? Toolset { get; init; }
 
     /// <summary>
     /// 危险等级。默认 <see cref="PluginToolDangerLevel.Safe"/>：
@@ -85,6 +119,16 @@ public sealed class PluginToolCall
 
     /// <summary>被调用的工具名。</summary>
     public required string Name { get; init; }
+
+    /// <summary>
+    /// 发起这次调用的会话 id。<b>可能为空</b>：那是「没有会话上下文」的调用
+    /// （目前不会发生，但结构上留着，别假设它一定有值）。
+    ///
+    /// <b>为什么必须给插件</b>：插件可能持有「属于某个会话」的资源 ——
+    /// 内置浏览器把某个窗口授权给某个会话就是这样。没有会话 id，
+    /// 插件只能相信模型给的任何 id，等于授权检查无从谈起。
+    /// </summary>
+    public string? SessionId { get; init; }
 }
 
 /// <summary>工具执行结果。</summary>

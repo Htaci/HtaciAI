@@ -23,15 +23,14 @@
         <!-- 下面这些放在 FluentTheme 之后：同一个 Styles 集合里，后写的优先级更高。 -->
 
         <!-- ===== 菜单（MenuFlyout / ContextMenu）=====
-             菜单里「行高亮距菜单边缘多远」由三个量相加而成（见 Fluent 的
+             行高亮离菜单边缘多远，只看 Flyout 模板里的两处（见 Fluent 的
              MenuFlyoutPresenter 模板）：
-               MenuFlyoutPresenter.Padding          ← MenuFlyoutPresenterThemePadding
-             + 模板内层 Border.Padding              ← FlyoutBorderThemePadding（下面置 0）
-             + ItemsPresenter.Margin               ← MenuFlyoutScrollerMargin（默认只作用上下！）
-             最后那个只加在上下、不加在左右，正是「上边距和左右不一样宽」的来源。
-             这里把三处都显式钉死成同一个值，四边必然相等。 -->
+               模板内层 Border.Padding  ← FlyoutBorderThemePadding（下面置 0）
+             + ItemsPresenter.Margin   ← MenuFlyoutScrollerMargin（资源里改成 6，见下）
+             ⚠️ 不要给 MenuFlyoutPresenter 设 Padding：那个模板一次都没 TemplateBinding 它，
+             设了也不会生效（原来的写法就是这么失效的，于是高亮行左右直接顶到菜单边缘）。
+             内缩量统一由 MenuFlyoutScrollerMargin 给，四边才一样宽。 -->
         <Style Selector="MenuFlyoutPresenter">
-            <Setter Property="Padding" Value="6"/>
             <Setter Property="CornerRadius" Value="10"/>
             <!-- 长菜单（工具那种十来项）改为菜单内部滚动，别顶出屏幕 -->
             <Setter Property="MaxHeight" Value="420"/>
@@ -42,10 +41,13 @@
             <Setter Property="CornerRadius" Value="10"/>
         </Style>
 
-        <!-- 菜单行：默认 CornerRadius 是 0，高亮会是一条通栏方块；
-             给点圆角才像参考图那样是内缩的一小块。 -->
+        <!-- 菜单行：默认 CornerRadius 是 0，高亮会是一条方块；
+             给点圆角才像参考图那样是内缩的一小块。
+             模板本身见 Resources 里的 MenuItem ControlTheme（箭头形状要改那里）。 -->
         <Style Selector="MenuItem">
-            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <!-- 字号跟手搓菜单对齐（那边行内文字也是 13），两套菜单的字才一样大 -->
+            <Setter Property="FontSize" Value="13"/>
         </Style>
 
         <Style Selector="MenuItem:separator">
@@ -67,18 +69,41 @@
         <FontFamily x:Key="IconFont">avares://HtaciAI/Assets/Fonts/FluentSystemIcons-Regular.ttf#FluentSystemIcons-Regular</FontFamily>
 
         <!-- Fluent 的 FlyoutPresenter 用它作 Padding，默认值很大（WinUI 里是 16,15,16,17），
-             弹出的菜单外框会显得很空。这里收窄到刚好贴合行内容。
-             同一个键还被模板内层 Border 的 Padding 使用，一并收紧，
-             避免出现「外框很大、内容缩在中间」的效果。
-             值与上面的 MenuFlyoutPresenter.Padding 保持一致，两套菜单看起来才是一家。 -->
+             弹出的菜单外框会显得很空。这里收窄到刚好贴合行内容 ——
+             手搓菜单里「行高亮离外框的距离」就是这个 6，MenuFlyout 那边也统一成 6。 -->
         <Thickness x:Key="FlyoutContentThemePadding">6</Thickness>
         <Thickness x:Key="FlyoutBorderThemePadding">0</Thickness>
 
-        <!-- 默认是 0,4,0,4 —— 只作用上下，会让菜单四边内边距不等。归零，让位给上面那个统一的 6。 -->
-        <Thickness x:Key="MenuFlyoutScrollerMargin">0</Thickness>
+        <!-- 菜单内容（也就是会高亮的那一行行）距菜单外边缘的距离。
+             默认 0,4,0,4 —— 只作用上下，于是高亮行左右直接贴到菜单边框上、
+             上下却有空隙，看着就是「一条通栏色块」。四边统一给 6，
+             配上面 MenuItem 的圆角，才和「···」那种手搓菜单的内缩高亮一个样子。 -->
+        <Thickness x:Key="MenuFlyoutScrollerMargin">6</Thickness>
 
-        <!-- 菜单行的内边距（默认偏挤）。行高一点、间距松一点，接近参考图的疏朗感。 -->
-        <Thickness x:Key="MenuFlyoutItemThemePaddingNarrow">12,8</Thickness>
+        <!-- 菜单行的内边距。比手搓菜单的 MenuRow（12,8）再紧一点：
+             弹出菜单是一整块浮在内容上的面板，行距按 12,8 排下来显得又高又沉。
+             10,5 加上 13 号字的行高正好落到 28，和工具栏按钮的 28 高一致。 -->
+        <Thickness x:Key="MenuFlyoutItemThemePaddingNarrow">10,5</Thickness>
+
+        <!-- ===== MenuFlyout 的配色，抄手搓菜单那一套 =====
+             「···」那种手搓菜单是普通 Flyout，底色/悬停色来自 FlyoutPresenter 的默认值
+             （#F9FAFC 底、#F2F2F2 悬停）；
+             而 MenuFlyout 走的是另一组资源键，默认底色 #F2F2F2、悬停 #DADADA ——
+             灰度高出一截，两种菜单摆在一起一眼就能看出不是一个东西。
+             这里把那几个键改成同一组值，工具 / 技能 / MCP / 模型 / 权限这些
+             由 MenuItem 拼出来的菜单就和「···」菜单长成一家人了。 -->
+        <SolidColorBrush x:Key="MenuFlyoutPresenterBackground">#F9FAFC</SolidColorBrush>
+        <SolidColorBrush x:Key="MenuFlyoutPresenterBorderBrush">#E5E9F0</SolidColorBrush>
+        <SolidColorBrush x:Key="MenuFlyoutItemForeground">#374151</SolidColorBrush>
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPointerOver">#1A1A2E</SolidColorBrush>
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPressed">#1A1A2E</SolidColorBrush>
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundDisabled">#9CA3AF</SolidColorBrush>
+        <!-- 悬停/按下用半透明黑叠加，和手搓菜单行（MenuRow 的 #14000000）是同一个值，
+             两套菜单的高亮深浅与手感才一致 -->
+        <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPointerOver">#14000000</SolidColorBrush>
+        <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPressed">#1F000000</SolidColorBrush>
+        <SolidColorBrush x:Key="MenuFlyoutItemKeyboardAcceleratorTextForeground">#9CA3AF</SolidColorBrush>
+        <SolidColorBrush x:Key="MenuFlyoutSubItemChevron">#9CA3AF</SolidColorBrush>
 
         <!-- FlyoutPresenter 还带 MaxWidth/MaxHeight（WinUI 是 456/758），而它模板里的
              ScrollViewer 水平方向是 Auto。工作空间选择器面板是按卡片宽度算的（约 500），
@@ -86,6 +111,156 @@
              这里放宽；只影响上限，窄菜单（会话「···」、权限菜单）不受影响。 -->
         <x:Double x:Key="FlyoutThemeMaxWidth">1200</x:Double>
         <x:Double x:Key="FlyoutThemeMaxHeight">1200</x:Double>
+
+        <!-- ===== MenuItem 自绘主题 =====
+             为什么要整份复制模板：
+               1. 子菜单箭头在 Fluent 模板里是 {StaticResource MenuItemChevronPathData}，
+                  StaticResource 在主题编译期就定死了，在 App 里覆盖同名资源键无效；
+                  模板内部元素的属性又是「模板值」优先级，高于 Style —— 所以之前
+                  写 Style 改 PART_ChevronPath 的宽高也没生效，箭头一直是那块 8×16 楔形。
+               2. 子菜单弹出层的位置写死在模板里（HorizontalOffset=-4，正好压住父菜单右边缘），
+                  同样只能改模板。
+             其余行为（勾选/单选标记、Icon、快捷键、子菜单、分隔线）保持 Fluent 那套。 -->
+        <ControlTheme x:Key="{x:Type MenuItem}" TargetType="MenuItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource MenuFlyoutItemForeground}"/>
+            <Setter Property="Padding" Value="{DynamicResource MenuFlyoutItemThemePaddingNarrow}"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Panel>
+                        <Border Name="PART_LayoutRoot"
+                                Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuItemToggle"/>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuItemIcon"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuItemIGT"/>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuItemChevron"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 勾选标记：整列常驻占位（Grid 是共享尺寸的），
+                                     这样勾选与否、有没有图标的行，文字左边缘都在同一条线上 -->
+                                <Path Name="PART_CheckMark"
+                                      Grid.Column="0"
+                                      IsVisible="False"
+                                      Width="12"
+                                      Height="12"
+                                      Margin="0,0,8,0"
+                                      VerticalAlignment="Center"
+                                      Stretch="Uniform"
+                                      Data="M0.6,6.4 L4.4,10.2 L11.2,1.6"
+                                      Stroke="{DynamicResource MenuFlyoutItemForeground}"
+                                      StrokeThickness="1.4"
+                                      StrokeLineCap="Round"
+                                      StrokeJoin="Round"/>
+
+                                <ContentPresenter Name="PART_IconPresenter"
+                                                  Grid.Column="1"
+                                                  IsVisible="False"
+                                                  Width="16"
+                                                  Height="16"
+                                                  Margin="0,0,10,0"
+                                                  VerticalAlignment="Center"
+                                                  Content="{TemplateBinding Icon}"/>
+
+                                <ContentPresenter Name="PART_HeaderPresenter"
+                                                  Grid.Column="2"
+                                                  Content="{TemplateBinding Header}"
+                                                  ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                                  VerticalAlignment="Center"
+                                                  HorizontalAlignment="Stretch"/>
+
+                                <TextBlock Name="PART_InputGestureText"
+                                           Grid.Column="3"
+                                           Margin="16,0,0,0"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource MenuFlyoutItemKeyboardAcceleratorTextForeground}"
+                                           Text="{TemplateBinding InputGesture}"/>
+
+                                <!-- 子菜单箭头：圆头细线，5×10。
+                                     模板原来那块楔形在 13 号字旁边又大又钝；
+                                     这里的粗细按「比正文笔画再细一点」定，读起来只是个提示。 -->
+                                <Path Name="PART_ChevronPath"
+                                      Grid.Column="4"
+                                      Width="5"
+                                      Height="10"
+                                      Margin="8,0,1,0"
+                                      VerticalAlignment="Center"
+                                      Stretch="Uniform"
+                                      Data="M0.5,0.5 L4.5,5 L0.5,9.5"
+                                      Stroke="{DynamicResource MenuFlyoutSubItemChevron}"
+                                      StrokeThickness="1.2"
+                                      StrokeLineCap="Round"
+                                      StrokeJoin="Round"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- 子菜单位置：偏移量是相对「本行」右边缘算的，而父菜单外框还要
+                             再往外 7px（MenuFlyoutScrollerMargin 6 + 边框 1）。
+                             取 9 就是「父菜单外框 + 2px 缝」—— 两块面板贴得很近但不粘连。 -->
+                        <Popup Name="PART_Popup"
+                               WindowManagerAddShadowHint="False"
+                               Placement="RightEdgeAlignedTop"
+                               HorizontalOffset="9"
+                               IsLightDismissEnabled="False"
+                               IsOpen="{TemplateBinding IsSubMenuOpen, Mode=TwoWay}">
+                            <!-- Padding 必须留 0：父菜单（Fluent 的 MenuFlyoutPresenter 模板）
+                                 用的是 FlyoutBorderThemePadding = 0，内缩全靠下面 ItemsPresenter 的
+                                 Margin。这里再给一份 Padding 就会叠成两倍，
+                                 表现为子菜单里的高亮行离面板边缘特别远 —— 就是那个「巨大的间隙」。 -->
+                            <Border Background="{DynamicResource MenuFlyoutPresenterBackground}"
+                                    BorderBrush="{DynamicResource MenuFlyoutPresenterBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    MaxWidth="{DynamicResource FlyoutThemeMaxWidth}"
+                                    HorizontalAlignment="Stretch">
+                                <ScrollViewer>
+                                    <ItemsPresenter Name="PART_ItemsPresenter"
+                                                    ItemsPanel="{TemplateBinding ItemsPanel}"
+                                                    Margin="{DynamicResource MenuFlyoutScrollerMargin}"
+                                                    Grid.IsSharedSizeScope="True"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Panel>
+                </ControlTemplate>
+            </Setter>
+
+            <Style Selector="^:selected /template/ Border#PART_LayoutRoot">
+                <Setter Property="Background" Value="{DynamicResource MenuFlyoutItemBackgroundPointerOver}"/>
+            </Style>
+            <Style Selector="^:selected /template/ ContentPresenter#PART_HeaderPresenter">
+                <Setter Property="Foreground" Value="{DynamicResource MenuFlyoutItemForegroundPointerOver}"/>
+            </Style>
+            <Style Selector="^:pressed /template/ Border#PART_LayoutRoot">
+                <Setter Property="Background" Value="{DynamicResource MenuFlyoutItemBackgroundPressed}"/>
+            </Style>
+            <Style Selector="^:disabled /template/ ContentPresenter#PART_HeaderPresenter">
+                <Setter Property="Foreground" Value="{DynamicResource MenuFlyoutItemForegroundDisabled}"/>
+            </Style>
+            <Style Selector="^:icon /template/ ContentPresenter#PART_IconPresenter">
+                <Setter Property="IsVisible" Value="True"/>
+            </Style>
+            <Style Selector="^:checked /template/ Path#PART_CheckMark">
+                <Setter Property="IsVisible" Value="True"/>
+            </Style>
+            <!-- 没有子项的菜单行不该画箭头（模型列表、工具列表那些叶子项） -->
+            <Style Selector="^:empty /template/ Path#PART_ChevronPath">
+                <Setter Property="IsVisible" Value="False"/>
+            </Style>
+            <Style Selector="^:separator">
+                <Setter Property="Template">
+                    <ControlTemplate>
+                        <Separator/>
+                    </ControlTemplate>
+                </Setter>
+            </Style>
+        </ControlTheme>
 
         <!-- ControlTheme 按【精确类型】匹配，不会再往上找基类的主题。
              所以任何继承自已有控件的自定义控件都必须自己声明一份主题，

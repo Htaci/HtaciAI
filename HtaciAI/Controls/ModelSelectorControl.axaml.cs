@@ -52,6 +52,7 @@ public partial class ModelSelectorControl : UserControl
     public ModelSelectorControl()
     {
         InitializeComponent();
+        MenuTheme.Apply(ModelAndThinkBtn.Flyout as MenuFlyout);
         // 不预设任何模型：等 Models 注入后由下面那个分支决定选中项，一个都没有就保持 null
 
         // 菜单每次打开都通知宿主重新拉一次模型列表（服务商改名/新增模型能立刻反映）。

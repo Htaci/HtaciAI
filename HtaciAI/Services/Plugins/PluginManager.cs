@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -61,6 +61,19 @@ public sealed partial class PluginManager
     /// <summary>加载成功且正在运行的插件 id。</summary>
     public IEnumerable<string> GetLoadedIds()
         => _entries.Where(e => e.RunState == PluginRunState.Loaded).Select(e => e.Id);
+
+    /// <summary>
+    /// 取插件的设置页工厂（插件实现 <see cref="IPluginSettingsProvider"/> 才有）。
+    ///
+    /// <b>没跑起来的插件返回 null</b>：设置界面也是插件代码，实例都卸了就没法调；
+    /// 调用方据此显示「插件未运行」，而不是留一片空白让人以为界面坏了。
+    /// </summary>
+    public IPluginSettingsProvider? GetSettingsProvider(string id)
+    {
+        var entry = FindEntry(id);
+        if (entry is null || entry.RunState != PluginRunState.Loaded) return null;
+        return entry.Instance as IPluginSettingsProvider;
+    }
 
     // ============================================================
     // 启动 / 退出
@@ -535,21 +548,41 @@ public sealed partial class PluginManager
     {
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _ = Task.Run(async () =>
+        // 【必须在 UI 线程上「开始」执行】插件契约（IPlugin）承诺 InitializeAsync 与
+        // ShutdownAsync 在 UI 线程上调用，插件因此敢在初始化里直接建控件、调 AddLauncherCard。
+        // 之前这里用 Task.Run，等于把承诺改成了「线程池上调用」——
+        // 表现为 AddLauncherCard 触发视图重建时抛
+        // 「The calling thread cannot access this object because a different thread owns it」，
+        // 而且插件页会显示「加载失败」，成因和现象完全对不上。
+        //
+        // 【但插件自己的 Task 仍然不能被我们的状态机持有】否则程序集永远回收不掉。
+        // 所以：Post 到 UI 线程只负责「起跑」，跑完的结果用 ContinueWith 摘到一个局部里，
+        // 交回来的只有宿主 tcs —— 那条 await 链上不存在插件类型。
+        Dispatcher.UIThread.Post(() =>
         {
+            // 起跑本身抛异常（同步抛出）也要接住，否则会被 Dispatcher 当成未处理异常
+            Task running;
             try
             {
-                await call();
-                tcs.TrySetResult();
+                running = call();
             }
             catch (OperationCanceledException)
             {
                 tcs.TrySetCanceled();
+                return;
             }
             catch (Exception ex)
             {
                 tcs.TrySetException(ex);
+                return;
             }
+
+            _ = running.ContinueWith(t =>
+            {
+                if (t.IsCanceled) tcs.TrySetCanceled();
+                else if (t.IsFaulted) tcs.TrySetException(t.Exception!.InnerExceptions);
+                else tcs.TrySetResult();
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         });
 
         // WaitAsync 是宿主侧的实现：超时到了立刻放手，不等插件真正结束
@@ -1243,6 +1276,27 @@ public sealed partial class PluginManager
             windows = host;
         }
 
+        // 标签页宿主：禁用插件时 Dispose 会关掉它开的所有标签页。
+        // 与窗口一样排在「卸订阅」里，保证发生在 ALC 卸载之前 ——
+        // 标签还在、画它的代码已卸载，就是崩溃而不是「需重启」。
+        IPluginTabHost? tabs = null;
+        if (HasCapability(manifest, PluginCapabilities.UiTab))
+        {
+            var host = new PluginTabHost(manifest.Id);
+            entry.Subscriptions.Add(host);
+            tabs = host;
+        }
+
+        // 会话视图借出：禁用插件时 Dispose 把借走的会话全部收回。
+        // 也必须发生在 ALC 卸载之前 —— 视图里还挂着插件的按钮回调。
+        IConversationDock? dock = null;
+        if (HasCapability(manifest, PluginCapabilities.ConversationDock))
+        {
+            var facade = new PluginConversationDockFacade(manifest.Id);
+            entry.Subscriptions.Add(facade);
+            dock = facade;
+        }
+
         var hasTools = HasCapability(manifest, PluginCapabilities.ToolsProvide);
 
         IUiExtensionRegistry? slots = null;
@@ -1267,7 +1321,9 @@ public sealed partial class PluginManager
                 : null,
             Windows: windows,
             Slots: slots,
-            Tools: hasTools ? CreateToolFacade(entry) : null);
+            Tabs: tabs,
+            Tools: hasTools ? CreateToolFacade(entry) : null,
+            Dock: dock);
     }
 
     /// <summary>

@@ -14,7 +14,7 @@ using HtaciAI.Services.Tools;
 namespace HtaciAI.Services;
 
 /// <summary>
-/// OpenAI API 协议兼容的扩展客户端。
+/// OpenAI /chat/completions 协议客户端（含各家「OpenAI 兼容但有出入」的扩展）。
 /// 以 OpenAI /chat/completions 协议为主，额外支持：
 ///  - 思考开关字段（默认 "thinking": {"type":"enabled"/"disabled"}）与推理强度字段（默认 "reasoning_effort"），
 ///    仅在明确设置时才写入请求体，未设置时走模型默认行为；
@@ -22,7 +22,7 @@ namespace HtaciAI.Services;
 ///  - 多轮工具调用所需的完整消息重建（assistant.tool_calls / tool.tool_call_id）。
 /// 字段名做成可替换常量，便于对具体厂商端点微调。
 /// </summary>
-public sealed class OpenAiExClient : IChatClient
+public sealed class OpenAiChatClient : IChatClient
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
 
@@ -34,7 +34,7 @@ public sealed class OpenAiExClient : IChatClient
 
     public string ModelName => _model;
 
-    public OpenAiExClient(
+    public OpenAiChatClient(
         string endpoint,
         string apiKey,
         string model,
@@ -54,7 +54,7 @@ public sealed class OpenAiExClient : IChatClient
     /// 首行格式固定（<c>HTTP 401 Unauthorized</c>）是有用的：错误卡的标题取的就是异常消息的首行
     /// （见 <c>ChatError.Summarize</c>），状态码摆在标题上，一眼能看出是鉴权、模型名不存在还是额度用尽。
     /// </summary>
-    private static async Task<string> DescribeHttpFailureAsync(HttpResponseMessage response, CancellationToken ct)
+    internal static async Task<string> DescribeHttpFailureAsync(HttpResponseMessage response, CancellationToken ct)
     {
         var head = $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}".TrimEnd();
 
@@ -87,9 +87,14 @@ public sealed class OpenAiExClient : IChatClient
         var url = endpoint?.Trim().TrimEnd('/') ?? string.Empty;
         if (url.Length == 0) return url;
 
-        // 已含完整接口路径：剥掉，回到版本根，避免重复追加
-        if (url.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
-            url = url[..^"/chat/completions".Length].TrimEnd('/');
+        // 已含完整接口路径：剥掉，回到版本根，避免重复追加。
+        // /responses 也要认：用户常把整条接口 URL 粘进来，不剥的话会拼成 .../v1/responses/v1/responses。
+        foreach (var suffix in new[] { "/chat/completions", "/responses" })
+        {
+            if (!url.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
+            url = url[..^suffix.Length].TrimEnd('/');
+            break;
+        }
 
         return url.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? url : url + "/v1";
     }
@@ -110,6 +115,26 @@ public sealed class OpenAiExClient : IChatClient
     {
         var baseUrl = NormalizeBaseUrl(endpoint);
         return baseUrl.Length == 0 ? baseUrl : baseUrl + "/models";
+    }
+
+    /// <summary>
+    /// 把工具定义的入参 JSON Schema 解析为请求体对象；空/损坏时回退为开放 object。
+    /// Chat Completions 与 Responses 两个客户端的参数形态不同，schema 本体是同一份。
+    /// </summary>
+    internal static object ParseToolParameters(string schemaJson)
+    {
+        if (!string.IsNullOrWhiteSpace(schemaJson))
+        {
+            try
+            {
+                return JsonDocument.Parse(schemaJson).RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                // 忽略损坏的 schema，走回退
+            }
+        }
+        return new { type = "object", properties = new Dictionary<string, object>() };
     }
 
     public async Task<ChatStreamResult> StreamAsync(
@@ -306,29 +331,12 @@ public sealed class OpenAiExClient : IChatClient
                 {
                     ["name"] = t.Name,
                     ["description"] = t.Description,
-                    ["parameters"] = ParseParameters(t.InputSchemaJson),
+                    ["parameters"] = ParseToolParameters(t.InputSchemaJson),
                 },
             }).ToList();
         }
 
         return body;
-
-        // 把工具定义的入参 JSON Schema 解析为请求体对象；空/损坏时回退为开放 object。
-        static object ParseParameters(string schemaJson)
-        {
-            if (!string.IsNullOrWhiteSpace(schemaJson))
-            {
-                try
-                {
-                    return JsonDocument.Parse(schemaJson).RootElement.Clone();
-                }
-                catch (JsonException)
-                {
-                    // 忽略损坏的 schema，走回退
-                }
-            }
-            return new { type = "object", properties = new Dictionary<string, object>() };
-        }
 
         // 思考开关按服务商声明的字段写法下发；None/ReasoningEffort 不写开关对象。
         void WriteThinkingToggle(Dictionary<string, object?> body, bool enabled)
@@ -394,7 +402,7 @@ public sealed class OpenAiExClient : IChatClient
         }
     }
 
-    private static string MimeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    internal static string MimeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
         ".png" => "image/png",
         ".gif" => "image/gif",

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -32,6 +32,9 @@ public sealed class PluginSessionFacade : ISessionFacade, IDisposable
 {
     /// <summary>单次最多返回多少条历史。防止插件一口要全部长会话。</summary>
     private const int MaxSnapshotMessages = 500;
+
+    /// <summary>一次最多列多少个会话。插件做下拉列表够用了，也不至于让超长列表拖慢界面。</summary>
+    private const int MaxListedSessions = 200;
 
     private readonly string _pluginId;
 
@@ -91,6 +94,16 @@ public sealed class PluginSessionFacade : ISessionFacade, IDisposable
             return Task.FromResult<IReadOnlyList<SessionMessageSnapshot>>(Array.Empty<SessionMessageSnapshot>());
 
         return OnUiThreadAsync(() => GetRecentCoreAsync(sessionId, Math.Min(take, MaxSnapshotMessages), ct));
+    }
+
+    public Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(
+        int take = 50, CancellationToken ct = default)
+    {
+        if (_disposed || take <= 0)
+            return Task.FromResult<IReadOnlyList<SessionSummary>>(Array.Empty<SessionSummary>());
+
+        // 只读库，不建运行时：列个会话列表不该把每个会话的运行时都拉起来
+        return ListSessionsCoreAsync(Math.Min(take, MaxListedSessions), ct);
     }
 
     /// <summary>
@@ -251,6 +264,31 @@ public sealed class PluginSessionFacade : ISessionFacade, IDisposable
         }
     }
 
+    private async Task<IReadOnlyList<SessionSummary>> ListSessionsCoreAsync(
+        int take, CancellationToken ct)
+    {
+        try
+        {
+            var sessions = await ChatRepository.GetAllAsync();
+            ct.ThrowIfCancellationRequested();
+
+            return sessions
+                .OrderByDescending(s => s.UpdatedAt)
+                .Take(take)
+                .Select(s => new SessionSummary(s.Id, s.Title ?? "", s.UpdatedAt))
+                .ToList();
+        }
+        catch (OperationCanceledException)
+        {
+            return Array.Empty<SessionSummary>();
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Error(_pluginId, "列出会话失败", ex);
+            return Array.Empty<SessionSummary>();
+        }
+    }
+
     // ============================================================
     // 辅助
     // ============================================================
@@ -259,19 +297,8 @@ public sealed class PluginSessionFacade : ISessionFacade, IDisposable
     /// 按会话 id 建档案：先当普通对话找，找不到再当工作空间会话找。
     /// 两种会话共用同一套 id，但存在两张表里，只能这样判。
     /// </summary>
-    private static async Task<IConversationProfile?> ResolveProfileAsync(string sessionId)
-    {
-        if (await ChatRepository.GetAsync(sessionId) is not null)
-            return new StandaloneProfile(sessionId);
-
-        if (await WorkspaceSessionRepository.GetAsync(sessionId) is not { } session)
-            return null;
-
-        if (await WorkspaceRepository.GetAsync(session.WorkspaceId) is not { } workspace)
-            return null;
-
-        return new WorkspaceProfile(workspace, session);
-    }
+    private static Task<IConversationProfile?> ResolveProfileAsync(string sessionId)
+        => SessionProfileResolver.ResolveAsync(sessionId);
 
     /// <summary>
     /// 用会话存档的模型；它被删了 / 会话还没选过模型时回退到宿主的默认模型。

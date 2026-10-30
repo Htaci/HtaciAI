@@ -1,0 +1,108 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:HtaciAI.Controls"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="520"
+        x:Class="HtaciAI.Views.Settings.ConnectivityTestWindow"
+        Icon="/Assets/logo.ico"
+        Title="连接测试"
+        Width="520" MinWidth="520" MaxWidth="520"
+        Height="520" MinHeight="520"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <Window.Styles>
+        <Style Selector="Window">
+            <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+            <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+            <Setter Property="WindowDecorations" Value="BorderOnly"/>
+            <Setter Property="CanResize" Value="True"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <SolidColorBrush Color="Transparent" Opacity="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
+        <TextBlock Grid.Row="0"
+                   Text="连接测试"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"
+                   Margin="24,18,24,4"/>
+
+        <TextBlock x:Name="SubtitleText"
+                   Grid.Row="1"
+                   FontSize="12"
+                   Foreground="#9CA3AF"
+                   TextWrapping="Wrap"
+                   Margin="24,0,24,12"/>
+
+        <StackPanel Grid.Row="2" Spacing="10" Margin="24,0,24,12">
+            <StackPanel Spacing="6">
+                <TextBlock Text="模型"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Foreground="#374151"/>
+                <ComboBox x:Name="ModelCombo" Height="34" CornerRadius="6"/>
+            </StackPanel>
+
+            <StackPanel Spacing="6">
+                <TextBlock Text="端点"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Foreground="#374151"/>
+                <ComboBox x:Name="EndpointCombo" Height="34" CornerRadius="6"/>
+            </StackPanel>
+
+            <TextBlock Text="先列一次模型列表（不消耗 token），再用选中的模型发一条最小对话请求。两条都通过才算整行配置可用。"
+                       FontSize="11"
+                       Foreground="#9CA3AF"
+                       TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <controls:SmoothScrollViewer Grid.Row="3"
+                                     Margin="24,0,24,8"
+                                     HorizontalScrollBarVisibility="Disabled"
+                                     VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="ResultPanel" Spacing="8"/>
+        </controls:SmoothScrollViewer>
+
+        <Grid Grid.Row="4"
+              ColumnDefinitions="*,Auto,Auto"
+              Margin="24,8,24,18">
+            <TextBlock x:Name="StatusText"
+                       FontSize="12"
+                       Foreground="#6B7280"
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap"
+                       Margin="0,0,12,0"/>
+            <Button x:Name="RunButton"
+                    Grid.Column="1"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#546E7A"
+                    Foreground="White"
+                    Margin="0,0,10,0"
+                    Cursor="Hand"
+                    Click="OnRunClick">
+                <TextBlock Text="开始测试" FontSize="13"/>
+            </Button>
+            <Button Grid.Column="2"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#E5E7EB"
+                    Foreground="#374151"
+                    Cursor="Hand"
+                    Click="OnCloseClick">
+                <TextBlock Text="关闭" FontSize="13"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Window>

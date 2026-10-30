@@ -145,7 +145,7 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
             ToolSource.Script => _scripts.ExecuteAsync(tool, call, ct),
             ToolSource.Builtin => _builtin.ExecuteAsync(tool, call, Context, ct),
             ToolSource.Mcp => _mcp.ExecuteAsync(tool, call, ct),
-            ToolSource.Plugin => PluginToolRegistry.InvokeAsync(tool, call, ct),
+            ToolSource.Plugin => PluginToolRegistry.InvokeAsync(tool, call, Context.SessionId, ct),
             _ => Task.FromResult(ToolExecution.Fail($"暂不支持的工具来源：{tool.Source}")),
         };
 
@@ -161,14 +161,17 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
             TaskScheduler.Default);
 
     /// <summary>
-    /// 这次调用最多等多久（秒）。0 = 不限时。两个例外：
+    /// 这次调用最多等多久（秒）。0 = 不限时。三个例外：
     /// ask_user_question 等的是人，人要多慢有多慢，超时等于把一张还在作答的卡片变成失败；
+    /// ask_user_continue 同理 —— 而且它自己按 timeout_seconds 管时间，超时后返回的是
+    /// 「还在等，要不要再等一次」而不是「被强制终止」，这一层再套一个硬超时就把那份体面毁了；
     /// 入参只在工具<b>自己声明了 timeout</b> 时才认 —— MCP 的入参是原样发给远端服务的，
     /// 塞一个它没声明过的参数会被严格校验的服务拒掉。
     /// </summary>
     private static int ResolveTimeoutSeconds(ToolDefinition tool, ChatToolCall call)
     {
         if (tool.Name == BuiltinTools.AskUserName) return 0;
+        if (tool.Name == BuiltinTools.AskContinueName) return 0;
 
         if (DeclaresTimeoutArg(tool) && BuiltinToolContext.GetIntArg(call, "timeout") is { } seconds)
             return Math.Clamp(seconds, 1, 24 * 3600);
