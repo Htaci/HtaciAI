@@ -66,17 +66,28 @@ public sealed class SessionViewCache
 
     public IReadOnlyList<string> Keys => _entries.Keys.ToList();
 
-    // ---- 键规则：普通会话与会话分属不同的 id 空间，加上前缀避免撞车 ----
+    // ---- 键规则：普通会话 / 工作空间会话 / 子 Agent 会话分属不同的 id 空间，加上前缀避免撞车 ----
 
     public static string KeyForSession(string sessionId) => "s:" + sessionId;
 
     public static string KeyForWorkspaceSession(string workspaceId, string sessionId)
         => $"w:{workspaceId}:{sessionId}";
 
-    /// <summary>从缓存键里取回会话 id（键的两段格式见上面）。会话 id 本身不含冒号。</summary>
+    /// <summary>
+    /// 子 Agent 会话的键。<b>不拼父会话 id</b>：子会话 id 自带 <c>sub-</c> 前缀、全局唯一，
+    /// 而同一个子会话可能被两个父会话先后续用，把它绑在某个父会话上会让缓存白白多出一份。
+    /// </summary>
+    public static string KeyForSubagent(string sessionId) => "a:" + sessionId;
+
+    /// <summary>插件会话的键。同样只带会话 id：插件会话 id 自带 <c>plugin-</c> 前缀、全局唯一。</summary>
+    public static string KeyForPluginSession(string sessionId) => "p:" + sessionId;
+
+    /// <summary>从缓存键里取回会话 id（键的三种格式见上面）。会话 id 本身不含冒号。</summary>
     public static string SessionIdOf(string key)
     {
         if (key.StartsWith("s:", StringComparison.Ordinal)) return key[2..];
+        if (key.StartsWith("a:", StringComparison.Ordinal)) return key[2..];
+        if (key.StartsWith("p:", StringComparison.Ordinal)) return key[2..];
 
         var index = key.IndexOf(':', 2);
         return index < 0 ? key : key[(index + 1)..];
@@ -165,6 +176,7 @@ public sealed class SessionViewCache
     public void EvictBySessionId(string sessionId)
     {
         Evict(KeyForSession(sessionId));
+        Evict(KeyForSubagent(sessionId));
         EvictWhere(key => key.StartsWith("w:", StringComparison.Ordinal) &&
                           key.EndsWith(":" + sessionId, StringComparison.Ordinal));
     }

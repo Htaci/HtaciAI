@@ -6,12 +6,15 @@ using Avalonia.Data.Core.Plugins;
 using System.Linq;
 using Avalonia.Markup.Xaml;
 using System;
+using System.Threading.Tasks;
 using Avalonia.Threading;
 using HtaciAI.Data;
 using HtaciAI.Services.Mcp;
+using HtaciAI.Services.Network;
 using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Skills;
 using HtaciAI.Services.Storage;
+using HtaciAI.Services.Subagents;
 using HtaciAI.Services.Tools;
 using HtaciAI.Views;
 
@@ -37,19 +40,30 @@ public partial class App : Application
         // 数据根目录必须先确定：DatabaseService 与各注册表都从这里取路径。
         AppPaths.Initialize();
 
+        // 代理开关要在第一个出站请求之前生效（更新检查、插件初始化都可能很早就发请求）。
+        // 放这儿是因为 settings.json 就在数据根下，AppPaths.Initialize 之前读不到它。
+        HttpClientProvider.UseSystemProxy = AppSettingsStore.Current.UseSystemProxy;
+
         // 迁移要赶在 DatabaseService.Initialize 之前——那时没有 SQLite 连接，才能安全搬 -wal / -shm。
         // 也赶在 SkillRegistry.EnsureSeeded 之前，迁移过来的 SKILL.md 才不会被内置技能顶掉。
         DataMigrator.RunStartupMigration();
 
         DatabaseService.Initialize();
 
-        // 工具注册表：先从库加载用户创建的工具，再补充内置示例脚本工具（均幂等）
+        // API 流水（「统计」页）的保留策略：过期记录在启动时清一次。
+        // 放后台跑，不挡启动；days ≤ 0（永久保留）时 PurgeAsync 自己什么都不做。
+        _ = Task.Run(() => ApiRequestRepository.PurgeAsync(
+            AppSettingsStore.Current.ApiRequestLogRetentionDays));
+
+        // 工具注册表：从库加载用户创建的工具（内置工具在加载末尾顺带补齐，均幂等）
         ToolRegistry.Instance.LoadFromDbAsync().GetAwaiter().GetResult();
-        ToolRegistry.Instance.SeedExamples();
 
         // 技能注册表：先写入内置示例技能到磁盘，再从数据根 skills 目录加载
         SkillRegistry.Instance.EnsureSeeded();
         SkillRegistry.Instance.LoadFromDisk();
+
+        // 子 Agent 预设：放在工具注册表之后（预设里存的是工具 id，要先有工具才能解析）
+        SubagentPresets.EnsureSeededAsync().GetAwaiter().GetResult();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

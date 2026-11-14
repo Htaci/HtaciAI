@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using HtaciAI.Services.Network;
 
 namespace HtaciAI.Services.Updates;
 
@@ -53,8 +54,8 @@ public static class UpdateChecker
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
-    /// <summary>照 BuiltinToolExecutor 的先例：类级静态单例 + 显式超时。</summary>
-    private static readonly HttpClient Http = new() { Timeout = Timeout };
+    /// <summary>共享客户端，超时固定 15 秒；代理设置由 <see cref="HttpClientProvider"/> 统一把关。</summary>
+    private static HttpClient Http => HttpClientProvider.Get(Timeout);
 
     public static async Task<UpdateCheckResult> CheckAsync(string? manifestUrl, CancellationToken ct = default)
     {

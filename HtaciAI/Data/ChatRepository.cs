@@ -223,7 +223,7 @@ public static class ChatRepository
         cmd.CommandText = """
             SELECT id, session_id, turn_id, sequence_number, role, content, thinking,
                    tool_call_id, tool_name, status, usage_json, model_name, metadata,
-                   is_deleted, deleted_at, created_at, updated_at, duration_ms
+                   is_deleted, deleted_at, created_at, updated_at, duration_ms, continued_from
             FROM chat_message
             WHERE session_id = $session_id AND is_deleted = 0
             ORDER BY sequence_number ASC;
@@ -233,6 +233,70 @@ public static class ChatRepository
         while (await r.ReadAsync())
             list.Add(MapMessage(r));
         return list;
+    }
+
+    /// <summary>
+    /// 只取「带 usage 的消息」，按会话分组、<b>每组从新到旧</b>。
+    ///
+    /// <b>为什么不复用 <see cref="GetBySessionAsync"/></b>：那个方法读全量历史（含每条正文），
+    /// 而用量汇总只需要 usage_json。插件一次问十个会话的用量时要读十份长会话，
+    /// 就为了加几个数字 —— 这里只捞必要的列。
+    ///
+    /// 调用方按 <see cref="ContextUsage"/> 的口径扫每组的头部（最新优先），
+    /// 取到的就是「当前上下文占用」，与界面上的用量环是同一个数。
+    /// </summary>
+    public static async Task<Dictionary<string, List<ChatMessage>>> GetUsageMessagesAsync(
+        IReadOnlyList<string> sessionIds)
+    {
+        var result = new Dictionary<string, List<ChatMessage>>(StringComparer.Ordinal);
+        if (sessionIds.Count == 0) return result;
+
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+
+        // 参数逐个绑：SQLite 的 IN 列表没有可展开的参数语法
+        var names = new List<string>(sessionIds.Count);
+        for (var i = 0; i < sessionIds.Count; i++)
+        {
+            var name = "$s" + i;
+            names.Add(name);
+            cmd.Parameters.AddWithValue(name, sessionIds[i]);
+        }
+
+        cmd.CommandText = $"""
+            SELECT session_id, role, content, metadata, usage_json, sequence_number, created_at
+            FROM chat_message
+            WHERE session_id IN ({string.Join(", ", names)})
+              AND is_deleted = 0
+              AND usage_json IS NOT NULL
+              AND usage_json <> ''
+            ORDER BY session_id ASC, sequence_number DESC;
+            """;
+
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+        {
+            var sessionId = r.GetString(0);
+            if (!result.TryGetValue(sessionId, out var list))
+            {
+                list = new List<ChatMessage>();
+                result[sessionId] = list;
+            }
+
+            list.Add(new ChatMessage
+            {
+                SessionId = sessionId,
+                Role = r.GetString(1),
+                Content = r.IsDBNull(2) ? null : r.GetString(2),
+                Metadata = r.IsDBNull(3) ? null : r.GetString(3),
+                UsageJson = r.IsDBNull(4) ? null : r.GetString(4),
+                SequenceNumber = r.GetInt32(5),
+                CreatedAt = r.GetInt64(6),
+            });
+        }
+
+        return result;
     }
 
     public static async Task<int> GetNextSequenceAsync(string sessionId)
@@ -335,10 +399,10 @@ public static class ChatRepository
         cmd.CommandText = """
             INSERT INTO chat_message (id, session_id, turn_id, sequence_number, role, content,
                 thinking, tool_call_id, tool_name, status, usage_json, model_name, metadata,
-                is_deleted, deleted_at, created_at, updated_at, duration_ms)
+                is_deleted, deleted_at, created_at, updated_at, duration_ms, continued_from)
             VALUES ($id, $session_id, $turn_id, $sequence_number, $role, $content,
                 $thinking, $tool_call_id, $tool_name, $status, $usage_json, $model_name, $metadata,
-                $is_deleted, $deleted_at, $created_at, $updated_at, $duration_ms);
+                $is_deleted, $deleted_at, $created_at, $updated_at, $duration_ms, $continued_from);
             """;
         cmd.Parameters.AddWithValue("$id", m.Id);
         cmd.Parameters.AddWithValue("$session_id", m.SessionId);
@@ -358,6 +422,7 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$created_at", m.CreatedAt);
         cmd.Parameters.AddWithValue("$updated_at", m.UpdatedAt);
         cmd.Parameters.AddWithValue("$duration_ms", (object?)m.DurationMs ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$continued_from", (object?)m.ContinuedFrom ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -463,5 +528,6 @@ public static class ChatRepository
         CreatedAt = r.GetInt64(15),
         UpdatedAt = r.GetInt64(16),
         DurationMs = r.IsDBNull(17) ? null : r.GetInt64(17),
+        ContinuedFrom = r.IsDBNull(18) ? null : r.GetString(18),
     };
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -78,20 +78,87 @@ public sealed class TurnTextSelector
         _prevStart = _prevEnd = -1;
     }
 
-    /// <summary>按视觉顺序拼接选中的文本。</summary>
+    /// <summary>
+    /// 按视觉顺序拼接选中的文本。
+    ///
+    /// <b>块与块之间必须补分隔符</b>：每个段落、每个列表项、表格的每个单元格都是一个独立的
+    /// 文本块，直接拼起来会让「三段话 + 三个列表项」粘成一整行 —— 复制出去完全没法用。
+    /// 规则只有两条：
+    /// <list type="bullet">
+    ///   <item>同一行里的相邻单元格（列表的项目符号与正文、表格的一行多格）→ 补一个空格；</item>
+    ///   <item>其余情况（换段、换列表项、进出引用块）→ 补一个换行。</item>
+    /// </list>
+    /// 判定看的是<b>布局</b>而不是 Markdown 源码：渲染态里已经没有 <c>*</c> <c>-</c> 这些标记了，
+    /// 唯一可靠的信息就是这些块在可视树里怎么摆的。
+    /// </summary>
     public string GetSelectedText()
     {
         if (_blocks == null) return "";
         var sb = new StringBuilder();
+        CustomSelectableTextBlock? previous = null;
+
         foreach (var b in _blocks)
         {
             var s = Math.Min(b.SelectionStart, b.SelectionEnd);
             var e = Math.Max(b.SelectionStart, b.SelectionEnd);
             var text = b.SelectionText;
             if (s >= e || e > text.Length) continue;
+
+            if (previous is not null) sb.Append(Separator(previous, b, sb));
             sb.Append(text, s, e - s);
+            previous = b;
         }
         return sb.ToString();
+    }
+
+    /// <summary>两块之间该补什么分隔符。前一串文本已经以换行结尾时不再重复补。</summary>
+    private static string Separator(CustomSelectableTextBlock previous, CustomSelectableTextBlock current, StringBuilder written)
+    {
+        if (written.Length > 0 && written[^1] == '\n') return "";
+        return IsInlineSibling(previous, current) ? " " : Environment.NewLine;
+    }
+
+    /// <summary>
+    /// 两块是否「同一行里的相邻格子」：找它们最近的共同祖先，看是不是同一行的不同 Grid 单元格
+    /// （Markdown 的列表项就是 <c>Grid("Auto,*")</c>：项目符号一格、正文一格），
+    /// 或者共同祖先本身是横向排列的面板（行内元素的老式布局）。
+    /// </summary>
+    private static bool IsInlineSibling(CustomSelectableTextBlock a, CustomSelectableTextBlock b)
+    {
+        var ancestors = new Dictionary<Visual, Visual>();
+        var child = (Visual)a;
+        var parent = child.GetVisualParent();
+
+        while (parent is not null)
+        {
+            ancestors[parent] = child;
+            child = parent;
+            parent = parent.GetVisualParent();
+        }
+
+        var currentChild = (Visual)b;
+        var currentParent = currentChild.GetVisualParent();
+
+        while (currentParent is not null)
+        {
+            if (ancestors.TryGetValue(currentParent, out var branchA))
+            {
+                return currentParent switch
+                {
+                    Grid when branchA is Control ca && currentChild is Control cb
+                        => Grid.GetRow(ca) == Grid.GetRow(cb) && Grid.GetColumn(ca) != Grid.GetColumn(cb),
+
+                    StackPanel { Orientation: Orientation.Horizontal } => true,
+                    WrapPanel => true,
+                    _ => false,
+                };
+            }
+
+            currentChild = currentParent;
+            currentParent = currentParent.GetVisualParent();
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -112,6 +179,9 @@ public sealed class TurnTextSelector
             var transfer = new DataTransfer();
             transfer.Add(DataTransferItem.CreateText(text));
             await clipboard.SetDataAsync(transfer);
+
+            // 复制成功才给反馈：失败时弹「已复制」等于骗人
+            CopyToast.Show(_host);
         }
         catch (Exception)
         {

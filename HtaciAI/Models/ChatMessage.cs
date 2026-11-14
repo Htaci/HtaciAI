@@ -26,6 +26,14 @@ public class ChatMessage
     /// </summary>
     public long? DurationMs { get; set; }
 
+    /// <summary>
+    /// 这一轮是「继续」接出来的：值是它承接的那一轮的 turn_id（只写在这一轮的第一条消息上）。
+    ///
+    /// <b>为什么记的是「承接谁」而不是一个布尔</b>：一轮可以被继续好几次，
+    /// 每次都要能往上找到上一段。删除、重绘都靠这条链（见 <c>ConversationRuntime.ResolveTurnChain</c>）。
+    /// </summary>
+    public string? ContinuedFrom { get; set; }
+
     public bool IsDeleted { get; set; }
     public long? DeletedAt { get; set; }
     public long CreatedAt { get; set; }

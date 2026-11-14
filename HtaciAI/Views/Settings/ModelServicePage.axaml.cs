@@ -58,13 +58,6 @@ public partial class ModelServicePage : UserControl
     /// <summary>默认标记的胶囊底色。</summary>
     private static readonly IBrush BadgeBrush = new SolidColorBrush(Color.Parse("#F0F1F3"));
 
-    /// <summary>头像底色候选，按服务商名稳定取一个（同一个名字每次都是同一个颜色）。</summary>
-    private static readonly Color[] AvatarPalette =
-    {
-        Color.Parse("#546E7A"), Color.Parse("#2EAF7D"), Color.Parse("#7B5EA7"),
-        Color.Parse("#D97706"), Color.Parse("#4A90D9"), Color.Parse("#DC2626"),
-    };
-
     /// <summary>只在首次挂载时构建；之后切换设置页的导航项不应把用户从详情页弹回列表。</summary>
     private bool _built;
 
@@ -75,10 +68,9 @@ public partial class ModelServicePage : UserControl
     {
         InitializeComponent();
 
-        // 点空白处让输入框失焦。与对话页输入框同一套做法：在隧道阶段先看一眼按下的位置，
-        // 不在输入框里就把焦点清掉。没有这一步，地址 / 密钥框只能靠「再点另一个输入框」
+        // 点空白处让输入框失焦。没有这一步，地址 / 密钥框只能靠「再点另一个输入框」
         // 才能退出编辑态，而退出编辑态就是触发保存的时机，用户会以为改的东西没存。
-        AddHandler(InputElement.PointerPressedEvent, OnPagePointerPressed, RoutingStrategies.Tunnel);
+        TextBoxFocusCleanup.Attach(this);
 
         Loaded += async (_, _) =>
         {
@@ -86,36 +78,6 @@ public partial class ModelServicePage : UserControl
             _built = true;
             await ShowProviderListAsync();
         };
-    }
-
-    /// <summary>
-    /// 按下时若落点不在任何 <see cref="TextBox"/> 内，清掉输入框的焦点。
-    ///
-    /// 只在当前焦点确实在 TextBox 上时才动：焦点在按钮、下拉菜单之类的地方时，
-    /// 抢着清掉会让键盘操作的可视焦点莫名消失。
-    /// </summary>
-    private void OnPagePointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (IsInsideTextBox(e.Source as Visual)) return;
-        if (TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is not TextBox) return;
-
-        // 延后一拍：焦点是隧道阶段由 FocusManager 分配的，当场清会被随后那次赋值盖掉
-        Dispatcher.UIThread.Post(
-            () =>
-            {
-                if (TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is TextBox)
-                    TopLevel.GetTopLevel(this)?.FocusManager?.Focus(null);
-            },
-            DispatcherPriority.Background);
-    }
-
-    /// <summary>从落点向上找到本页为止，路径上有没有 TextBox。</summary>
-    private bool IsInsideTextBox(Visual? source)
-    {
-        for (var v = source; v is not null && !ReferenceEquals(v, this); v = v.GetVisualParent())
-            if (v is TextBox) return true;
-
-        return false;
     }
 
     // ============================================================
@@ -315,7 +277,7 @@ public partial class ModelServicePage : UserControl
             });
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
-        var avatar = CreateAvatar(provider.Name);
+        var avatar = ProviderAvatar.Create(provider.Name, provider.Icon, 40);
         if (!enabled) avatar.Opacity = 0.5;
         grid.Children.Add(avatar);
 
@@ -450,35 +412,6 @@ public partial class ModelServicePage : UserControl
             if (v is Button or CheckBox) return true;
 
         return false;
-    }
-
-    /// <summary>服务商头像：没有 logo 资源，用名称首字 + 一个稳定的底色代替。</summary>
-    private static Control CreateAvatar(string providerName)
-    {
-        var initial = string.IsNullOrWhiteSpace(providerName)
-            ? "?"
-            : providerName.Trim()[..1].ToUpperInvariant();
-
-        // 用名字的哈希选色：同名永远同色，重启也不变
-        var index = (providerName ?? "").Aggregate(0, (acc, c) => acc + c) % AvatarPalette.Length;
-
-        return new Border
-        {
-            Width = 40,
-            Height = 40,
-            CornerRadius = new CornerRadius(10),
-            Background = new SolidColorBrush(AvatarPalette[index]),
-            VerticalAlignment = VerticalAlignment.Center,
-            Child = new TextBlock
-            {
-                Text = initial,
-                FontSize = 18,
-                FontWeight = FontWeight.SemiBold,
-                Foreground = Brushes.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            },
-        };
     }
 
     /// <summary>
@@ -644,6 +577,7 @@ public partial class ModelServicePage : UserControl
             Padding = new Thickness(12, 0),
             CornerRadius = new CornerRadius(8),
             FontSize = 12,
+            Classes = { "center-text" },
             PlaceholderText = "sk-...（留空 = 不发送鉴权头）",
             Background = InputBrush,
             BorderBrush = InputBorderBrush,
@@ -868,6 +802,7 @@ public partial class ModelServicePage : UserControl
             Padding = new Thickness(12, 0),
             CornerRadius = new CornerRadius(8),
             FontSize = 12,
+            Classes = { "center-text" },
             Text = endpoint.Endpoint,
             PlaceholderText = "https://api.example.com（填到域名或完整接口地址都可以）",
             Background = InputBrush,
@@ -958,7 +893,11 @@ public partial class ModelServicePage : UserControl
     {
         var menu = new MenuFlyout();
         MenuTheme.Apply(menu);
-        foreach (var protocol in new[] { ModelProtocol.OpenAI, ModelProtocol.OpenAIResponses, ModelProtocol.LMStudio })
+        foreach (var protocol in new[]
+                 {
+                     ModelProtocol.OpenAI, ModelProtocol.OpenAIResponses, ModelProtocol.LMStudio,
+                     ModelProtocol.Anthropic,
+                 })
         {
             var item = new MenuItem { Header = ProtocolLabel(protocol) };
             var chosen = protocol;
@@ -1015,6 +954,7 @@ public partial class ModelServicePage : UserControl
     {
         ModelProtocol.OpenAIResponses => "OpenAI Responses",
         ModelProtocol.LMStudio => "LM Studio",
+        ModelProtocol.Anthropic => "Anthropic",
         _ => "OpenAI",
     };
 
@@ -1444,16 +1384,46 @@ public partial class ModelServicePage : UserControl
     // ============================================================
 
     /// <summary>
-    /// 新建服务商：立刻建一条只有默认名字的空记录，进详情页，并把设置窗直接打开让人改名字。
-    /// 不做「填名字再确认」的弹窗 —— 密钥、端点都在详情页里能改，多一步确认只是多一次点击；
-    /// 但名字只能在设置窗里改，不顺手打开它，新建完就会看到一个叫「新服务商」的家伙。
+    /// 添加服务商：先开预设清单（头像、地址、协议都配好了，填个密钥就能用）。
+    /// 清单右上角的「自定义服务商…」才会走老路 —— 建一条空记录、进详情页、顺手打开设置窗让人改名。
+    /// 自定义那条不做确认弹窗：密钥与端点都在详情页里能改，多一步确认只是多一次点击。
     /// </summary>
     private async Task AddProviderAsync()
     {
-        var provider = new AiProvider { Name = "新服务商" };
-        await ProviderRepository.CreateAsync(provider);
-        await ShowProviderDetailAsync(provider);
-        await OpenProviderSettingsAsync(provider);
+        var dialog = new PresetProviderWindow();
+        await ShowDialogAsync(dialog);
+
+        if (dialog.CustomRequested)
+        {
+            // 名字不能重复（设置窗保存时会校验），所以默认名也要避开已存在的 ——
+            // 否则新建完第一件事就是被自己刚加的校验拦住。
+            var provider = new AiProvider { Name = await NextDefaultProviderNameAsync() };
+            await ProviderRepository.CreateAsync(provider);
+            await ShowProviderDetailAsync(provider);
+            await OpenProviderSettingsAsync(provider);
+            return;
+        }
+
+        // 加了一条就回列表：用户第一眼要看的是「它进来了」，细节留在详情页里点进去再看
+        if (dialog.Added) await ShowProviderListAsync();
+    }
+
+    /// <summary>「新服务商」用掉了就往后排：新服务商 2、3…（设置窗里保存时会拦重名）。</summary>
+    private static async Task<string> NextDefaultProviderNameAsync()
+    {
+        const string baseName = "新服务商";
+
+        var taken = (await ProviderRepository.GetAllAsync())
+            .Select(p => p.Name.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (!taken.Contains(baseName)) return baseName;
+
+        for (var i = 2; ; i++)
+        {
+            var candidate = $"{baseName} {i}";
+            if (!taken.Contains(candidate)) return candidate;
+        }
     }
 
     private async Task SetProviderEnabledAsync(AiProvider provider, bool enabled)

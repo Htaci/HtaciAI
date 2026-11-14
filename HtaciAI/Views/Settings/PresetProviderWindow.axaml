@@ -1,0 +1,135 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:HtaciAI.Controls"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="880" d:DesignHeight="620"
+        x:Class="HtaciAI.Views.Settings.PresetProviderWindow"
+        Icon="/Assets/logo.ico"
+        Title="添加服务商"
+        Width="880" MinWidth="880" MaxWidth="880"
+        Height="620" MinHeight="620"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <Window.Styles>
+        <Style Selector="Window">
+            <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+            <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+            <Setter Property="WindowDecorations" Value="BorderOnly"/>
+            <Setter Property="CanResize" Value="True"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <SolidColorBrush Color="Transparent" Opacity="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Styles>
+
+    <!--
+        左侧是预设服务商清单，右侧是选中后的配置（端点、密钥、获取模型）。
+        把这个窗口做成一步：选一家 → 填密钥 → 获取模型 → 添加。
+        原先「添加服务商」直接建一条空记录再让用户手填地址，实际上绝大多数人用的就是那几家官方服务商，
+        地址和协议没必要每次都手打；需要完全自定义的，用右上角那个入口走老路。
+    -->
+    <Grid RowDefinitions="Auto,Auto,*,Auto">
+        <TextBlock Grid.Row="0"
+                   Text="添加服务商"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"
+                   Margin="24,18,24,4"/>
+
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="24,0,24,12">
+            <TextBlock Text="选择一个服务商预设添加，填写密钥，获取模型，即可选择模型开始对话。没有你想要的服务商预设？可以点击右侧自定义服务商进行编辑。"
+                       FontSize="12"
+                       Foreground="#9CA3AF"
+                       TextWrapping="Wrap"
+                       Margin="0,0,16,0"
+                       VerticalAlignment="Center"/>
+            <Button Grid.Column="1"
+                    Height="30"
+                    Padding="12,0"
+                    CornerRadius="7"
+                    Background="Transparent"
+                    BorderBrush="#D1D5DB"
+                    BorderThickness="1"
+                    Cursor="Hand"
+                    Click="OnCustomClick">
+                <TextBlock Text="自定义服务商…" FontSize="12" Foreground="#546E7A"/>
+            </Button>
+        </Grid>
+
+        <Grid Grid.Row="2" ColumnDefinitions="300,*" Margin="24,0,24,0">
+            <Border Background="White"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    CornerRadius="10">
+                <Grid RowDefinitions="Auto,*">
+                    <TextBlock Grid.Row="0"
+                               Text="预设服务商"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="#6B7280"
+                               Margin="14,12,14,8"/>
+                    <!-- thin-scrollbar：4px 细滑块。原生滚动条会压在这块圆角白卡片边缘上，
+                         悬停时还会整条变宽，看着像贴错了地方（见 App.axaml 里的说明）。 -->
+                    <controls:SmoothScrollViewer Grid.Row="1"
+                                                 Classes="thin-scrollbar"
+                                                 Margin="8,0,6,6"
+                                                 HorizontalScrollBarVisibility="Disabled"
+                                                 VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="PresetList" Spacing="2"/>
+                    </controls:SmoothScrollViewer>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="1"
+                    Background="White"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Margin="16,0,0,0">
+                <controls:SmoothScrollViewer Classes="thin-scrollbar"
+                                             Margin="0,4,4,4"
+                                             HorizontalScrollBarVisibility="Disabled"
+                                             VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="DetailPanel" Margin="18"/>
+                </controls:SmoothScrollViewer>
+            </Border>
+        </Grid>
+
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" Margin="24,12,24,18">
+            <TextBlock x:Name="StatusText"
+                       FontSize="12"
+                       Foreground="#6B7280"
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap"
+                       Margin="0,0,12,0"/>
+            <Button Grid.Column="1"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#E5E7EB"
+                    Foreground="#374151"
+                    Margin="0,0,10,0"
+                    Cursor="Hand"
+                    Click="OnCancelClick">
+                <TextBlock Text="取消" FontSize="13"/>
+            </Button>
+            <Button x:Name="AddButton"
+                    Grid.Column="2"
+                    Height="34"
+                    Padding="20,0"
+                    CornerRadius="8"
+                    Background="#546E7A"
+                    Foreground="White"
+                    IsEnabled="False"
+                    Cursor="Hand"
+                    Click="OnAddClick">
+                <TextBlock Text="添加" FontSize="13"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Window>

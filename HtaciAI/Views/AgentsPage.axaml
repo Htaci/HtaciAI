@@ -15,7 +15,7 @@
                   Margin="12,16">
                 <Grid Grid.Row="0"
                       ColumnDefinitions="*,Auto">
-                    <TextBlock Text="Agent"
+                    <TextBlock Text="子 Agent"
                                FontSize="15"
                                FontWeight="SemiBold"
                                Foreground="#1A1A2E"
@@ -58,12 +58,12 @@
                   Margin="0,0,0,16">
                 <StackPanel>
                     <TextBlock x:Name="DetailTitle"
-                               Text="Agent 配置"
+                               Text="子 Agent 配置"
                                FontSize="20"
                                FontWeight="Bold"
                                Foreground="#1A1A2E"/>
                     <TextBlock x:Name="DetailDesc"
-                               Text="配置一个可复用的智能体：提示词 + 默认工具 / 技能 / MCP"
+                               Text="主 Agent 用 task 工具按名字派发，子 Agent 只回一份报告"
                                FontSize="12"
                                Foreground="#9CA3AF"
                                Margin="0,4,0,0"/>
@@ -182,7 +182,7 @@
                     </StackPanel>
                     <!-- 系统提示词 -->
                     <StackPanel Spacing="6">
-                        <TextBlock Text="系统提示词（描述 AI 该怎么干活，不可被工作区 / 会话复写）"
+                        <TextBlock Text="系统提示词（这个子 Agent 的角色与输出要求，派发时注入它的会话）"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#374151"/>
@@ -198,7 +198,7 @@
                     </StackPanel>
                     <!-- 默认启用的工具 -->
                     <StackPanel Spacing="6">
-                        <TextBlock Text="默认启用的工具"
+                        <TextBlock Text="可用工具（留空 = 继承父会话全部；实际范围还要与父会话取交集，task 永远剔除）"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#374151"/>
@@ -217,7 +217,7 @@
                     </StackPanel>
                     <!-- 默认启用的技能 -->
                     <StackPanel Spacing="6">
-                        <TextBlock Text="默认启用的技能"
+                        <TextBlock Text="可用技能（留空 = 继承父会话允许的全部；技能全文不会被复制进子会话）"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#374151"/>
@@ -236,7 +236,7 @@
                     </StackPanel>
                     <!-- MCP -->
                     <StackPanel Spacing="6">
-                        <TextBlock Text="MCP 服务器 id（每行一个，预留）"
+                        <TextBlock Text="MCP 服务器 id（每行一个，留空 = 继承父会话；只会收窄不会放开）"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#374151"/>

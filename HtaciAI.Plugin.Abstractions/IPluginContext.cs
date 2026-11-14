@@ -14,6 +14,20 @@ public interface IPluginContext
     /// <summary>插件所在目录的绝对路径。资源、图标都从这里取。</summary>
     string PluginDirectory { get; }
 
+    /// <summary>
+    /// 插件自己的数据目录：插件目录下的 <c>data</c> 子目录（<b>不存在时会创建</b>）。
+    ///
+    /// <b>插件产生的所有数据都应该放这里</b>（SQLite 库、缓存、图片、导出的文件…）：
+    /// 数据与插件放在一起，用户要清理、备份，或者把插件整个拷到另一台机器时，
+    /// 处理一个目录就够了，不必再去别处找「这个插件把东西存哪了」。
+    /// 哪怕只是一个几行的 JSON，也请放这个目录 —— 这是宿主的推荐规范。
+    ///
+    /// <b>与 <see cref="Storage"/> 的分工</b>：那个是宿主管的旧位置
+    /// （<c>&lt;数据根&gt;/plugin-data/&lt;插件id&gt;/</c>），插件升级时不会丢；
+    /// 新写的插件用它自己没有记录价值，请优先用本方法。
+    /// </summary>
+    string GetDataDirectory();
+
     /// <summary>解析后的 <c>plugin.json</c>。</summary>
     PluginManifest Manifest { get; }
 
@@ -37,6 +51,15 @@ public interface IPluginContext
     /// 一路伪装成「插件就是不工作」，那种问题最难查。
     /// </summary>
     ISessionFacade? Sessions { get; }
+
+    /// <summary>
+    /// 决定自己派出去的任务跑完时，那条系统提醒<b>弹不弹、留多久</b>。
+    /// 默认是「弹出后过一会儿自动收起」；要常驻、或者干脆不弹，就在这里声明一次。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.NoticeControl"/> 时才不是 null。</b>
+    /// 不声明的话拿不到这个属性，但默认行为照样生效（自动收起）—— 它不是「开着提醒」的开关。
+    /// </summary>
+    IPluginNotifications? Notifications { get; }
 
     /// <summary>
     /// 往本轮 system 提示词里追加内容。
@@ -86,6 +109,13 @@ public interface IPluginContext
     /// <b>只有清单里声明了 <see cref="PluginCapabilities.ConversationDock"/> 时才不是 null。</b>
     /// </summary>
     IConversationDock? Dock { get; }
+
+    /// <summary>
+    /// 查看工作空间、在工作空间里新建会话（把任务派发到用户真实的开发目录）。
+    ///
+    /// <b>只有清单里声明了 <see cref="PluginCapabilities.WorkspaceDelegate"/> 时才不是 null。</b>
+    /// </summary>
+    IWorkspaceFacade? Workspaces { get; }
 }
 
 /// <summary>

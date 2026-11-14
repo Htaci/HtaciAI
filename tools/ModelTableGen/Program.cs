@@ -109,7 +109,14 @@ internal static class Program
         var iconsLight = ScanIcons(Path.Combine(iconsDir, "light"));
         var iconsDark = ScanIcons(Path.Combine(iconsDir, "dark"));
 
-        var source = Emit(vendors, models, iconsLight, iconsDark);
+        // 服务商图标是另一套（providers/）。两处会存在同名文件（deepseek 等），
+        // 混进同一张名单就没法判断「某个路径下到底有没有那张图」，所以各扫各的。
+        var providerIconsDir = ArgValue(args, "--provider-icons")
+                               ?? Path.Combine(root, "HtaciAI", "Assets", "icon", "providers");
+        var providerIconsLight = ScanIcons(Path.Combine(providerIconsDir, "light"));
+        var providerIconsDark = ScanIcons(Path.Combine(providerIconsDir, "dark"));
+
+        var source = Emit(vendors, models, iconsLight, iconsDark, providerIconsLight, providerIconsDark);
 
         // 内容没变就不重写文件，避免每次生成都刷新时间戳、让 git diff 无端变脏。
         if (File.Exists(outPath) && File.ReadAllText(outPath) == source)
@@ -379,7 +386,9 @@ internal static class Program
         List<VendorRow> vendors,
         List<ModelRow> models,
         List<string> iconsLight,
-        List<string> iconsDark)
+        List<string> iconsDark,
+        List<string> providerIconsLight,
+        List<string> providerIconsDark)
     {
         var sb = new StringBuilder();
 
@@ -449,6 +458,12 @@ internal static class Program
         sb.AppendLine();
         sb.AppendLine("    /// <summary>Assets/icon/models/dark 下实际存在的图标名。通常是 light 的子集，缺的走浅色兜底。</summary>");
         sb.AppendLine($"    public static readonly string[] IconNamesDark = {StrArray(iconsDark)};");
+        sb.AppendLine();
+        sb.AppendLine("    /// <summary>Assets/icon/providers/light 下实际存在的服务商图标名（生成时扫描目录得到）。</summary>");
+        sb.AppendLine($"    public static readonly string[] ProviderIconNamesLight = {StrArray(providerIconsLight)};");
+        sb.AppendLine();
+        sb.AppendLine("    /// <summary>Assets/icon/providers/dark 下实际存在的服务商图标名。缺的走浅色兜底。</summary>");
+        sb.AppendLine($"    public static readonly string[] ProviderIconNamesDark = {StrArray(providerIconsDark)};");
         sb.AppendLine("}");
 
         return sb.ToString();

@@ -109,6 +109,23 @@ public partial class MainWindow : Window
         SessionNotifier.IsAppActive = () => IsActive;
         SessionNotifier.OpenSession = sessionId => _ = JumpToSessionAsync(sessionId);
         SessionNotifier.Raised += NotificationToast.Show;
+
+        // 用户回到窗口、而屏幕上正是那条提醒指的会话：提醒已经没意义了（他看的就是它，
+        // 点上去也不会有任何反应），直接收掉。只在激活时判定，不追着每一次状态变化跑。
+        Activated += (_, _) => DismissNoticesForActiveSession();
+    }
+
+    /// <summary>
+    /// 收掉「用户正看着的那个会话」的提醒。
+    /// <b>只认当前选中的标签页</b>：别的标签页里开着的会话他这会儿看不见，
+    /// 那条提醒还有存在的必要。
+    /// </summary>
+    private void DismissNoticesForActiveSession()
+    {
+        if (_selectedIndex < 0 || _selectedIndex >= _tabs.Count) return;
+
+        if (_tabs[_selectedIndex].Content is ConversationPage { ActiveSessionId: { } sessionId })
+            NotificationToast.DismissFor(sessionId);
     }
 
     /// <summary>跳到某个会话：切到（没有就先用已有的）智能对话标签页，把窗口叫到前台，再打开会话。</summary>
@@ -292,6 +309,8 @@ public partial class MainWindow : Window
         newTabPage.SkillsSelected += OnSkillsSelected;
         newTabPage.PluginsSelected += OnPluginsSelected;
         newTabPage.McpSelected += OnMcpSelected;
+        newTabPage.StatsSelected += OnStatsSelected;
+        newTabPage.SubagentsSelected += OnSubagentsSelected;
         AddTab("新标签页", newTabPage);
     }
 
@@ -358,6 +377,33 @@ public partial class MainWindow : Window
             if (index < 0) return;
 
             ReplaceTabContent(index, new McpPage(), "MCP服务");
+        }
+    }
+
+    /// <summary>新建页的「统计」卡片：换成 API 请求流水页。</summary>
+    private void OnStatsSelected(object? sender, System.EventArgs e)
+    {
+        if (sender is NewTabPage newTabPage)
+        {
+            newTabPage.StatsSelected -= OnStatsSelected;
+
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
+            if (index < 0) return;
+
+            ReplaceTabContent(index, new ApiStatsPage(), "统计");
+        }
+    }
+
+    private void OnSubagentsSelected(object? sender, System.EventArgs e)
+    {
+        if (sender is NewTabPage newTabPage)
+        {
+            newTabPage.SubagentsSelected -= OnSubagentsSelected;
+
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
+            if (index < 0) return;
+
+            ReplaceTabContent(index, new AgentsPage(), "子 Agent");
         }
     }
 

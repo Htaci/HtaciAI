@@ -85,6 +85,8 @@ public static class ConnectionProbe
                 Thinking = ThinkingMode.Default,
                 Tools = null,
                 SupportsVision = false,
+                // 统计流水记成「连接测试」：它是一次真实请求（花 token），但不属于任何会话
+                ApiCall = new ApiCallContext { Kind = ApiRequestKinds.Probe },
             };
 
             var result = await client.StreamAsync(

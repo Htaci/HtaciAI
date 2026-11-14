@@ -8,13 +8,18 @@ namespace HtaciAI.Models;
 /// 服务商使用的 API 协议类型。
 /// OpenAI：OpenAI /chat/completions 兼容协议；
 /// OpenAIResponses：OpenAI /responses 协议（instructions + input items + 强类型流式事件）；
-/// LMStudio：LM Studio（本地推理，OpenAI 兼容但思考/强度字段不同）。
+/// LMStudio：LM Studio（本地推理，OpenAI 兼容但思考/强度字段不同）；
+/// Anthropic：Anthropic /v1/messages 协议（block 数组 + tool_use / tool_result）。
+///
+/// <b>只许在末尾追加。</b>这个名字以字符串形式存在 ai_provider_endpoint.protocol 里
+/// （见 <c>ProviderRepository.MapProtocol</c>），顺序变了会让老库里的端点静默换成另一种协议。
 /// </summary>
 public enum ModelProtocol
 {
     OpenAI,
     OpenAIResponses,
     LMStudio,
+    Anthropic,
 }
 
 /// <summary>服务商（ai_provider 表）。一个服务商包含若干模型。</summary>
@@ -23,6 +28,12 @@ public class AiProvider
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = "";
     public string? Description { get; set; }
+
+    /// <summary>
+    /// 头像图标名（<c>Assets/icon/providers/light</c> 下的文件名，不带扩展名）。
+    /// 从预设服务商添加时自动带上；手工新建的服务商为空，界面退回「首字 + 底色」头像。
+    /// </summary>
+    public string? Icon { get; set; }
 
     /// <summary>
     /// 实际请求走哪个协议的镜像，恒等于<b>默认端点</b>的协议。

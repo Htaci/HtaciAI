@@ -209,6 +209,49 @@ public static class ToolRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
+    // ---- 工具超时（tool_timeouts） ----
+
+    /// <summary>读全部超时覆盖：工具 id → 秒数（0 = 一直等）。没有行的工具不在结果里。</summary>
+    public static async Task<Dictionary<string, int>> GetTimeoutsAsync()
+    {
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        await using var conn = await DatabaseService.OpenWithForeignKeysAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT tool_id, seconds FROM tool_timeouts;";
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+            map[r.GetString(0)] = r.GetInt32(1);
+        return map;
+    }
+
+    /// <summary>
+    /// 写一个工具的超时。<paramref name="seconds"/> 为 null 时删掉这一行（回到默认）。
+    /// 覆盖行不认工具来源：内置 / 脚本 / MCP / 插件都往这张表里写。
+    /// </summary>
+    public static async Task SetTimeoutAsync(string toolId, int? seconds)
+    {
+        await using var conn = await DatabaseService.OpenWithForeignKeysAsync();
+        using var cmd = conn.CreateCommand();
+
+        if (seconds is null)
+        {
+            cmd.CommandText = "DELETE FROM tool_timeouts WHERE tool_id = $tool_id;";
+        }
+        else
+        {
+            cmd.CommandText = """
+                INSERT INTO tool_timeouts (tool_id, seconds, updated_at)
+                VALUES ($tool_id, $seconds, $updated_at)
+                ON CONFLICT(tool_id) DO UPDATE SET seconds = $seconds, updated_at = $updated_at;
+                """;
+            cmd.Parameters.AddWithValue("$seconds", Math.Max(0, seconds.Value));
+            cmd.Parameters.AddWithValue("$updated_at", Now());
+        }
+
+        cmd.Parameters.AddWithValue("$tool_id", toolId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     private static ToolSource ParseSource(string s)
         => Enum.TryParse<ToolSource>(s, out var v) ? v : ToolSource.Script;
 

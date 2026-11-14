@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using HtaciAI.Services.ScriptRuntimes;
 
 namespace HtaciAI.Services.Tools;
 
@@ -19,6 +20,12 @@ public static class BuiltinTools
     /// </summary>
     public const string AskContinueName = "ask_user_continue";
 
+    /// <summary>
+    /// task 的工具名（派发子 Agent）。<b>按名字判定</b>：子会话配置要在这一处把它剔掉，
+    /// 否则子 Agent 也能派发子 Agent，深度就不再是 1。
+    /// </summary>
+    public const string TaskToolName = "task";
+
     private const string IdBash = "builtin-bash";
     private const string IdRead = "builtin-read";
     private const string IdEdit = "builtin-edit";
@@ -33,6 +40,7 @@ public static class BuiltinTools
     private const string IdViewImage = "builtin-view-image";
     private const string IdCreateTool = "builtin-create-tool";
     private const string IdCreateSkill = "builtin-create-skill";
+    private const string IdTask = "builtin-task";
 
     /// <summary>自举工具名。<see cref="ToolDefinition.IsSelfExtension"/> 按它判定，界面与网关也认这两个常量。</summary>
     public const string CreateToolName = "create_tool";
@@ -44,7 +52,7 @@ public static class BuiltinTools
         {
             Id = IdBash,
             Name = "bash",
-            Description = "执行 shell 命令（支持 bash / PowerShell / cmd），可设置工作目录与超时。危险：可影响系统。",
+            Description = ShellEnvironment.BashToolDescription(),
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Danger,
             InputSchemaJson =
@@ -180,6 +188,8 @@ public static class BuiltinTools
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
             SkipApproval = true,
+            // 等的是人：不设上限（分派器另有同名兜底，这里写出来是为了工具页显示「一直等待」）
+            TimeoutSeconds = 0,
             InputSchemaJson = """
                 {"type":"object","properties":{"questions":{"type":"array","description":"要询问的问题列表（1-4 个）","items":{"type":"object","properties":{"question":{"type":"string","description":"问题本身，要具体、聚焦决策，不要问「我该怎么做」这类空泛问题；也不要写「（可多选）」之类的提示，单选还是多选由界面标注"},"header":{"type":"string","description":"极短标签，不超过 12 字"},"multiSelect":{"type":"boolean","description":"是否多选，默认 false（单选）。界面会在题干旁自动标注「单选 / 多选」；多选时用户可勾多个选项并同时补充自定义回答"},"options":{"type":"array","description":"候选项（1-6 个）。用户始终可以改用自定义输入作答，因此不必把「其他」写成选项。","items":{"type":"object","properties":{"label":{"type":"string","description":"选项文字"},"description":{"type":"string","description":"该选项意味着什么"}},"required":["label"]}}},"required":["question","options"]}}},"required":["questions"]}
                 """,
@@ -195,8 +205,30 @@ public static class BuiltinTools
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
             SkipApproval = true,
+            // 同上：等的是人。它自己按 timeout_seconds 管时间，这一层不能再套硬超时
+            TimeoutSeconds = 0,
             InputSchemaJson = """
                 {"type":"object","properties":{"title":{"type":"string","description":"一行标题，说明这一步要做什么（如「请在手机上确认登录」）"},"instructions":{"type":"string","description":"要用户怎么做。按行写具体步骤，用户会照着做，所以要写清在哪、点什么、做完什么算完成"},"timeout_seconds":{"type":"integer","description":"最多等多久（秒）。默认 900，上限 3600。用户做现实操作常常要好几分钟，别给太小"}},"required":["title","instructions"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdTask,
+            Name = TaskToolName,
+            Description = """
+                派发一个子 Agent 去做一件完整的活，你只收到它最后的报告。
+                子 Agent 有自己的会话（独立上下文、可继续追问），继承本会话的权限档位、工具、技能与 MCP。
+                适合：需要独立上下文的长任务（项目分析、代码审查、批量调研），或需要同时换一种角色/视角看问题。
+                不适合：一两步就能做完的事 —— 派发本身有开销，直接自己做更快。
+                报告里会给出会话 id，传 session 即可在下次继续用同一个子 Agent（保留它的历史）。
+                风险：会额外消耗模型额度与工具调用。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Risk,
+            // 跑的是一整个子 Agent 的一轮任务（可能几十次工具调用），5 分钟必然腰斩
+            TimeoutSeconds = 30 * 60,
+            InputSchemaJson = """
+                {"type":"object","properties":{"agent":{"type":"string","description":"子 Agent 名称（见「子Agent」页，如「通用」「项目分析专家」）。不存在的名字会返回可用清单"},"prompt":{"type":"string","description":"任务描述。写清目标、范围、验收标准与输出要求；这是子 Agent 唯一的上下文来源，它看不到本会话的历史"},"session":{"type":"string","description":"要续用的子会话 id（上一次报告里给过）。不传就是新开一个；传了会保留它此前跑过的历史"},"max_turns":{"type":"integer","description":"本轮工具循环上限，默认 20，最大 100。撞上限就停并如实报告不完整"},"timeout":{"type":"integer","description":"整个子任务的最长等待秒数，默认 1800"}},"required":["agent","prompt"]}
                 """,
         },
         new ToolDefinition

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -39,6 +39,9 @@ public sealed partial class PluginManager
 
     private bool _initialized;
     private bool _stopping;
+
+    /// <summary>正在重扫：并发的重扫直接忽略。</summary>
+    private bool _rescanning;
 
     private PluginManager() { }
 
@@ -156,7 +159,9 @@ public sealed partial class PluginManager
         {
             foreach (var entry in _entries.ToList())
             {
-                if (entry.Instance is null && entry.LoadContext is null) continue;
+                // 加载失败的条目也会留下订阅（卡片、插槽），不清就会带进下一次扫描
+                if (entry.Instance is null && entry.LoadContext is null && entry.Subscriptions.Count == 0)
+                    continue;
 
                 try
                 {
@@ -295,6 +300,77 @@ public sealed partial class PluginManager
         Raise();
     }
 
+    /// <summary>
+    /// 重新加载一个插件：<b>先卸干净再加载</b>。
+    ///
+    /// <b>不能只调 <see cref="LoadAsync"/></b>：已经在跑时它会被实例判重挡掉（这正是它的职责），
+    /// 而插件的 <c>InitializeAsync</c> 与原来的实例并没有被清掉 —— 于是「新版本」根本没被读进来。
+    /// 所以顺序必须是「卸载 → 重读清单 → 加载」。
+    ///
+    /// 卸载不掉（程序集还有残留引用）时<b>不重试</b>：那正是 <see cref="PluginRunState.NeedsRestart"/>
+    /// 的含义，只能重启程序。重试只会再多跑一遍初始化，把状态搅得更乱。
+    /// </summary>
+    public async Task<PluginReloadResult> ReloadPluginAsync(string id, CancellationToken ct = default)
+    {
+        if (FindEntry(id) is not { } entry) return new PluginReloadResult(false, false, "插件不在列表里。");
+        if (entry.Loading) return new PluginReloadResult(false, false, "插件正在加载，请稍后再试。");
+
+        // 「重新加载」是用户要用新版本，不是要停用：全程不动 Record.Enabled
+        if (entry.Instance is not null || entry.LoadContext is not null)
+        {
+            try
+            {
+                await UnloadAsync(entry);
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Error(entry.Id, "重新加载前的卸载失败", ex);
+                Raise();
+                return new PluginReloadResult(false, false, "卸载失败：" + Simplified(ex));
+            }
+        }
+
+        if (entry.RunState == PluginRunState.NeedsRestart)
+        {
+            Raise();
+            return new PluginReloadResult(false, true,
+                "插件文件仍被占用，本次运行内无法完全卸载，需要重启程序后才能加载新版本。");
+        }
+
+        // 重读清单：新版本可能连版本号、入口程序集都换了
+        entry.Manifest = null;
+        entry.Error = null;
+        entry.RunState = PluginRunState.NotLoaded;
+
+        if (TryReadManifest(entry) && ValidateManifest(entry))
+        {
+            ApplyManifestRules();
+
+            // 清单过不了关、或前置没在运行，都不能硬加载（理由见 CheckDependencies）
+            if (entry.RunState == PluginRunState.Blocked || CheckDependencies(entry))
+            {
+                Raise();
+                return new PluginReloadResult(false, false, entry.Error ?? "清单校验未通过。");
+            }
+
+            // ValidateManifest 按持久状态给的 RunState：用户禁用的插件不该被「重新加载」偷偷打开
+            if (!entry.Record.Enabled)
+            {
+                entry.RunState = PluginRunState.Disabled;
+                Raise();
+                return new PluginReloadResult(false, false, "该插件已禁用，未加载。");
+            }
+
+            await LoadAsync(entry, ct);
+        }
+
+        Raise();
+
+        return entry.RunState == PluginRunState.Loaded
+            ? new PluginReloadResult(true, false, null)
+            : new PluginReloadResult(false, false, entry.Error ?? "加载失败，详情见插件日志。");
+    }
+
     /// <summary>设置「崩溃后仍自动加载」。默认关闭，只有用户明确勾选才打开。</summary>
     public void SetAutoLoadAfterCrash(string id, bool value)
     {
@@ -309,9 +385,36 @@ public sealed partial class PluginManager
     // 加载
     // ============================================================
 
+    /// <summary>
+    /// 加载入口：<b>同一个条目同时只允许一次加载</b>。
+    ///
+    /// 「重扫」与「启用」是两条独立的调用链，都可能走到这里；而 <see cref="PluginEntry.Instance"/>
+    /// 要等 <c>InitializeAsync</c> 跑完才赋值 —— 这段时间里第二条调用看到的仍然是「没在跑」，
+    /// 于是又建一个实例、又初始化一次。插件会往 <see cref="PluginUiRegistry"/> 里再登记一份卡片，
+    /// 用户看到的就是新标签页里同一个插件有两个入口。
+    /// </summary>
     private async Task LoadAsync(PluginEntry entry, CancellationToken ct)
     {
+        if (entry.Instance is not null || entry.Loading) return;
+
+        entry.Loading = true;
+        try
+        {
+            await LoadCoreAsync(entry, ct);
+        }
+        finally
+        {
+            entry.Loading = false;
+        }
+    }
+
+    private async Task LoadCoreAsync(PluginEntry entry, CancellationToken ct)
+    {
         var manifest = entry.Manifest!;
+
+        // 记下这一刻的文件指纹：之后重扫时用它判断「磁盘上的插件是不是已经不是内存里这份了」
+        var fingerprint = PluginFingerprint.Compute(entry.Directory, entry.Id);
+        entry.DiskHash = fingerprint;
 
         WarnAboutBundledFramework(entry);
 
@@ -350,6 +453,10 @@ public sealed partial class PluginManager
             entry.RunState = PluginRunState.Loaded;
             entry.Error = null;
 
+            // 与磁盘同步：下次重扫若算出不同指纹，就说明插件文件被换过了
+            entry.Record.LoadedHash = fingerprint;
+            PluginStateStore.Save();
+
             // 转让所有权：catch 里不再重复卸载
             alc = null;
             plugin = null;
@@ -375,6 +482,11 @@ public sealed partial class PluginManager
                     // 加载已经失败了，收尾再失败也没别的补救手段
                 }
             }
+
+            // 这次加载登记过的界面 / 工具 / 订阅必须在这里撤掉：初始化失败没人会再撤它们，
+            // 卡片会一直挂在登记表上（界面上是一个点不动的入口），用户再启用一次时
+            // 新的一份登记又加进来 —— 同一个插件两个入口。窗口 / 标签页同理，会留在屏幕上。
+            ReleaseSubscriptions(entry);
 
             if (alc is not null) DiscardLoadContext(entry, alc);
         }
@@ -485,11 +597,7 @@ public sealed partial class PluginManager
         }
 
         // 插件登记过的订阅即使它的 ShutdownAsync 忘了撤销，这里也要收掉
-        foreach (var subscription in entry.Subscriptions.ToArray())
-        {
-            try { subscription.Dispose(); } catch { /* 单个失败不影响其余 */ }
-        }
-        entry.Subscriptions.Clear();
+        ReleaseSubscriptions(entry);
 
         // 插件页显示的是「最近一次贡献」，禁用之后不该再挂着旧数字
         PluginPromptUsage.Clear(entry.Id);
@@ -511,10 +619,26 @@ public sealed partial class PluginManager
 
         entry.RunState = leaked ? PluginRunState.NeedsRestart : PluginRunState.Disabled;
         entry.Error = leaked ? "插件文件仍被占用，本次运行内无法完全卸载。" : null;
+        entry.LockedFile = PluginFingerprint.FindLockedFile(entry.Directory);
 
         PluginLog.Info(entry.Id, leaked
             ? "已禁用，但插件文件仍被占用（需重启才能完全更新启用状态）"
             : "已禁用并卸载");
+    }
+
+    /// <summary>
+    /// 撤销插件登记过的全部门面订阅：界面扩展（卡片 / 插槽）、窗口、标签页、工具、会话事件……
+    ///
+    /// <b>必须在「禁用」和「加载失败」两条路上都走一遍</b>。只走禁用那条的话，
+    /// 一个初始化失败的插件会把自己的卡片永远留在登记表里。
+    /// </summary>
+    private static void ReleaseSubscriptions(PluginEntry entry)
+    {
+        foreach (var subscription in entry.Subscriptions.ToArray())
+        {
+            try { subscription.Dispose(); } catch { /* 单个失败不影响其余 */ }
+        }
+        entry.Subscriptions.Clear();
     }
 
     /// <summary>加载失败时丢掉这个上下文。不关心能不能回收，只要求别继续吊着。</summary>
@@ -709,7 +833,21 @@ public sealed partial class PluginManager
         foreach (var (id, dir) in DiscoverDirectories())
             AddEntry(id, dir);
 
+        RefreshFingerprints();
         EnsureLoadOrder();
+    }
+
+    /// <summary>
+    /// 重算每个条目的磁盘指纹。**只在扫描 / 重扫时做**：它是文件 IO，
+    /// 而 <see cref="ToInfo"/> 每次界面刷新都会跑（换标签页、启停插件、崩溃恢复……）。
+    /// </summary>
+    private void RefreshFingerprints()
+    {
+        foreach (var entry in _entries)
+        {
+            entry.DiskHash = PluginFingerprint.Compute(entry.Directory, entry.Id);
+            entry.LockedFile = PluginFingerprint.FindLockedFile(entry.Directory);
+        }
     }
 
     /// <summary>读插件根目录，返回 (id, 绝对路径)。以点开头的一律跳过。</summary>
@@ -1048,13 +1186,31 @@ public sealed partial class PluginManager
     /// </summary>
     public async Task RescanAsync(CancellationToken ct = default)
     {
+        // 进插件页会自动扫一次，用户还可能紧接着点刷新：两次扫描并发时，
+        // 同一条目在「实例还没建好」的窗口里被两边各加载一次（见 LoadAsync 的说明）。
+        if (_rescanning) return;
+
+        _rescanning = true;
+        try
+        {
+            await RescanCoreAsync(ct);
+        }
+        finally
+        {
+            _rescanning = false;
+        }
+    }
+
+    private async Task RescanCoreAsync(CancellationToken ct)
+    {
         var found = DiscoverDirectories().ToList();
         var diskIds = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
 
         // 1. 目录被删掉的：先卸载（否则实例还活着、内存与文件一直占着），再从列表里移除
         foreach (var entry in _entries.Where(e => !diskIds.Contains(e.Id)).ToList())
         {
-            if (entry.Instance is not null || entry.LoadContext is not null)
+            if (entry.Instance is not null || entry.LoadContext is not null
+                || entry.Subscriptions.Count > 0)
             {
                 try
                 {
@@ -1092,6 +1248,7 @@ public sealed partial class PluginManager
             ValidateManifest(existing);
         }
 
+        RefreshFingerprints();
         EnsureLoadOrder();
         ApplyManifestRules();
 
@@ -1299,6 +1456,16 @@ public sealed partial class PluginManager
 
         var hasTools = HasCapability(manifest, PluginCapabilities.ToolsProvide);
 
+        // 任务提醒策略：禁用插件时 Dispose 把它的策略清掉，
+        // 免得卸载后到下次加载之前还按旧策略决定弹不弹。
+        IPluginNotifications? notifications = null;
+        if (HasCapability(manifest, PluginCapabilities.NoticeControl))
+        {
+            var facade = new PluginNotificationFacade(manifest.Id);
+            entry.Subscriptions.Add(facade);
+            notifications = facade;
+        }
+
         IUiExtensionRegistry? slots = null;
         if (HasCapability(manifest, PluginCapabilities.UiSlot))
         {
@@ -1323,7 +1490,11 @@ public sealed partial class PluginManager
             Slots: slots,
             Tabs: tabs,
             Tools: hasTools ? CreateToolFacade(entry) : null,
-            Dock: dock);
+            Dock: dock,
+            Workspaces: HasCapability(manifest, PluginCapabilities.WorkspaceDelegate)
+                ? new PluginWorkspaceFacade(manifest.Id)
+                : null,
+            Notifications: notifications);
     }
 
     /// <summary>
@@ -1361,7 +1532,21 @@ public sealed partial class PluginManager
             CrashCount: entry.Record.CrashCount,
             CrashSuspected: entry.Record.CrashSuspected,
             CrashLogPath: entry.Record.LastCrashLog,
-            ContributionChars: PluginPromptUsage.Get(entry.Id));
+            ContributionChars: PluginPromptUsage.Get(entry.Id),
+            UpdatePending: IsUpdatePending(entry),
+            LockedFile: entry.LockedFile);
+    }
+
+    /// <summary>
+    /// 磁盘上的插件文件是否已经和「正在运行的那一份」不一样了。
+    /// 只在<b>正在运行</b>时才有意义：没在跑的插件下次加载自然读新的。
+    /// </summary>
+    private static bool IsUpdatePending(PluginEntry entry)
+    {
+        if (entry.RunState != PluginRunState.Loaded) return false;
+        if (entry.Record.LoadedHash is not { Length: > 0 } loaded) return false;
+        if (entry.DiskHash is not { Length: > 0 } disk) return false;
+        return !string.Equals(loaded, disk, StringComparison.Ordinal);
     }
 
     private void Raise() => Changed?.Invoke();
@@ -1399,6 +1584,15 @@ public sealed partial class PluginManager
 
         /// <summary>正在卸载：拒绝新的投递（后续里程碑的事件/请求都先看它）。</summary>
         public bool Stopping { get; set; }
+
+        /// <summary>正在加载：<see cref="PluginEntry.Instance"/> 还没赋值，别当成「没在跑」。</summary>
+        public bool Loading { get; set; }
+
+        /// <summary>最近一次扫描时算出的磁盘文件指纹（算不出来时为 null）。</summary>
+        public string? DiskHash { get; set; }
+
+        /// <summary>扫描时仍被占用的文件（原生 dll 被映射后无法覆盖），没有则为 null。</summary>
+        public string? LockedFile { get; set; }
 
         /// <summary>插件通过上下文登记的订阅，卸载时统一撤销。</summary>
         public List<IDisposable> Subscriptions { get; } = new();

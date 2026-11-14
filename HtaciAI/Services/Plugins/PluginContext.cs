@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using HtaciAI.Plugin.Abstractions;
@@ -20,7 +20,9 @@ internal sealed record PluginFacades(
     IUiExtensionRegistry? Slots = null,
     IPluginTabHost? Tabs = null,
     IToolRegistryApi? Tools = null,
-    IConversationDock? Dock = null);
+    IConversationDock? Dock = null,
+    IWorkspaceFacade? Workspaces = null,
+    IPluginNotifications? Notifications = null);
 
 /// <summary>
 /// <see cref="IPluginContext"/> 的宿主实现。<b>只提供这份清单声明了的能力</b> ——
@@ -45,10 +47,23 @@ internal sealed partial class PluginContext : IPluginContext
         Tabs = facades.Tabs;
         Tools = facades.Tools;
         Dock = facades.Dock;
+        Workspaces = facades.Workspaces;
+        Notifications = facades.Notifications;
     }
 
     public string PluginId { get; }
     public string PluginDirectory { get; }
+
+    public string GetDataDirectory()
+    {
+        var directory = Path.Combine(PluginDirectory, "data");
+
+        // 建不出来也不抛：插件下一次自己写文件失败时会看到真实原因（权限 / 只读），
+        // 那比在初始化阶段抛一个「建目录失败」更好定位。
+        try { Directory.CreateDirectory(directory); } catch { /* 用的时候再试 */ }
+
+        return directory;
+    }
     public PluginManifest Manifest { get; }
     public string HostVersion { get; }
     public IPluginLogger Log { get; }
@@ -62,6 +77,8 @@ internal sealed partial class PluginContext : IPluginContext
     public IPluginTabHost? Tabs { get; }
     public IToolRegistryApi? Tools { get; }
     public IConversationDock? Dock { get; }
+    public IWorkspaceFacade? Workspaces { get; }
+    public IPluginNotifications? Notifications { get; }
 
     // ---- 日志 ----
 

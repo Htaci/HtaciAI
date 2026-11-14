@@ -5,64 +5,9 @@
              xmlns:controls="using:HtaciAI.Controls"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
              x:Class="HtaciAI.Views.ConversationView">
-    <UserControl.Styles>
-        <!-- 卡片内容区专用：极细的灰色滚动条（4px，圆角滑块） -->
-        <Style Selector=".thin-scrollbar ScrollBar">
-            <Setter Property="Width" Value="4"/>
-            <Setter Property="MinWidth" Value="4"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ScrollBar">
-                        <Grid Width="4" Background="Transparent">
-                            <Rectangle Fill="Transparent"/>
-                            <!-- Value 必须双向，且必须用 {TemplateBinding} 而不是
-                                 {Binding RelativeSource={RelativeSource TemplatedParent}}：
-                                 TemplateBindingExpression 的优先级是 Template，回写走 SetCurrentValue，
-                                 不会顶掉 ScrollBar 自己那条 Template 优先级的 Offset→Value 绑定。
-                                 少了 Mode=TwoWay，拖滑块时 Track.Value 传不回 ScrollBar.Value ——
-                                 现象就是「滑块能拖，但内容一动不动」。
-                                 其余属性照抄 Avalonia Fluent 的 ScrollBar 模板。 -->
-                            <Track Name="PART_Track"
-                                   Orientation="{TemplateBinding Orientation}"
-                                   IsDirectionReversed="True"
-                                   Minimum="{TemplateBinding Minimum}"
-                                   Maximum="{TemplateBinding Maximum}"
-                                   Value="{TemplateBinding Value, Mode=TwoWay}"
-                                   ViewportSize="{TemplateBinding ViewportSize}">
-                                <Track.DecreaseButton>
-                                    <RepeatButton IsTabStop="False" Focusable="False"
-                                                  Opacity="0" Width="0" Height="0"/>
-                                </Track.DecreaseButton>
-                                <Track.IncreaseButton>
-                                    <RepeatButton IsTabStop="False" Focusable="False"
-                                                  Opacity="0" Width="0" Height="0"/>
-                                </Track.IncreaseButton>
-                                <Track.Thumb>
-                                    <Thumb MinHeight="28" IsTabStop="False">
-                                        <Thumb.Template>
-                                            <ControlTemplate TargetType="Thumb">
-                                                <Border Background="#D8D8DC" CornerRadius="2"/>
-                                            </ControlTemplate>
-                                        </Thumb.Template>
-                                    </Thumb>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 悬停滑块加深，提示可拖拽 -->
-        <Style Selector=".thin-scrollbar ScrollBar /template/ Thumb:pointerover /template/ Border">
-            <Setter Property="Background" Value="#A6A6AD"/>
-        </Style>
-
-        <!-- 输入框的聚焦视觉（盖掉 Fluent 模板里的 2px 蓝边、外层描边发光）
-             已随输入区一起搬进 Controls/ChatInputControl.axaml，
-             在那里改才对 —— 本文件已经不再拥有输入框。 -->
-    </UserControl.Styles>
+    <!-- 细滚动条样式统一在 App.axaml 的 .thin-scrollbar 里（导航列表 / 卡片内容区共用）。
+         输入框的聚焦视觉（盖掉 Fluent 模板里的 2px 蓝边、外层描边发光）已随输入区一起搬进
+         Controls/ChatInputControl.axaml，在那里改才对 —— 本文件已经不再拥有输入框。 -->
 
     <Grid RowDefinitions="Auto,*,Auto" Background="Transparent">
         <!-- ====== 顶部插槽（插件可往这里放一行内容；没内容时整行隐藏） ====== -->

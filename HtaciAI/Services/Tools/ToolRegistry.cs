@@ -1,11 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using HtaciAI.Data;
-using HtaciAI.Services.ScriptRuntimes;
-using HtaciAI.Services.Storage;
 
 namespace HtaciAI.Services.Tools;
 
@@ -23,6 +20,13 @@ public sealed class ToolRegistry
     private readonly Dictionary<string, ToolDefinition> _byId = new();
     private readonly Dictionary<string, ToolDefinition> _byName = new();
     private readonly Dictionary<string, HashSet<string>> _toolsetMembers = new();
+
+    /// <summary>
+    /// 用户给单个工具配过的超时（秒，0 = 一直等）。存在库里，但注册时要落到定义上 ——
+    /// 内置工具的定义是代码里 new 出来的，插件与 MCP 工具是运行时注册的，
+    /// 它们没有别的地方能承接这份配置，所以缓存一份在这里、Register 时套用。
+    /// </summary>
+    private readonly Dictionary<string, int> _timeouts = new(StringComparer.Ordinal);
 
     private ToolRegistry()
     {
@@ -42,6 +46,11 @@ public sealed class ToolRegistry
         _byName.Clear();
         _toolsetMembers.Clear();
 
+        // 超时覆盖要在注册工具之前装进缓存：Register 时才套得到定义上
+        _timeouts.Clear();
+        foreach (var (toolId, seconds) in await ToolRepository.GetTimeoutsAsync())
+            _timeouts[toolId] = seconds;
+
         foreach (var ts in await ToolRepository.GetAllToolsetsAsync())
             RegisterToolset(ts);
 
@@ -60,82 +69,6 @@ public sealed class ToolRegistry
         foreach (var tool in BuiltinTools.GetAll())
             Register(tool);
     }
-
-    private bool _seeded;
-
-    /// <summary>
-    /// 写入内置示例脚本并注册为示例工具（幂等：文件已存在不覆盖，工具已注册不重复）。
-    /// 供端到端验证与新手体验；示例脚本位于 <c>&lt;数据根&gt;/tools</c> 下。
-    /// </summary>
-    public void SeedExamples()
-    {
-        if (_seeded) return;
-        _seeded = true;
-
-        try
-        {
-            var dir = AppPaths.Tools;
-            Directory.CreateDirectory(dir);
-
-            var addPy = Path.Combine(dir, "add.py");
-            var upperJs = Path.Combine(dir, "uppercase.js");
-            if (!File.Exists(addPy)) File.WriteAllText(addPy, ExampleAddPy);
-            if (!File.Exists(upperJs)) File.WriteAllText(upperJs, ExampleUppercaseJs);
-
-            if (ResolveById(ExampleAddId) is null)
-                Register(new ToolDefinition
-                {
-                    Id = ExampleAddId,
-                    Name = "add",
-                    Description = "两数相加（Python 示例脚本工具）",
-                    Source = ToolSource.Script,
-                    Runtime = ScriptRuntimeKind.Python,
-                    Target = addPy,
-                    InputSchemaJson =
-                        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"integer\",\"description\":\"加数\"},\"b\":{\"type\":\"integer\",\"description\":\"加数\"}},\"required\":[\"a\",\"b\"]}",
-                });
-
-            if (ResolveById(ExampleUppercaseId) is null)
-                Register(new ToolDefinition
-                {
-                    Id = ExampleUppercaseId,
-                    Name = "uppercase",
-                    Description = "将字符串转为大写（Node.js 示例脚本工具）",
-                    Source = ToolSource.Script,
-                    Runtime = ScriptRuntimeKind.Node,
-                    Target = upperJs,
-                    InputSchemaJson =
-                        "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"要转换的文本\"}},\"required\":[\"text\"]}",
-                });
-        }
-        catch
-        {
-            // 示例种子失败不影响主流程
-        }
-    }
-
-    private const string ExampleAddId = "example-add";
-    private const string ExampleUppercaseId = "example-uppercase";
-
-    private const string ExampleAddPy = """
-        # 两数相加（HtaciAI 示例脚本工具）。参数经 stdin 传入 JSON，结果输出到 stdout。
-        import json, sys
-
-        def run(a, b):
-            # 加数 / 加数
-            return a + b
-
-        if __name__ == "__main__":
-            print(json.dumps(run(**json.loads(sys.stdin.read()))))
-        """;
-
-    private const string ExampleUppercaseJs = """
-        // 字符串转大写（HtaciAI 示例脚本工具）。参数经 stdin 传入 JSON，结果输出到 stdout。
-        const fs = require('fs');
-        const input = fs.readFileSync(0, 'utf-8');
-        const args = JSON.parse(input);
-        console.log(args.text.toUpperCase());
-        """;
 
     // ---- 工具集 ----
 
@@ -179,12 +112,36 @@ public sealed class ToolRegistry
 
     public void Register(ToolDefinition tool)
     {
+        // 用户配过的超时优先于代码里的默认值（插件与 MCP 工具是运行时注册的，只有这一处能接上）
+        if (_timeouts.TryGetValue(tool.Id, out var seconds)) tool.TimeoutSeconds = seconds;
+
         _byId[tool.Id] = tool;
         _byName[tool.Name] = tool;
 
         // 自动集合的成员是算出来的，不维护成员表
         foreach (var tsId in tool.ToolsetIds.Where(id => !Toolset.IsAutoId(id)))
             MemberSet(tsId).Add(tool.Id);
+    }
+
+    /// <summary>某个工具当前配的超时（秒，0 = 一直等）；null = 没单独配，走默认。</summary>
+    public int? GetTimeoutSeconds(string toolId)
+        => _timeouts.TryGetValue(toolId, out var seconds) ? seconds : null;
+
+    /// <summary>
+    /// 改一个工具的超时：写库 + 立刻落到内存里的定义上（不必重启）。
+    /// <paramref name="seconds"/> 为 null = 恢复默认。
+    /// <b>不经过 <see cref="ToolRepository.UpdateAsync"/></b>：那个方法只认 tool_tools 里的行，
+    /// 内置 / 插件 / MCP 工具根本没有那一行，写不进去。
+    /// </summary>
+    public async Task SetTimeoutSecondsAsync(string toolId, int? seconds)
+    {
+        await ToolRepository.SetTimeoutAsync(toolId, seconds);
+
+        if (seconds is null) _timeouts.Remove(toolId);
+        else _timeouts[toolId] = Math.Max(0, seconds.Value);
+
+        if (_byId.TryGetValue(toolId, out var tool))
+            tool.TimeoutSeconds = seconds is null ? null : Math.Max(0, seconds.Value);
     }
 
     /// <summary>把一个已有工具加进某个自建集合（多对多，重复添加无副作用）。</summary>

@@ -73,6 +73,10 @@ public static class AttachmentStore
     //
     // 缓存不设过期：路径的种类（文件 / 目录）在会话期间不会变，真变了也只是卡片文字旧一点，
     // 而「每次渲染都 stat 一遍磁盘」的代价是实打实的。
+    //
+    // <b>「不存在」不缓存</b>：模型可能先说到某个文件、之后オ把它创建出来
+    // （工具调用排在同一轮的后半段很常见）。把「不存在」也记下来，那个路径就会
+    // 一直显示成原文，直到重启程序 —— 那是最难查的一类「偶发」。
 
     /// <summary>缓存值：空串 = 不存在；<c>folder</c> = 目录；其余是 <see cref="KindFor"/> 的结果。</summary>
     private static readonly ConcurrentDictionary<string, string> DisplayKindCache =
@@ -101,7 +105,12 @@ public static class AttachmentStore
         try { full = Path.GetFullPath(path.Trim().Trim('"', '\'')); }
         catch { return null; }
 
-        var kind = DisplayKindCache.GetOrAdd(full, Classify);
+        // 命中缓存就直接用；未命中才去碰磁盘，且只有「存在」才写进缓存
+        if (!DisplayKindCache.TryGetValue(full, out var kind))
+        {
+            kind = Classify(full);
+            if (kind.Length > 0) DisplayKindCache[full] = kind;
+        }
 
         return kind.Length == 0
             ? null

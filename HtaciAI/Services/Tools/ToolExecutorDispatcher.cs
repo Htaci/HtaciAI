@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -15,7 +15,8 @@ namespace HtaciAI.Services.Tools;
 /// 解析注册表中的工具定义，按 <see cref="ToolSource"/> 分派执行，并内嵌安全网关：
 ///  - 权限审批：按档位（<see cref="Mode"/>）与工具等级决定是否需要用户确认；
 ///  - read 前置：edit / 覆盖 write 必须在本轮已 read 过目标文件；
-///  - 超时与强制停止：单次执行默认 5 分钟（工具入参声明了 timeout 则由模型指定），
+///  - 超时与强制停止：单次执行默认 5 分钟（工具可在「工具」页单独配置时长，
+///    0 = 一直等；工具入参声明了 timeout 则模型也能为这一次抬高），
 ///    点「停止」时不再等工具自愿退出，拿不到结果就如实写回给模型；
 ///  - 失败时返回 <see cref="ToolExecution.Fail"/>：未知/被禁用工具标记 <see cref="ToolExecution.IsUnknownTool"/>，
 ///    由 ChatGateway 收敛为 invalid；真实工具运行失败则由网关作为该 tool_call 的失败结果反馈给模型。
@@ -109,9 +110,13 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
         {
             Abandon(execTask);
             abandoned = true;
+            // 「已强制终止」是不实的：我们只是不再等它，工具若停在同步 IO 或原生调用里，
+            // 它会自己跑完（结果丢弃）。如实说，模型才不会以为副作用一定没发生。
             return ToolExecution.Fail(
-                $"执行超时（>{timeoutSec} 秒），已强制终止" +
-                (DeclaresTimeoutArg(tool) ? "；确实需要更久就在 timeout 参数里传更大的秒数" : ""));
+                $"执行超时（>{timeoutSec} 秒），已停止等待，结果不再回传" +
+                (DeclaresTimeoutArg(tool)
+                    ? "；确实需要更久就在 timeout 参数里传更大的秒数"
+                    : "；这个工具的默认时长可以在「工具」页单独调整，也可以设为一直等待"));
         }
         catch (Exception ex)
         {
@@ -138,6 +143,9 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
     /// <summary>单个工具执行的默认超时（秒）。工具入参声明了 timeout 时以入参为准。</summary>
     public const int DefaultTimeoutSeconds = 300;
 
+    /// <summary>可配置的上限（24 小时）。再大就等于「一直等」，那种意图该显式用 0 表达。</summary>
+    public const int MaxTimeoutSeconds = 24 * 3600;
+
     /// <summary>分派到各来源的执行器（超时与取消的包装在 <see cref="ExecuteAsync"/> 那层，这里不做）。</summary>
     private Task<ToolExecution> DispatchAsync(ToolDefinition tool, ChatToolCall call, CancellationToken ct)
         => tool.Source switch
@@ -161,22 +169,42 @@ public sealed class ToolExecutorDispatcher : IToolExecutor
             TaskScheduler.Default);
 
     /// <summary>
-    /// 这次调用最多等多久（秒）。0 = 不限时。三个例外：
-    /// ask_user_question 等的是人，人要多慢有多慢，超时等于把一张还在作答的卡片变成失败；
-    /// ask_user_continue 同理 —— 而且它自己按 timeout_seconds 管时间，超时后返回的是
-    /// 「还在等，要不要再等一次」而不是「被强制终止」，这一层再套一个硬超时就把那份体面毁了；
-    /// 入参只在工具<b>自己声明了 timeout</b> 时才认 —— MCP 的入参是原样发给远端服务的，
-    /// 塞一个它没声明过的参数会被严格校验的服务拒掉。
+    /// 这次调用最多等多久（秒）。0 = 不限时。
+    ///
+    /// 取值顺序（前者覆盖后者）：
+    /// <list type="number">
+    ///   <item>工具被<b>显式设成 0</b>（一直等）—— 用户的明确意图，连入参都不看；</item>
+    ///   <item>ask_user_question / ask_user_continue —— 等的是人，人要多慢有多慢，
+    ///         超时等于把一张还在作答的卡片变成失败；后者自己按 timeout_seconds 管时间，
+    ///         超时后返回的是「还在等，要不要再等一次」，这一层再套硬超时就把那份体面毁了；</item>
+    ///   <item>工具入参里的 timeout（仅当工具<b>自己声明了</b>这个参数时才认 —— MCP 的入参
+    ///         是原样发给远端服务的，塞一个它没声明过的参数会被严格校验的服务拒掉）；</item>
+    ///   <item>工具单独配的超时（<see cref="ToolDefinition.TimeoutSeconds"/>）；</item>
+    ///   <item>task 的 30 分钟（跑的是整个子 Agent 的一轮任务，按普通工具那 5 分钟算必然被腰斩）；</item>
+    ///   <item>默认 5 分钟。</item>
+    /// </list>
+    ///
+    /// 入参与配置都有时取<b>大的那个</b>：入参是模型为这一次申请（跑长命令、长脚本），
+    /// 只能把这一次抬高，不该把「用户已经放宽到 30 分钟」压回 5 分钟。
     /// </summary>
     private static int ResolveTimeoutSeconds(ToolDefinition tool, ChatToolCall call)
     {
+        if (tool.TimeoutSeconds == 0) return 0;
+
         if (tool.Name == BuiltinTools.AskUserName) return 0;
         if (tool.Name == BuiltinTools.AskContinueName) return 0;
 
-        if (DeclaresTimeoutArg(tool) && BuiltinToolContext.GetIntArg(call, "timeout") is { } seconds)
-            return Math.Clamp(seconds, 1, 24 * 3600);
+        var requested = DeclaresTimeoutArg(tool) && BuiltinToolContext.GetIntArg(call, "timeout") is { } seconds
+            ? Math.Clamp(seconds, 1, MaxTimeoutSeconds)
+            : 0;
 
-        return DefaultTimeoutSeconds;
+        if (tool.TimeoutSeconds is { } configured and > 0)
+            return Math.Max(configured, requested);
+
+        if (tool.Name == BuiltinTools.TaskToolName)
+            return Math.Max(30 * 60, requested);
+
+        return requested > 0 ? requested : DefaultTimeoutSeconds;
     }
 
     /// <summary>工具入参 schema 里有没有 timeout（模型只会传 schema 里声明过的参数）。</summary>

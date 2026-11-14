@@ -23,15 +23,20 @@
 
 ## 二、模型服务商图标（`providers/`）
 
-当前只有 13 个（浅色 11 个、深色 4 个）：`alibaba` `amazon` `anthropic` `baidu` `ollama`
-`tencent` `xai` `xiaomi` `zhipu`（浅色）；`amazon` `anthropic` `ollama` `xai`（深色）。
+浅色 23 个：`alibaba` `amazon` `anthropic` `baidu` `deepseek` `grok` `huggingface` `hunyuan`
+`lmstudio` `longcat` `mimo` `minimax` `mistral` `moonshot` `newapi` `ollama` `openai`
+`siliconflow` `tencent` `volcengine` `xai` `xiaomi` `zhipu`；深色 8 个：`amazon` `anthropic`
+`deepseek` `grok` `mimo` `ollama` `openai` `xai`。
 
 下面 2.1 / 2.2 那两份长名单是**历史上的完整清单**，本身来自 cherry-studio（AGPL），
 已随图标一起移除，只作为「以后要补哪些」的参照，不代表现在存在。
 
-**这些目前没有被任何代码使用。** 服务商卡片用的是「名称首字 + 稳定底色」的自绘头像
-（`ModelServicePage.CreateAvatar`），不读图标文件。所以这批图标优先级最低，
-甚至可以不补 —— 除非以后要把服务商头像也换成真 logo。
+**这批图标现在有代码读。** 加载路径：`Services/Providers/ProviderIcons` 解析出 avares 地址，
+`Controls/ProviderAvatar` 画出来；服务商卡片与「添加服务商」窗口都用它。
+图标名存在 `ai_provider.icon`（从预设服务商添加时自动写入），为空时才退回「名称首字 + 稳定底色」。
+
+预设服务商里目前只有 Z.ai 还没有自己的图标（暂时复用 `zhipu`，因为两者是同一家的国内 / 国际站）。
+补一张 `z-ai.svg` 放进 `providers/light`，再把 `PresetProviders` 里那一条的 `Icon` 改掉、重跑生成器即可。
 
 ### 2.1 浅色（162 个）
 
@@ -292,9 +297,9 @@ if (VendorAvatar.CreateLogo(model.Vendor, 16) is { } logo) row.Children.Add(logo
 
 ### 当前状态
 
-`models/light` 22 个、`models/dark` 6 个；`providers/light` 11 个、`providers/dark` 4 个。
+`models/light` 22 个、`models/dark` 6 个；`providers/light` 23 个、`providers/dark` 8 个。
 
 21 个开发商里 **20 个有模型图标**，只差 `nousresearch`（表里没有覆盖 `icon`，
-所以文件名必须就是 `nousresearch.svg`）。`providers/` 那批目前没有代码读取
-（服务商头像仍用「首字 + 底色」的自绘头像），留着备用。
+所以文件名必须就是 `nousresearch.svg`）。`providers/` 那批供服务商头像使用，
+清单见第二节。
 

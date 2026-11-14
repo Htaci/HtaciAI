@@ -6,11 +6,13 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Svg.Skia;
 using HtaciAI.Services.ModelTable;
+using HtaciAI.Services.Providers;
 
 namespace HtaciAI.Controls;
 
 /// <summary>
-/// 开发商头像：按 <c>Assets/icon/models/</c> 下的 SVG 画 logo，没有图标时返回 null 由调用方决定退路。
+/// 开发商 / 服务商头像：按 <c>Assets/icon/models/</c>（模型品牌）或 <c>Assets/icon/providers/</c>
+/// （服务商平台）下的 SVG 画 logo，没有图标时返回 null 由调用方决定退路。
 ///
 /// 为什么单独一个类：SVG 渲染要走 <see cref="SvgSource"/> + <see cref="SvgImage"/>，
 /// 而 <see cref="SvgSource"/> 解析一次就是一次文件读取 + XML 解析。设置页里模型行动辄几十条、
@@ -33,6 +35,27 @@ public static class VendorAvatar
     public static Control? CreateLogo(string? vendorId, double size)
     {
         if (VendorIcons.Resolve(vendorId) is not { } path) return null;
+        if (Load(path) is not { } source) return null;
+
+        return new Image
+        {
+            Width = size,
+            Height = size,
+            Stretch = Stretch.Uniform,
+            Source = new SvgImage { Source = source },
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+    }
+
+    /// <summary>
+    /// 造一个服务商 logo（资源取自 <c>Assets/icon/providers/</c>）。
+    /// 没有图标时返回 null，调用方退回首字头像 —— 服务商卡片本来就有那套退路。
+    /// </summary>
+    /// <param name="iconName">图标名（<c>AiProvider.Icon</c>，不带扩展名）。</param>
+    /// <param name="size">边长（正方形）。</param>
+    public static Control? CreateProviderLogo(string? iconName, double size)
+    {
+        if (ProviderIcons.Resolve(iconName) is not { } path) return null;
         if (Load(path) is not { } source) return null;
 
         return new Image

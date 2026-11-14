@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
@@ -18,8 +18,10 @@ public partial class NewTabPage : UserControl
     public event EventHandler? SmartChatSelected;
     public event EventHandler? ToolsSelected;
     public event EventHandler? SkillsSelected;
+    public event EventHandler? SubagentsSelected;
     public event EventHandler? PluginsSelected;
     public event EventHandler? McpSelected;
+    public event EventHandler? StatsSelected;
 
     /// <summary>内置卡片的张数。<b>插件卡片永远追加在它们后面</b>，重建时从这里开始删。</summary>
     private int _builtInCardCount;
@@ -172,6 +174,20 @@ public partial class NewTabPage : UserControl
             OnClick = () => SkillsSelected?.Invoke(this, EventArgs.Empty)
         }));
 
+        CardsPanel.Children.Add(CreateCard(new CardData
+        {
+            Title = "子 Agent",
+            Description = "管理可被派发出去干活的子 Agent：各自的提示词与工具范围",
+            IconGlyph = "\uF5A9",                          // People
+            Tags = new[] { "Subagent", "编排" },
+            MainColor = Color.FromArgb(0xFF, 0x8B, 0x5C, 0xD6),
+            LightBg = Color.FromArgb(0xFF, 0xF3, 0xEF, 0xFC),
+            GlowAlpha = 0x26,
+            TagBg = Color.FromArgb(0xFF, 0xF1, 0xEC, 0xFB),
+            TagFg = Color.FromArgb(0xFF, 0x74, 0x49, 0xBE),
+            OnClick = () => SubagentsSelected?.Invoke(this, EventArgs.Empty)
+        }));
+
         //CardsPanel.Children.Add(CreateCard(new CardData
         //{
         //    Title = "浏览器智能体",
@@ -225,6 +241,20 @@ public partial class NewTabPage : UserControl
         //    TagFg = Color.FromArgb(0xFF, 0x6A, 0x4F, 0x94),
         //    OnClick = null
         //}));
+
+        CardsPanel.Children.Add(CreateCard(new CardData
+        {
+            Title = "统计",
+            Description = "看清每一次 API 请求：花了多少、发给了谁、慢在哪里",
+            IconGlyph = "\uF340",                          // data_bar_vertical_24_regular
+            Tags = new[] { "统计", "用量" },
+            MainColor = Color.FromArgb(0xFF, 0x4A, 0x90, 0xD9),
+            LightBg = Color.FromArgb(0xFF, 0xED, 0xF4, 0xFC),
+            GlowAlpha = 0x26,
+            TagBg = Color.FromArgb(0xFF, 0xEC, 0xF3, 0xFC),
+            TagFg = Color.FromArgb(0xFF, 0x3A, 0x7B, 0xC8),
+            OnClick = () => StatsSelected?.Invoke(this, EventArgs.Empty)
+        }));
 
         CardsPanel.Children.Add(CreateCard(new CardData
         {

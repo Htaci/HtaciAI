@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -23,11 +24,20 @@ public partial class SkillSelectorControl : UserControl
     private readonly List<MenuItem> _loadedItems = new();
     private readonly List<MenuItem> _allowedItems = new();
 
+    /// <summary>菜单重建用的内容指纹（见 <see cref="Signature"/>）。</summary>
+    private string _lastSignature = "";
+
     public SkillSelectorControl()
     {
         InitializeComponent();
         MenuTheme.Apply(RootBtn.Flyout as MenuFlyout);
         RebuildMenu();
+
+        // 菜单每次打开都通知宿主重新注入技能列表（技能页里新建 / 改名，切回会话就能看到）。
+        // 用 Opening 而不是 Click：Click 时菜单已经开始展开，事件顺序不可控
+        // （与 ModelSelector 同一个理由）。
+        if (RootBtn.Flyout is MenuFlyout menu)
+            menu.Opening += (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty);
     }
 
     // ============================================================
@@ -68,6 +78,12 @@ public partial class SkillSelectorControl : UserControl
     /// <summary>选中集合变化时触发。</summary>
     public event EventHandler? SelectionChanged;
 
+    /// <summary>
+    /// 菜单即将打开。宿主应在此重新注入 <see cref="Skills"/> ——
+    /// 只在创建时注入一次的话，之后在技能页改了技能，这个选择器会一直显示旧数据。
+    /// </summary>
+    public event EventHandler? RefreshRequested;
+
     // ============================================================
     // 属性变化
     // ============================================================
@@ -79,7 +95,7 @@ public partial class SkillSelectorControl : UserControl
         if (change.Property == SkillsProperty)
         {
             _skills = (Skills ?? Array.Empty<SkillDefinition>()).ToList();
-            RebuildMenu();
+            RebuildMenuIfChanged();
         }
         else if (change.Property == SelectedSkillsProperty)
         {
@@ -123,9 +139,29 @@ public partial class SkillSelectorControl : UserControl
     // 菜单构建
     // ============================================================
 
+    /// <summary>
+    /// 内容指纹：决定菜单结构与每一项文案的那些字段。每次打开菜单宿主都会重新注入一次列表，
+    /// 内容没变时靠它跳过重建，否则菜单刚展开就被清空重填，会闪一下。
+    /// </summary>
+    private string Signature()
+    {
+        var builder = new StringBuilder();
+        foreach (var s in _skills)
+            builder.Append(s.Id).Append('\u0001').Append(s.DisplayName).Append('\u0002');
+        return builder.ToString();
+    }
+
+    private void RebuildMenuIfChanged()
+    {
+        if (Signature() == _lastSignature) return;
+
+        RebuildMenu();
+    }
+
     /// <summary>重建菜单：已加载组 + 允许自动使用组（两组各自独立勾选）。</summary>
     private void RebuildMenu()
     {
+        _lastSignature = Signature();
         if (RootBtn.Flyout is not MenuFlyout menu) return;
         var items = menu.Items;
         items.Clear();

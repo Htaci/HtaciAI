@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -12,6 +12,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services;
+using HtaciAI.Services.Docs;
 using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Tools;
@@ -647,6 +648,45 @@ public partial class PluginsPage : UserControl
         var color = StateColor(info.State);
         var enabled = info.Enabled;
 
+        var stateRow = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            Spacing = 5,
+            Children =
+            {
+                new Border
+                {
+                    Width = 6, Height = 6,
+                    CornerRadius = new CornerRadius(3),
+                    Background = new SolidColorBrush(color),
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                },
+                new TextBlock
+                {
+                    Text = ShortStateText(info.State),
+                    FontSize = 10.5,
+                    Foreground = new SolidColorBrush(color),
+                },
+                new TextBlock
+                {
+                    Text = string.IsNullOrWhiteSpace(info.Version) ? info.Id : $"{info.Id} · {info.Version}",
+                    FontSize = 10.5,
+                    Foreground = TextFaint,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                },
+            },
+        };
+
+        // 磁盘上的插件文件已经换过了：卡片上也要看得出来，
+        // 否则用户得逐个点进详情才知道「哪个插件更新了」。
+        if (info.UpdatePending)
+            stateRow.Children.Add(new TextBlock
+            {
+                Text = "文件已更新",
+                FontSize = 10.5,
+                Foreground = Accent,
+            });
+
         var body = new StackPanel
         {
             Spacing = 6,
@@ -660,34 +700,7 @@ public partial class PluginsPage : UserControl
                     Foreground = enabled ? TextPrimary : TextMuted,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 },
-                new StackPanel
-                {
-                    Orientation = Avalonia.Layout.Orientation.Horizontal,
-                    Spacing = 5,
-                    Children =
-                    {
-                        new Border
-                        {
-                            Width = 6, Height = 6,
-                            CornerRadius = new CornerRadius(3),
-                            Background = new SolidColorBrush(color),
-                            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                        },
-                        new TextBlock
-                        {
-                            Text = ShortStateText(info.State),
-                            FontSize = 10.5,
-                            Foreground = new SolidColorBrush(color),
-                        },
-                        new TextBlock
-                        {
-                            Text = string.IsNullOrWhiteSpace(info.Version) ? info.Id : $"{info.Id} · {info.Version}",
-                            FontSize = 10.5,
-                            Foreground = TextFaint,
-                            TextTrimming = TextTrimming.CharacterEllipsis,
-                        },
-                    },
-                },
+                stateRow,
                 new TextBlock
                 {
                     Text = string.IsNullOrWhiteSpace(info.Description) ? "（没有写说明）" : info.Description,
@@ -755,16 +768,19 @@ public partial class PluginsPage : UserControl
     {
         var body = new StackPanel { Spacing = 12 };
 
-        // ---- 错误 / 需重启提示 ----
+        // ---- 文件更新 / 错误 / 需重启提示 ----
+        // 「有更新」排在错误前面：用户刚从外面覆盖了插件文件时，这条才是他要看到的
+        if (info.UpdatePending)
+            body.Children.Add(CreateUpdateBanner(info));
+
+        if (info.LockedFile is not null)
+            body.Children.Add(CreateLockedBanner(info));
+
         if (!string.IsNullOrWhiteSpace(info.Error))
             body.Children.Add(CreateBanner(info.Error, "#FEF2F2", Danger));
 
         if (info.RequiresRestart)
-            body.Children.Add(CreateBanner(
-                "已停止运行，但插件文件仍被占用、内存没能释放。需要重启程序才能重新加载它。" +
-                "常见原因：插件没有在 ShutdownAsync 里停掉自己的定时器 / 动画 / 后台任务，" +
-                "或者用了泛型 Storage.Load<T>。详情见插件页的「插件开发文档」。",
-                "#FFF7ED", Warning));
+            body.Children.Add(CreateRestartBanner());
 
         // ---- 正文：README.md / 简介 ----
         body.Children.Add(CreateReadmeBlock(info));
@@ -775,7 +791,7 @@ public partial class PluginsPage : UserControl
             body.Children.Add(new TextBlock
             {
                 Text = info.ContributionChars > 0
-                    ? $"最近一轮往上下文贡献了 {info.ContributionChars} 字（单插件上限 {PromptComposer.PerPluginLimit} 字）"
+                    ? $"最近一轮往上下文贡献了 {info.ContributionChars} 字"
                     : "最近一轮没有往上下文贡献内容。",
                 FontSize = 11.5,
                 Foreground = info.ContributionChars > 0 ? TextMuted : TextFaint,
@@ -1219,22 +1235,140 @@ public partial class PluginsPage : UserControl
         }
     }
 
+    /// <summary>
+    /// 重新加载一个插件（卸载 → 重读清单 → 加载）。
+    ///
+    /// <b>「卸不掉」不重试</b>：管理器会把它标成 <see cref="PluginRunState.NeedsRestart"/>，
+    /// 详情页随之显示「需重启」和重启按钮 —— 反复点「重新加载」只会多跑一遍初始化。
+    /// </summary>
+    private async Task ReloadPluginAsync(string id)
+    {
+        _actionError = null;
+        Refresh();
+
+        try
+        {
+            var result = await PluginManager.Instance.ReloadPluginAsync(id);
+
+            // NeedsRestart 不写 _actionError：详情页那条「需重启」提示已经说清楚了
+            if (!result.Success && !result.NeedsRestart)
+                _actionError = "重新加载失败：" + result.Error;
+        }
+        catch (Exception ex)
+        {
+            _actionError = "重新加载失败：" + ex.Message;
+        }
+        finally
+        {
+            Refresh();
+        }
+    }
+
+    /// <summary>
+    /// 「插件文件已更新」提示条 + 右侧「重新加载」。
+    ///
+    /// 判断依据是加载时记下的文件指纹（见 <see cref="PluginFingerprint"/>）：
+    /// 插件 dll 是被读进内存加载的，覆盖文件不会报错，宿主只能事后比对。
+    /// </summary>
+    private Control CreateUpdateBanner(PluginInfo info)
+    {
+        var reload = CreateActionButton("重新加载");
+        reload.PointerPressed += async (_, e) =>
+        {
+            e.Handled = true;
+            await ReloadPluginAsync(info.Id);
+        };
+
+        return CreateBannerRow(
+            "插件文件已更新：当前运行的仍是旧版本，重新加载后新版本才会生效。",
+            "#EFF6FF", Accent, reload);
+    }
+
+    /// <summary>
+    /// 「文件被占用」提示条：点名是哪个文件挡住了替换。
+    ///
+    /// 托管 dll 是读成字节流加载的，运行中随便覆盖；挡住的是插件自己加载的<b>原生</b> dll
+    /// （被映射成映像节后句柄一直开着）。不点名的话，用户只看到资源管理器一句
+    /// 「文件正在使用」，会以为整个插件都被宿主锁住了。
+    /// </summary>
+    private static Control CreateLockedBanner(PluginInfo info)
+    {
+        var row = new WrapPanel { Orientation = Avalonia.Layout.Orientation.Horizontal };
+
+        row.Children.Add(new TextBlock
+        {
+            Text = "文件被占用：",
+            FontSize = 12,
+            Foreground = Warning,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        });
+
+        row.Children.Add(new TextBlock
+        {
+            Text = info.LockedFile,
+            FontFamily = new FontFamily("Cascadia Code, Consolas, monospace"),
+            FontSize = 11.5,
+            Foreground = Warning,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        });
+
+        row.Children.Add(new TextBlock
+        {
+            Text = " 仍被占用，替换它要先停止这个插件。托管 dll 随时可覆盖，卡住的通常是原生库。",
+            FontSize = 12,
+            Foreground = Warning,
+        });
+
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#FFF7ED")),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12, 8),
+            Child = row,
+        };
+    }
+
+    /// <summary>
+    /// 「需重启」提示条 + 右侧「重启应用」。
+    /// 插件已经停下来了，但它登记过的代码还挂在内存里 —— 只有重启能读进新文件。
+    /// </summary>
+    private Control CreateRestartBanner()
+    {
+        var restart = CreateActionButton("重启应用");
+        restart.PointerPressed += (_, e) =>
+        {
+            e.Handled = true;
+
+            if (AppRestart.TryRestart()) return;
+
+            _actionError = "自动重启失败，请手动关闭并重新打开程序。";
+            Refresh();
+        };
+
+        return CreateBannerRow(
+            "已停止运行，但插件文件仍被占用、内存没能释放，新版本要重启程序才能加载。" +
+            "常见原因：插件没有在 ShutdownAsync 里停掉自己的定时器 / 动画 / 后台任务，" +
+            "或者用了泛型 Storage.Load<T>。详情见插件页的「插件开发文档」。",
+            "#FFF7ED", Warning, restart);
+    }
+
     // ============================================================
     // 打开文件 / 目录
     // ============================================================
 
     /// <summary>
-    /// 生成并打开插件开发文档。
+    /// 生成并打开开发文档里的插件部分。
     ///
     /// <b>点一次写一次</b>：文档内置在程序里（不发网络请求、不依赖资源文件），
     /// 每次点击都重新写一遍，所以它永远与当前版本的宿主 API 一致；不点就一个文件都不落盘。
+    /// 三类扩展共用同一份文档，这里落到「插件」那一类。
     /// </summary>
     private void OpenDevDocs()
     {
-        var index = PluginDocs.EnsureWritten();
+        var index = DevDocs.EnsureWritten(DevDocs.PluginStartPage);
         if (index is null)
         {
-            _actionError = "生成插件开发文档失败，请检查数据目录是否可写：" + AppPaths.Docs;
+            _actionError = "生成开发文档失败，请检查数据目录是否可写：" + AppPaths.Docs;
             Refresh();
             return;
         }
@@ -1339,6 +1473,35 @@ public partial class PluginsPage : UserControl
                 Foreground = foreground,
                 TextWrapping = TextWrapping.Wrap,
             },
+        };
+    }
+
+    /// <summary>文字在左、按钮在右的提示条（<see cref="CreateBanner"/> 的带操作版）。</summary>
+    private static Border CreateBannerRow(string text, string background, IBrush foreground, Control action)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+
+        var label = new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            Foreground = foreground,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+
+        action.Margin = new Thickness(12, 0, 0, 0);
+        Grid.SetColumn(action, 1);
+
+        grid.Children.Add(label);
+        grid.Children.Add(action);
+
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.Parse(background)),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12, 8),
+            Child = grid,
         };
     }
 

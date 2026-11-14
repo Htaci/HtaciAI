@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -8,6 +9,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using HtaciAI.Data;
+using HtaciAI.Services.Docs;
 using HtaciAI.Services.ScriptRuntimes;
 using HtaciAI.Services.Tools;
 using HtaciAI.Views.Tools;
@@ -30,6 +32,13 @@ public partial class ToolsPage : UserControl
     {
         InitializeComponent();
         SetupButtons();
+        DevDocLink.PointerPressed += (_, e) =>
+        {
+            // 生成失败（数据目录不可写）时把原因写在原地：这一页没有别的提示位，
+            // 而弹一个只有「确定」的对话框为这点事打断用户不值当。
+            if (DevDocs.Open(DevDocs.ToolStartPage) is { } error) DevDocLink.Text = error;
+            e.Handled = true;
+        };
         ReloadFromRegistry();
     }
 
@@ -368,7 +377,7 @@ public partial class ToolsPage : UserControl
             Child = new StackPanel
             {
                 Spacing = 8,
-                Children = { icon, nameRow, descBlock }
+                Children = { icon, nameRow, descBlock, BuildTimeoutBadge(tool) }
             }
         };
 
@@ -543,5 +552,175 @@ public partial class ToolsPage : UserControl
         };
 
         return badge;
+    }
+
+    /// <summary>
+    /// 超时徽标：显示这个工具最多等多久，点开可以改（默认 / 一直等 / 具体时长）。
+    ///
+    /// <b>为什么要能单独配</b>：5 分钟是按「本地读写」定的，可 bash 装个包、脚本跑一次
+    /// 全量测试、插件或 MCP 服务跑一个远端任务，都轻易超过它。而且超时之后我们只是
+    /// 不再等那个任务 —— 它若停在同步 IO 里还会继续跑，用户看到的是「报告失败，但东西被改了」。
+    /// 所以对这类工具，正确答案往往不是「再等一会儿」，而是显式放宽或显式不限时。
+    ///
+    /// 内置工具也给这个入口：它的默认值是程序行为的一部分，但「我这条机器上装包要 8 分钟」
+    /// 只有用户自己知道。
+    /// </summary>
+    private Control BuildTimeoutBadge(ToolDefinition tool)
+    {
+        var badge = new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#F3F4F6")),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(6, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = new TextBlock
+            {
+                Text = "超时 " + FormatTimeout(tool.TimeoutSeconds),
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(Color.Parse("#4B5563")),
+            },
+        };
+        ToolTip.SetTip(badge, "点击设置这个工具最多等多久");
+
+        // 先声明再在行里捕获：菜单项点击后要能把它自己收起来
+        Flyout? flyout = null;
+        var menu = new StackPanel { Spacing = 2, MinWidth = 190 };
+
+        void AddChoice(string text, int? seconds)
+        {
+            var isCurrent = tool.TimeoutSeconds == seconds;
+            var row = new Border
+            {
+                Padding = new Thickness(12, 7),
+                CornerRadius = new CornerRadius(6),
+                Background = isCurrent ? new SolidColorBrush(Color.Parse("#14000000")) : Brushes.Transparent,
+                Cursor = new Cursor(StandardCursorType.Hand),
+                Child = new TextBlock
+                {
+                    Text = text,
+                    FontSize = 13,
+                    Foreground = new SolidColorBrush(Color.Parse(isCurrent ? "#1A1A2E" : "#374151")),
+                },
+            };
+            row.PointerEntered += (_, _) => row.Background = new SolidColorBrush(Color.Parse("#14000000"));
+            row.PointerExited += (_, _) =>
+                row.Background = isCurrent ? new SolidColorBrush(Color.Parse("#14000000")) : Brushes.Transparent;
+            row.PointerPressed += async (_, e) =>
+            {
+                e.Handled = true;
+                flyout?.Hide();
+                if (isCurrent) return;
+                await ApplyTimeoutAsync(tool, seconds);
+            };
+            menu.Children.Add(row);
+        }
+
+        AddChoice($"默认（{FormatTimeout(null)}）", null);
+        AddChoice("一直等待（不设超时）", 0);
+        AddChoice("10 分钟", 600);
+        AddChoice("30 分钟", 1800);
+        AddChoice("1 小时", 3600);
+
+        // 任意秒数：预设只覆盖常用档，真正特殊的（90 秒、8 分钟）得能填
+        var box = new TextBox
+        {
+            Watermark = "秒数（0 = 一直等待）",
+            FontSize = 12,
+            Height = 30,
+            Padding = new Thickness(8, 4),
+            CornerRadius = new CornerRadius(6),
+            Text = tool.TimeoutSeconds is { } current and > 0 ? current.ToString() : "",
+        };
+        var apply = new Border
+        {
+            Padding = new Thickness(12, 6),
+            CornerRadius = new CornerRadius(6),
+            Background = new SolidColorBrush(Color.Parse("#1A1A2E")),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Child = new TextBlock
+            {
+                Text = "应用",
+                FontSize = 12,
+                Foreground = Brushes.White,
+            },
+        };
+
+        async void Commit()
+        {
+            // 空 = 恢复默认；非数字就当没填（不清空用户的输入，让他自己改）
+            if (string.IsNullOrWhiteSpace(box.Text))
+            {
+                flyout?.Hide();
+                await ApplyTimeoutAsync(tool, null);
+                return;
+            }
+            if (!int.TryParse(box.Text.Trim(), out var seconds))
+            {
+                box.Text = "";
+                return;
+            }
+            flyout?.Hide();
+            await ApplyTimeoutAsync(tool, Math.Clamp(seconds, 0, ToolExecutorDispatcher.MaxTimeoutSeconds));
+        }
+
+        apply.PointerPressed += (_, e) => { e.Handled = true; Commit(); };
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            Commit();
+        };
+
+        menu.Children.Add(new Border
+        {
+            Margin = new Thickness(0, 4, 0, 2),
+            Height = 1,
+            Background = new SolidColorBrush(Color.Parse("#E5E7EB")),
+        });
+        menu.Children.Add(new StackPanel
+        {
+            Spacing = 6,
+            Margin = new Thickness(8, 2, 8, 4),
+            Children = { box, apply },
+        });
+
+        flyout = new Flyout { Content = menu, Placement = PlacementMode.BottomEdgeAlignedLeft };
+        badge.PointerPressed += (_, e) =>
+        {
+            // 吃掉按下，避免冒泡到卡片上
+            e.Handled = true;
+            flyout!.ShowAt(badge);
+        };
+
+        return badge;
+    }
+
+    /// <summary>把配置值说成人话。null = 没配过，走分派器的 5 分钟默认。</summary>
+    private static string FormatTimeout(int? seconds)
+    {
+        if (seconds is null) return "5 分钟";
+        if (seconds.Value <= 0) return "不限时";
+        var s = seconds.Value;
+        if (s % 3600 == 0) return $"{s / 3600} 小时";
+        if (s % 60 == 0) return $"{s / 60} 分钟";
+        return $"{s} 秒";
+    }
+
+    /// <summary>写库并立刻生效（注册表里的定义就地改，不必重启）。</summary>
+    private async Task ApplyTimeoutAsync(ToolDefinition tool, int? seconds)
+    {
+        try
+        {
+            await ToolRegistry.Instance.SetTimeoutSecondsAsync(tool.Id, seconds);
+        }
+        catch
+        {
+            // 写库失败就保持原值：界面上什么都不变，比显示一个没存下的值好
+            return;
+        }
+
+        ReloadFromRegistry(_selectedToolset);
     }
 }

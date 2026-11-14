@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using HtaciAI.Services.Network;
 
 namespace HtaciAI.Services;
 
@@ -21,7 +22,7 @@ public static class ModelDiscovery
     /// 独立的 HttpClient：超时比对话短得多 —— 列个模型列表卡上五分钟毫无意义，
     /// 早点失败让用户看到原因（地址写错 / Key 无效）比一直转圈强。
     /// </summary>
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20) };
+    private static HttpClient Http => HttpClientProvider.Get(TimeSpan.FromSeconds(20));
 
     /// <summary>拉取结果。失败时 <see cref="ModelIds"/> 为空，原因在 <see cref="Error"/>。</summary>
     /// <param name="ModelIds">解析出的模型调用 id（已去重并排序）。</param>
@@ -45,7 +46,14 @@ public static class ModelDiscovery
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             if (!string.IsNullOrWhiteSpace(apiKey))
+            {
                 request.Headers.Add("Authorization", $"Bearer {apiKey}");
+
+                // Anthropic 的 GET /v1/models 只认 x-api-key（且必须带版本头），
+                // 而 OpenAI 兼容的服务会忽略这两个多出来的头 —— 两套一起带才能在两种协议下都拉到模型。
+                request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
+                request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+            }
 
             using var response = await Http.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)

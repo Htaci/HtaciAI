@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using HtaciAI.Services.Docs;
 using HtaciAI.Services.Skills;
 using HtaciAI.Views.Skills;
 
@@ -24,6 +25,12 @@ public partial class SkillsPage : UserControl
     {
         InitializeComponent();
         AddSkillButton.Click += async (_, _) => await OnCreateSkillAsync();
+        DevDocLink.PointerPressed += (_, e) =>
+        {
+            // 生成失败（数据目录不可写）时就地把原因写在链接上：这一页没有别的提示位。
+            if (DevDocs.Open(DevDocs.SkillStartPage) is { } error) DevDocLink.Text = error;
+            e.Handled = true;
+        };
         ReloadSkills();
     }
 

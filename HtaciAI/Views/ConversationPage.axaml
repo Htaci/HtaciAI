@@ -5,62 +5,7 @@
              xmlns:controls="clr-namespace:HtaciAI.Controls"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
              x:Class="HtaciAI.Views.ConversationPage">
-    <UserControl.Styles>
-        <!-- 导航列表专用：4px 细滚动条，圆角滑块，无上下箭头按钮，不占内容宽度。
-             第一段用 .thin-scrollbar（类选择器）而不是 ScrollViewer.thin-scrollbar，
-             免得依赖 Avalonia 的类型选择器是否匹配子类 —— 容器已换成 SmoothScrollViewer。 -->
-        <Style Selector=".thin-scrollbar ScrollBar">
-            <Setter Property="Width" Value="4"/>
-            <Setter Property="MinWidth" Value="4"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ScrollBar">
-                        <Grid Width="4" Background="Transparent">
-                            <Rectangle Fill="Transparent"/>
-                            <!-- Value 必须双向，且必须用 {TemplateBinding} 而不是
-                                 {Binding RelativeSource={RelativeSource TemplatedParent}}：
-                                 TemplateBindingExpression 的优先级是 Template，回写走 SetCurrentValue，
-                                 不会顶掉 ScrollBar 自己那条 Template 优先级的 Offset→Value 绑定。
-                                 换成普通 Binding 后回写是 SetValue（LocalValue 优先级），拖一次滑块就会
-                                 把那条绑定永久压死 —— 现象是「能拖能滚，但滚轮滚动时滑块不动」。
-                                 其余属性照抄 Avalonia Fluent 的 ScrollBar 模板。 -->
-                            <Track Name="PART_Track"
-                                   Orientation="{TemplateBinding Orientation}"
-                                   IsDirectionReversed="True"
-                                   Minimum="{TemplateBinding Minimum}"
-                                   Maximum="{TemplateBinding Maximum}"
-                                   Value="{TemplateBinding Value, Mode=TwoWay}"
-                                   ViewportSize="{TemplateBinding ViewportSize}">
-                                <Track.DecreaseButton>
-                                    <RepeatButton IsTabStop="False" Focusable="False"
-                                                  Opacity="0" Width="0" Height="0"/>
-                                </Track.DecreaseButton>
-                                <Track.IncreaseButton>
-                                    <RepeatButton IsTabStop="False" Focusable="False"
-                                                  Opacity="0" Width="0" Height="0"/>
-                                </Track.IncreaseButton>
-                                <Track.Thumb>
-                                    <Thumb MinHeight="28" IsTabStop="False">
-                                        <Thumb.Template>
-                                            <ControlTemplate TargetType="Thumb">
-                                                <Border Background="#D8D8DC" CornerRadius="2"/>
-                                            </ControlTemplate>
-                                        </Thumb.Template>
-                                    </Thumb>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 悬停滑块加深，提示可拖拽 -->
-        <Style Selector=".thin-scrollbar ScrollBar /template/ Thumb:pointerover /template/ Border">
-            <Setter Property="Background" Value="#A6A6AD"/>
-        </Style>
-    </UserControl.Styles>
+    <!-- 细滚动条样式统一在 App.axaml 的 .thin-scrollbar 里（导航列表 / 卡片内容区共用）。 -->
 
     <Border BorderBrush="LightGray"
             BorderThickness="0,1,0,0">

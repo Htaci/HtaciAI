@@ -17,8 +17,10 @@ namespace HtaciAI.Plugin.Abstractions;
 /// <b>能返回什么、不能返回什么</b>：工具结果就是一段文本（会作为 <c>tool</c> 消息进上下文），
 /// 所以内容要当作「给模型看的输出」来写 —— 长输出请自己截断，别把整份文件塞回去。
 ///
-/// <b>超时</b>：单次执行默认 5 分钟封顶（与内置工具一致），超时与「用户点停止」都会把
-/// 如实的结果写回给模型，不会卡住整轮对话。既然取消令牌会传进来，<b>请把它传下去</b>。
+/// <b>超时</b>：单次执行默认 5 分钟封顶（与内置工具一致），可用
+/// <see cref="PluginToolDefinition.TimeoutSeconds"/> 按工具单独放宽（<c>0</c> = 一直等）。
+/// 超时与「用户点停止」都会把如实的结果写回给模型，不会卡住整轮对话。
+/// 既然取消令牌会传进来，<b>请把它传下去</b>。
 ///
 /// <b>线程</b>：<see cref="PluginToolHandler"/> 在后台线程上调用，<b>不要</b>在里面直接改控件。
 /// </summary>
@@ -96,6 +98,19 @@ public sealed class PluginToolDefinition
     /// 用户可以在工具页把它改高，宿主的审批闸门按改后的等级走。
     /// </summary>
     public PluginToolDangerLevel DangerLevel { get; init; } = PluginToolDangerLevel.Safe;
+
+    /// <summary>
+    /// 单次执行最多等多久（秒）。<c>null</c>（默认）= 跟内置工具一样 5 分钟；
+    /// <c>0</c> = 一直等，不设超时；<c>&gt;0</c> = 秒数（上限 24 小时，超了按上限算，负数按默认）。
+    ///
+    /// <b>给谁用</b>：跑得久的工具（起服务、装包、全量测试）在这里声明默认时长，
+    /// 模型就不必每次都在入参里传 <c>timeout</c>。用户在「工具」页给这个工具单独配的时长
+    /// 优先于这里 —— 那是用户对「允许多久」的明确意思。
+    ///
+    /// <b>别拿它当「等人」的通道</b>：等人用 <see cref="IPluginInteractionHost"/>，那里的等待
+    /// 由插件自己控制超时、超时后返回的是「还在等」而不是一次假的「执行超时」。
+    /// </summary>
+    public int? TimeoutSeconds { get; init; }
 }
 
 /// <summary>工具危险等级。语义与宿主界面上的徽标一致。</summary>

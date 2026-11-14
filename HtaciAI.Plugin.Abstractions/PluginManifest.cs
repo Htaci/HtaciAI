@@ -104,6 +104,12 @@ public static class PluginCapabilities
     /// <summary>主动发起一轮、取消、改权限档位。</summary>
     public const string ChatControl = "chat.control";
 
+    /// <summary>
+    /// 决定自己派出去的任务跑完时，那条系统提醒<b>留多久、要不要弹</b>。
+    /// 不声明就是默认行为：弹出后过一会儿自动收起。
+    /// </summary>
+    public const string NoticeControl = "notice.control";
+
     /// <summary>创建独立窗口。</summary>
     public const string UiWindow = "ui.window";
 
@@ -125,11 +131,14 @@ public static class PluginCapabilities
     /// <summary>把会话的对话视图借到自己的界面里显示（内置浏览器那种「网页 + 对话」并排）。</summary>
     public const string ConversationDock = "conversation.dock";
 
+    /// <summary>在工作空间里查看与新建会话（派发任务到用户的真实工作区）。</summary>
+    public const string WorkspaceDelegate = "workspace.delegate";
+
     /// <summary>已知能力的全集，供设置页把「声明了什么」翻译成人话。</summary>
     public static IReadOnlyList<string> All { get; } = new[]
     {
-        PromptContribute, ChatObserve, ChatControl, UiWindow, UiSlot, UiTab, UiSettings, ToolsProvide,
-        ConversationDock,
+        PromptContribute, ChatObserve, ChatControl, NoticeControl, UiWindow, UiSlot, UiTab, UiSettings,
+        ToolsProvide, ConversationDock, WorkspaceDelegate,
     };
 
     /// <summary>把能力标识翻译成中文短语；不认识的返回 null（设置页原样显示标识）。</summary>
@@ -138,12 +147,14 @@ public static class PluginCapabilities
         PromptContribute => "参与上下文构建",
         ChatObserve => "观察对话内容",
         ChatControl => "主动发起对话",
+        NoticeControl => "控制任务提醒",
         UiWindow => "创建自己的窗口",
         UiSlot => "在界面中插入内容",
         UiTab => "在主窗口里开标签页",
         UiSettings => "在插件页提供设置界面",
         ToolsProvide => "提供工具",
         ConversationDock => "把对话借到自己的界面里显示",
+        WorkspaceDelegate => "在工作空间里派发任务",
         _ => null,
     };
 }

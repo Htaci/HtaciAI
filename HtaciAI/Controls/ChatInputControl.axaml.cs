@@ -13,9 +13,11 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using HtaciAI.Data;
 using HtaciAI.Models;
+using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services;
 using HtaciAI.Services.Attachments;
 using HtaciAI.Services.Conversations;
+using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Skills;
 using HtaciAI.Services.Tools;
 
@@ -110,11 +112,27 @@ public partial class ChatInputControl : UserControl
 
         // 点输入区外面 = 输入框失焦。TextBox 不会因为点了别处就自动掉焦点，
         // 于是它的蓝色聚焦描边会一直亮着，看起来像还在编辑。
-        AttachedToVisualTree += (_, _) => HookOutsideClick();
-        DetachedFromVisualTree += (_, _) => UnhookOutsideClick();
+        AttachedToVisualTree += (_, _) =>
+        {
+            HookOutsideClick();
+            HookPluginToolbar();
+        };
+        DetachedFromVisualTree += (_, _) =>
+        {
+            UnhookOutsideClick();
+            UnhookPluginToolbar();
+        };
 
         LoadTools();
         SetupPermissionMode();
+
+        // 三个选择器都在菜单打开时重读一次各自的清单 —— 工具 / 技能 / MCP 服务是用户随时
+        // 会在设置页里改的东西，只在构造时注入一次的话，改完回到会话还是旧列表
+        // （模型选择器早就是这么做的，见它自己的 RefreshRequested）。
+        // 接在这里而不是各个宿主里：新建页与对话页共用这一个控件，接一处两边都对。
+        ToolSelector.RefreshRequested += (_, _) => LoadTools();
+        SkillSelector.RefreshRequested += (_, _) => LoadSkills();
+        McpSelector.RefreshRequested += (_, _) => _ = LoadMcpServersAsync();
     }
 
     // ============================================================
@@ -151,6 +169,67 @@ public partial class ChatInputControl : UserControl
         {
             if (InputBox.IsFocused) TopLevel.GetTopLevel(this)?.FocusManager?.Focus(null);
         }, DispatcherPriority.Background);
+    }
+
+    // ============================================================
+    // 插件工具栏（插槽 conversation.input.toolbar）
+    // ============================================================
+
+    private IDisposable? _pluginToolbarSubscription;
+
+    private string? _sessionId;
+
+    /// <summary>
+    /// 本输入框属于哪个会话。<b>新建会话页上为 null</b>（还没有会话）。
+    ///
+    /// 它只做一件事：填插件工具栏时传给 <see cref="PluginSlotContext"/>，
+    /// 让插件知道「我这个按钮是哪个会话的」。会话页在装配时设一次即可。
+    /// </summary>
+    public string? SessionId
+    {
+        get => _sessionId;
+        set
+        {
+            if (string.Equals(_sessionId, value, StringComparison.Ordinal)) return;
+
+            _sessionId = value;
+
+            // 已经挂在界面上的旧控件带的是旧会话 id（或者根本没有），必须重建：
+            // 会话 id 变了而控件还是那一份，插件会继续按上一个会话显示勾选状态。
+            if (_pluginToolbarSubscription is not null) RefreshPluginToolbar();
+        }
+    }
+
+    /// <summary>
+    /// 把插槽里的插件控件填进工具栏。
+    ///
+    /// 插件可以在这里放任意控件，<b>宿主只负责摆进去</b>：放一个
+    /// <c>Button</c> 再给它挂 <c>Flyout</c>，就是一个带自定义菜单的入口。
+    /// 插件崩了也只坏一格（<see cref="PluginControlHost"/> 会接住构造期异常）。
+    /// </summary>
+    private void RefreshPluginToolbar()
+    {
+        PluginSlotPanel.Fill(PluginToolbarSlot, PluginSlots.ConversationInputToolbar, _sessionId);
+
+        foreach (var child in PluginToolbarSlot.Children)
+            child.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center;
+
+        // 没有插件内容就整块隐藏，分隔线一起收：留一条孤零零的竖线像是界面出了问题
+        PluginToolbarDivider.IsVisible = PluginToolbarSlot.Children.Count > 0;
+    }
+
+    private void HookPluginToolbar()
+    {
+        if (_pluginToolbarSubscription is not null) return;
+
+        RefreshPluginToolbar();
+        _pluginToolbarSubscription = PluginSlotPanel.Subscribe(RefreshPluginToolbar);
+    }
+
+    private void UnhookPluginToolbar()
+    {
+        _pluginToolbarSubscription?.Dispose();
+        _pluginToolbarSubscription = null;
     }
 
     // ============================================================

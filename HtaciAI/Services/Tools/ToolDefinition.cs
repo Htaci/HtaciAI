@@ -71,6 +71,18 @@ public sealed class ToolDefinition
     public ToolDangerLevel DangerLevel { get; init; } = ToolDangerLevel.Danger;
 
     /// <summary>
+    /// 这个工具最多等多久（秒）。<c>null</c> = 没单独配过，用分派器的默认值（5 分钟）；
+    /// <c>0</c> = 一直等，不设超时；<c>&gt;0</c> = 秒数。
+    ///
+    /// <b>为什么不是 init</b>：用户配置存在 <c>tool_timeouts</c> 表里，加载后要覆盖到
+    /// 已经建好的定义上 —— 内置工具的定义是代码里 <c>new</c> 出来的，没有别的地方能改它。
+    ///
+    /// 与入参 <c>timeout</c> 的关系：入参是模型为<b>这一次调用</b>临时申请（跑长命令、长脚本），
+    /// 这里配的是「这个工具默认允许多久」。两者都有时取大的那个，除非这里是 0。
+    /// </summary>
+    public int? TimeoutSeconds { get; set; }
+
+    /// <summary>
     /// 内部辅助工具（如 <c>invalid</c>）：可被解析/执行，但不进入 AI 工具列表、不显示在工具页。
     /// </summary>
     public bool IsInternal { get; init; }

@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using HtaciAI.Services.Network;
 using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Services;
@@ -24,7 +25,8 @@ namespace HtaciAI.Services;
 /// </summary>
 public sealed class OpenAiChatClient : IChatClient
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
+    /// <summary>共享客户端：走不走代理由设置页的「使用系统代理」决定，见 <see cref="HttpClientProvider"/>。</summary>
+    private static HttpClient Http => HttpClientProvider.Get(TimeSpan.FromMinutes(5));
 
     private readonly string _endpoint;
     private readonly string _apiKey;
@@ -77,7 +79,8 @@ public sealed class OpenAiChatClient : IChatClient
     }
 
     /// <summary>
-    /// 规范化到「API 版本根」，如 <c>https://api.moonshot.cn</c> → <c>https://api.moonshot.cn/v1</c>。
+    /// 规范化到「API 版本根」，如 <c>https://api.moonshot.cn</c> → <c>https://api.moonshot.cn/v1</c>；
+    /// 已经以版本号结尾的（<c>/v1</c>、<c>/api/paas/v4</c>、<c>/api/v3</c>）原样返回。
     ///
     /// 与 <see cref="NormalizeOpenAiEndpoint"/>、<see cref="ModelsUrl"/> 共用同一套判断，
     /// 三者拼出的路径必然同源 —— 否则「对话能通、拉模型列表却 404」这种问题会很难查。
@@ -96,7 +99,27 @@ public sealed class OpenAiChatClient : IChatClient
             break;
         }
 
-        return url.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? url : url + "/v1";
+        // 末尾已经是版本号就原样用。不能只认 /v1：智谱是 /api/paas/v4、火山方舟是 /api/v3，
+        // 一律补 /v1 会拼出 .../v4/v1/chat/completions 这种必然 404 的地址。
+        return EndsWithVersion(url) ? url : url + "/v1";
+    }
+
+    /// <summary>
+    /// 路径最后一段是不是版本号（v1 / v3 / v4 …）。
+    /// 由 Anthropic 客户端复用：那边同样需要「已经填了版本根就不再补 /v1」。
+    /// </summary>
+    internal static bool EndsWithVersion(string url)
+    {
+        var slash = url.LastIndexOf('/');
+        if (slash < 0 || slash == url.Length - 1) return false;
+
+        var segment = url[(slash + 1)..];
+        if (segment.Length < 2 || (segment[0] != 'v' && segment[0] != 'V')) return false;
+
+        for (var i = 1; i < segment.Length; i++)
+            if (!char.IsAsciiDigit(segment[i])) return false;
+
+        return true;
     }
 
     /// <summary>
@@ -302,6 +325,11 @@ public sealed class OpenAiChatClient : IChatClient
             ["stream"] = true,
             ["stream_options"] = new { include_usage = true },
         };
+
+        // 输出上限：只在调用方明确要求时下发（见 ChatRequestOptions.MaxOutputTokens）。
+        // 不下发时由服务端给默认值 —— 普通对话一直是这么跑的，不要在这里替它决定。
+        if (options.MaxOutputTokens is > 0 and var maxTokens)
+            body["max_tokens"] = maxTokens;
 
         switch (options.Thinking)
         {

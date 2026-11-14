@@ -2,6 +2,7 @@ namespace HtaciAI.Services;
 
 using System;
 using System.Collections.Generic;
+using HtaciAI.Models;
 using HtaciAI.Services.Tools;
 
 /// <summary>
@@ -125,4 +126,22 @@ public sealed class ChatRequestOptions
     /// 换到不支持视觉的模型后必须把它们降级成文本，否则整轮请求会被 API 拒绝。
     /// </summary>
     public bool SupportsVision { get; set; }
+
+    /// <summary>
+    /// 本次请求的上下文（种类 / 会话 / 轮次 / 消息 / 第几次尝试）。空 = 统计页把它记成「其它」。
+    ///
+    /// 挂在 options 上而不是加进 <see cref="IChatClient.StreamAsync"/> 的签名：
+    /// 那个接口的每个实现都要跟着改，而这份信息只被统计旁路读。
+    /// 可变 —— 工具循环的每一轮复用同一份 options，轮次与消息 id 只能就地更新。
+    /// </summary>
+    public ApiCallContext? ApiCall { get; set; }
+
+    /// <summary>
+    /// 本次请求最多允许输出多少 token。<b>null = 不下发</b>，走服务端默认值。
+    ///
+    /// 只给「需要确定输出上限」的场景用（目前是回复总结）：服务端的默认上限常常远小于模型的
+    /// 真实能力（有的中转站默认只有 4096），摘要写到一半被硬切掉，读起来像是模型没写完。
+    /// 普通对话保持 null，行为与以前一字不差。
+    /// </summary>
+    public int? MaxOutputTokens { get; set; }
 }

@@ -27,10 +27,11 @@ public sealed class ScriptToolExecutor
         if (runner is null)
             return ToolExecution.Fail($"暂不支持的运行时：{tool.Runtime}");
 
-        // 工具入参声明了 timeout 就按它设子进程超时（AI 想跑长时间脚本就自己抬），
-        // 与分派器那一层的超时守卫取同一个值，先触发的一定是这条更具体的。
-        var result = await runner.RunAsync(tool.Target, call.Arguments ?? "{}",
-            BuiltinToolContext.GetIntArg(call, "timeout"), ct);
+        // 子进程等多久：入参（模型为这一次申请）> 工具页配的值（0 = 一直等）> 运行器的默认值。
+        // 必须与分派器那层取同一个值：配了 15 分钟却让子进程 5 分钟就杀掉，
+        // 用户看到的仍然是「超时」，还会以为设置没生效。
+        var timeout = BuiltinToolContext.GetIntArg(call, "timeout") ?? tool.TimeoutSeconds;
+        var result = await runner.RunAsync(tool.Target, call.Arguments ?? "{}", timeout, ct);
         if (result.Success)
             return ToolExecution.Ok(string.IsNullOrWhiteSpace(result.Output) ? "（脚本无输出）" : result.Output);
 

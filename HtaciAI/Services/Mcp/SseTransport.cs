@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using HtaciAI.Services.Network;
 
 namespace HtaciAI.Services.Mcp;
 
@@ -25,7 +26,7 @@ namespace HtaciAI.Services.Mcp;
 public sealed class SseTransport : ChannelTransportBase
 {
     /// <summary>同上：全限定的 <c>System.Threading.Timeout</c>，避开基类的同名实例属性。</summary>
-    private static readonly HttpClient Http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+    private static HttpClient Http => HttpClientProvider.Get(System.Threading.Timeout.InfiniteTimeSpan);
 
     private readonly CancellationTokenSource _streamCts = new();
     private readonly TaskCompletionSource<string> _endpointReady =

@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using HtaciAI.Services.Network;
 
 namespace HtaciAI.Services.Mcp;
 
@@ -22,9 +23,9 @@ public sealed class StreamableHttpTransport : McpTransportBase
     /// <summary>
     /// 超时统一由每个请求的 CTS 控制，所以不能设 HttpClient 的全局超时。
     /// 注意这里是 <see cref="System.Threading.Timeout"/>：基类有个同名的实例属性（本传输的超时时长），
-    /// 不写全会出现「字段初始值设定项不能引用实例成员」。
+    /// 不写全会解析不到（基类同名实例属性会挡在前面），代理设置见 <see cref="HttpClientProvider"/>。
     /// </summary>
-    private static readonly HttpClient Http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+    private static HttpClient Http => HttpClientProvider.Get(System.Threading.Timeout.InfiniteTimeSpan);
 
     private string? _sessionId;
     private bool _disposed;

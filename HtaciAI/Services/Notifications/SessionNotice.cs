@@ -48,6 +48,13 @@ public sealed record SessionNotice(
     public string? WorkspaceName { get; init; }
 
     /// <summary>
+    /// 过多久自动收起（<see cref="System.TimeSpan.Zero"/> = 常驻，只能手动关）。
+    /// 默认值就是常驻，因为「一条没人处理的通知」在默认位置最安全 ——
+    /// 真正决定留多久的是 <c>SessionNotifier</c>：它按提醒类型与插件声明的策略填这一项。
+    /// </summary>
+    public TimeSpan AutoDismissAfter { get; init; }
+
+    /// <summary>
     /// 提醒上的动作按钮点下去之后干什么。为 null 时不显示按钮。
     /// 由发起方（会话视图）提供：只有它知道该放行哪一次调用、怎么改权限档位。
     /// </summary>

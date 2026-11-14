@@ -45,4 +45,26 @@ public sealed record ConversationTurnRequest
 
     /// <summary>重新生成：不新建用户消息，历史末尾那条用户消息就是请求。</summary>
     public bool IsRegenerate => InsertAfterSequence is not null;
+
+    /// <summary>
+    /// 这一轮是「继续」接出来的：值是它承接的那一轮的 turn_id。
+    ///
+    /// 只有「继续」会传它。<b>它不是「重新生成」</b>：继续是接着跑同一件事，
+    /// 界面必须把两段画成一整轮；重新生成是换一条新的回复。
+    /// </summary>
+    public string? ContinuedFrom { get; init; }
+
+    /// <summary>
+    /// 这一轮是插件经 <c>ISessionFacade</c> 派的（用户自己发的为 false）。
+    /// 只影响收尾事件上的标记（<c>ChatEvent.IsPluginInitiated</c>）：
+    /// 插件派完任务等结果时，必须能把自己派的那轮和用户同时在聊的那轮分开。
+    /// </summary>
+    public bool PluginInitiated { get; init; }
+
+    /// <summary>
+    /// 派这一轮的是哪个插件（用户自己发的为 null）。
+    /// 收尾提醒要按它查插件声明的策略：常驻、不弹，还是弹完自动收。
+    /// 与 <see cref="PluginInitiated"/> 分开是因为那个是 bool，标不出「谁派的」。
+    /// </summary>
+    public string? PluginId { get; init; }
 }

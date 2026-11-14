@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using HtaciAI.Services.Storage;
 using Microsoft.Data.Sqlite;
@@ -214,6 +215,187 @@ public static class DatabaseService
             version = 22;
             SetVersion(conn, version);
         }
+
+        if (version < 23)
+        {
+            RunMigrationV23(conn);
+            version = 23;
+            SetVersion(conn, version);
+        }
+
+        if (version < 24)
+        {
+            RunMigrationV24(conn);
+            version = 24;
+            SetVersion(conn, version);
+        }
+
+        if (version < 25)
+        {
+            RunMigrationV25(conn);
+            version = 25;
+            SetVersion(conn, version);
+        }
+
+        if (version < 26)
+        {
+            RunMigrationV26(conn);
+            version = 26;
+            SetVersion(conn, version);
+        }
+
+        if (version < 27)
+        {
+            RunMigrationV27(conn);
+            version = 27;
+            SetVersion(conn, version);
+        }
+
+        if (version < 28)
+        {
+            RunMigrationV28(conn);
+            version = 28;
+            SetVersion(conn, version);
+        }
+
+        if (version < 29)
+        {
+            RunMigrationV29(conn);
+            version = 29;
+            SetVersion(conn, version);
+        }
+
+        if (version < 30)
+        {
+            RunMigrationV30(conn);
+            version = 30;
+            SetVersion(conn, version);
+        }
+    }
+
+    /// <summary>
+    /// API 请求流水（api_requests 表）：<b>一次 HTTP 往返一行</b>，供「统计」页聚合。
+    ///
+    /// <b>为什么另开一张表，而不是用 chat_message.usage_json 现算</b>：
+    /// <list type="bullet">
+    ///   <item>不是每次请求都有消息：话题命名、上下文压缩、连接测试都发请求但没有 chat_message 行。</item>
+    ///   <item>消息会被复制与删除：编辑重发、重新生成、软删都会让同一份用量重复或消失，
+    ///         直接加总会算错。</item>
+    ///   <item>chat_message 缺关键维度：服务商、HTTP 状态码、首字延迟、错误类型都没有。</item>
+    /// </list>
+    ///
+    /// <b>只存「查得到、算得准」的东西</b>：不存请求体与响应体（体积），不存 api_key，
+    /// endpoint 落库前剥掉 query（有的中转站把密钥塞在 URL 里）。
+    /// token 用 NULL 表示「这次没拿到用量」，不写 0 —— 0 会混进平均值。
+    /// cost 是<b>写入时按当时的价格算好的快照</b>：价格之后被改，历史金额不该跟着变。
+    /// </summary>
+    private static void RunMigrationV30(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS api_requests (
+                id               TEXT PRIMARY KEY,
+                kind             TEXT NOT NULL,
+                status           TEXT NOT NULL,
+                attempt          INTEGER NOT NULL DEFAULT 1,
+                session_id       TEXT,
+                turn_id          TEXT,
+                message_id       TEXT,
+                provider_name    TEXT,
+                model_id         TEXT,
+                model_name       TEXT,
+                protocol         TEXT,
+                endpoint         TEXT,
+                http_status      INTEGER,
+                error_kind       TEXT,
+                error_message    TEXT,
+                input_tokens     INTEGER,
+                cache_hit_tokens INTEGER,
+                output_tokens    INTEGER,
+                cost             REAL,
+                currency         TEXT,
+                ttft_ms          INTEGER,
+                duration_ms      INTEGER,
+                message_count    INTEGER,
+                tool_count       INTEGER,
+                started_at       INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_api_req_started ON api_requests (started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_api_req_session ON api_requests (session_id, started_at);
+            CREATE INDEX IF NOT EXISTS idx_api_req_model ON api_requests (model_name, started_at);
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 工具超时覆盖（tool_timeouts 表）：一行 = 某个工具单独配过的等待时长。
+    ///
+    /// <b>为什么不给 tool_tools 加列</b>：内置工具、插件工具、MCP 工具都不在 tool_tools 里
+    /// （内置的定义在代码里，插件与 MCP 的是运行时注册的），加列就只能配脚本工具，
+    /// 而需要更久的往往正是 bash / 插件这类。一张只有两列的覆盖表四类来源通吃，
+    /// 没有覆盖行的工具仍然走默认的 5 分钟。
+    ///
+    /// <b>seconds = 0 表示一直等</b>：不是「1 秒」，也不是「用默认」——「用默认」由「没有这一行」表达。
+    /// </summary>
+    private static void RunMigrationV28(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS tool_timeouts (
+                tool_id   TEXT PRIMARY KEY,
+                seconds   INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 插件会话（plugin_sessions 表）：插件通过 <c>ISessionFacade.CreateSessionAsync</c> 给自己开的会话区。
+    ///
+    /// <b>为什么单开一张表而不是给 chat_sessions 加 plugin_id 列</b>：会话列表、默认模型、
+    /// 「已删除会话」恢复页、通知跳转这些查询都是整表扫描，加列就得给每处补类型过滤，
+    /// 漏一处插件会话就会冒进用户界面。单独建表则一处都不用改，解析入口只有
+    /// <c>SessionProfileResolver</c>（与 subagent_sessions 同一套约定）。
+    ///
+    /// 消息仍然复用 chat_message（session_id 即本表 id），所以这里只管「一行会话配置 + 归属」。
+    /// <b>不建与 chat_sessions 的级联触发器</b>：插件会话不依附任何用户会话，它的生命周期
+    /// 由插件自己调 <c>DeleteSessionAsync</c> 决定。
+    /// </summary>
+    private static void RunMigrationV27(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS plugin_sessions (
+                id               TEXT PRIMARY KEY,
+                plugin_id        TEXT NOT NULL,
+                title            TEXT NOT NULL,
+                model            TEXT,
+                thinking         INTEGER NOT NULL DEFAULT 1,
+                session_prompt   TEXT,
+                enabled_tool_ids TEXT,
+                enabled_skills   TEXT,
+                mcp_servers      TEXT,
+                permission_mode  INTEGER NOT NULL DEFAULT 1,
+                last_message_at  INTEGER,
+                is_deleted       INTEGER NOT NULL DEFAULT 0,
+                deleted_at       INTEGER,
+                created_at       INTEGER NOT NULL,
+                updated_at       INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_plugin_session_owner ON plugin_sessions(plugin_id, is_deleted);
+
+            CREATE TRIGGER IF NOT EXISTS trg_plugin_delete_chat
+            AFTER DELETE ON plugin_sessions
+            BEGIN
+                DELETE FROM chat_message WHERE session_id = OLD.id;
+            END;
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
     }
 
     private static void SetVersion(SqliteConnection conn, int version)
@@ -683,6 +865,84 @@ public static class DatabaseService
         => RebuildChatMessageTable(conn, "chat_message_v20", "'user','assistant','tool','agent','error'");
 
     /// <summary>
+    /// 再放开一次 role：加上 <c>'summary'</c>（回复总结，见 <c>ContextCompression.SummaryRole</c>）。
+    ///
+    /// 漏掉它时「启用回复总结」一打开，第一轮跑完写总结就会撞
+    /// <c>CHECK constraint failed: role IN (...)</c> —— 用户看到的是「总结失败」，
+    /// 原因是这一列的取值范围还停在 V20 那一版。
+    /// </summary>
+    private static void RunMigrationV25(SqliteConnection conn)
+        => RebuildChatMessageTable(
+            conn, "chat_message_v25", "'user','assistant','tool','agent','error','summary'");
+
+    /// <summary>
+    /// 「继续」接出来的那一段：chat_message 增加 continued_from（承接的那一轮的 turn_id）。
+    ///
+    /// 只写在这一段的第一条消息上，其余为 NULL。界面据此把这一段画成<b>同一轮的后半截</b>
+    /// （不重复模型头像、不在中间插操作栏），删除时整条链一起走。
+    ///
+    /// <b>这里是 ALTER 而不是重建表</b>：加一列不触 CHECK 约束，
+    /// 重建反而要让前面几个重建迁移（V17 / V20 / V25）认识这一列 —— 那些迁移跑在它之前，
+    /// 老库里根本没有这一列，重建时的 INSERT … SELECT 会直接报 no such column。
+    /// 因此：将来若再做重建（V27+），必须把 continued_from 一并写进新表结构与拷贝列里。
+    /// </summary>
+    private static void RunMigrationV26(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "ALTER TABLE chat_message ADD COLUMN continued_from TEXT;";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 回复总结改成挂在「那一轮最后一条消息的 metadata」上（键 <c>turn_summary</c>）。
+    ///
+    /// <b>为什么改</b>：总结单占一行就要新申请一个 sequence_number，而那是「查最大 + 1 再插」的
+    /// 两次 I/O —— 一轮任务正在落工具结果时插一条总结，两边会拿到同一个序号、撞上
+    /// <c>UNIQUE(session_id, sequence_number)</c>，整个工具循环当场抛异常断在那里
+    /// （症状：发送按钮恢复可点、工具卡停在「正在接收参数」、列表一直转圈）。
+    /// 写已有行的 metadata 是纯 UPDATE，不碰序号，也不会与任何插入竞争。
+    ///
+    /// 存量数据要搬过去，否则旧总结会变成孤儿行：既不参与上下文，又占着会话里的位置。
+    /// 做法是「先搬到目标行、再软删原行」—— 不硬删，出问题时还能从库里捞回来。
+    /// </summary>
+    private static void RunMigrationV29(SqliteConnection conn)
+    {
+        const string migrate = """
+            UPDATE chat_message
+            SET metadata = json_set(
+                    CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END,
+                    '$.turn_summary',
+                    (SELECT s.content FROM chat_message s
+                     WHERE s.session_id = chat_message.session_id
+                       AND s.turn_id = chat_message.turn_id
+                       AND s.role = 'summary' AND s.is_deleted = 0
+                     ORDER BY s.sequence_number DESC LIMIT 1))
+            WHERE is_deleted = 0
+              AND role IN ('assistant','tool')
+              -- 只写在该轮最后一条 AI 消息上（最后一条可能是 tool：被打断的轮次就停在那里）
+              AND sequence_number = (
+                    SELECT MAX(x.sequence_number) FROM chat_message x
+                    WHERE x.session_id = chat_message.session_id
+                      AND x.turn_id = chat_message.turn_id
+                      AND x.role IN ('assistant','tool') AND x.is_deleted = 0)
+              AND EXISTS (
+                    SELECT 1 FROM chat_message s
+                    WHERE s.session_id = chat_message.session_id
+                      AND s.turn_id = chat_message.turn_id
+                      AND s.role = 'summary' AND s.is_deleted = 0);
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = migrate;
+        cmd.ExecuteNonQuery();
+
+        using var softDelete = conn.CreateCommand();
+        softDelete.CommandText = "UPDATE chat_message SET is_deleted = 1, deleted_at = $now WHERE role = 'summary' AND is_deleted = 0;";
+        softDelete.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        softDelete.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// 工具来源：tool_tools 增加 created_by（user / agent）。
     ///
     /// 记它是因为 AI 自举之后，「这个工具是谁建的」决定了用户该用什么态度看它 ——
@@ -697,14 +957,110 @@ public static class DatabaseService
     }
 
     /// <summary>
+    /// 服务商头像：ai_provider 增加 icon（图标名；空表示没有 logo，界面退回首字头像）。
+    /// 从预设服务商添加时自动写入；老行语义不变，它们本来就是手工配的。
+    /// </summary>
+    private static void RunMigrationV23(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "ALTER TABLE ai_provider ADD COLUMN icon TEXT;";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 子 Agent 会话：新建 subagent_sessions 表。
+    ///
+    /// <b>为什么不塞进 chat_sessions</b>：会话列表、默认模型、「已删除会话」恢复页都是整表扫描，
+    /// 混在一张表里就得给每处查询补 <c>kind</c> 过滤，漏一处的后果是子会话冒进用户界面。
+    /// 单独建表则那些查询一行都不用改，解析入口仍只有 <c>SessionProfileResolver</c> 一处。
+    /// 消息照旧复用 chat_message（多态关联，无外键）。
+    ///
+    /// 两个触发器负责「父会话没了，子会话跟着走」：硬删清掉行与消息，软删把 is_deleted 带下去。
+    /// 父会话可能是普通会话，也可能是工作空间会话，所以两边都挂。
+    /// </summary>
+    private static void RunMigrationV24(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS subagent_sessions (
+                id                TEXT PRIMARY KEY,
+                agent_id          TEXT NOT NULL,
+                agent_name        TEXT NOT NULL,
+                parent_session_id TEXT NOT NULL,
+                title             TEXT NOT NULL,
+                model             TEXT,
+                thinking          INTEGER NOT NULL DEFAULT 1,
+                session_prompt    TEXT,
+                base_directory    TEXT,
+                enabled_tool_ids  TEXT,
+                enabled_skills    TEXT,
+                mcp_servers       TEXT,
+                permission_mode   INTEGER NOT NULL DEFAULT 1,
+                max_turns         INTEGER NOT NULL DEFAULT 20,
+                turn_count        INTEGER NOT NULL DEFAULT 0,
+                status            TEXT NOT NULL DEFAULT 'running'
+                                  CHECK (status IN ('running','ok','max_turns','failed')),
+                last_message_at   INTEGER,
+                is_deleted        INTEGER NOT NULL DEFAULT 0,
+                deleted_at        INTEGER,
+                created_at        INTEGER NOT NULL,
+                updated_at        INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_subagent_parent ON subagent_sessions(parent_session_id);
+
+            CREATE TRIGGER IF NOT EXISTS trg_subagent_delete_chat
+            AFTER DELETE ON subagent_sessions
+            BEGIN
+                DELETE FROM chat_message WHERE session_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_subagent_orphan_chat
+            AFTER DELETE ON chat_sessions
+            BEGIN
+                DELETE FROM subagent_sessions WHERE parent_session_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_subagent_orphan_ws
+            AFTER DELETE ON workspace_sessions
+            BEGIN
+                DELETE FROM subagent_sessions WHERE parent_session_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_subagent_hide_chat
+            AFTER UPDATE OF is_deleted ON chat_sessions
+            WHEN NEW.is_deleted = 1 AND OLD.is_deleted = 0
+            BEGIN
+                UPDATE subagent_sessions
+                SET is_deleted = 1, deleted_at = COALESCE(NEW.deleted_at, OLD.deleted_at)
+                WHERE parent_session_id = NEW.id AND is_deleted = 0;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_subagent_hide_ws
+            AFTER UPDATE OF is_deleted ON workspace_sessions
+            WHEN NEW.is_deleted = 1 AND OLD.is_deleted = 0
+            BEGIN
+                UPDATE subagent_sessions
+                SET is_deleted = 1, deleted_at = COALESCE(NEW.deleted_at, OLD.deleted_at)
+                WHERE parent_session_id = NEW.id AND is_deleted = 0;
+            END;
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// 重建 chat_message：SQLite 不能删改 CHECK 约束，放开 role 取值只能这么做。
     ///
     /// 重建是破坏性操作，所以做了三件保命的事：
     /// <list type="number">
     ///   <item>整个流程在一个事务里，中途任何一步失败都整体回滚，不会留下半个表；</item>
     ///   <item>拷完立刻核对行数，对不上就抛异常触发回滚；</item>
-    ///   <item>先删掉 <c>trg_msg_delete_chat</c>、最后原样建回来 —— 改名那一步会检查整个 schema，
-    ///     而它引用的旧表在中间那个瞬间是不存在的，留着它会让 RENAME 直接报错。</item>
+    ///   <item>先把<b>所有引用 chat_message 的触发器</b>（<c>trg_msg_delete_chat</c>、
+    ///     <c>trg_subagent_delete_chat</c> 等）连同 SQL 一起摘下来、最后原样建回来 —— 改名那一步会
+    ///     检查整个 schema，而它们引用的旧表在中间那个瞬间是不存在的，留着任何一个都会让 RENAME
+    ///     报 <c>no such table: main.chat_message</c>。</item>
     /// </list>
     /// 新表的列与约束必须与当前实际结构一致（含 ALTER 陆续补上的 duration_ms 等），
     /// 少一列就等于把那一列的数据丢掉。
@@ -766,7 +1122,14 @@ public static class DatabaseService
         using var transaction = conn.BeginTransaction();
         try
         {
-            Execute(conn, transaction, "DROP TRIGGER IF EXISTS trg_msg_delete_chat;");
+            // 引用 chat_message 的触发器要全部先摘掉，不能只摘 trg_msg_delete_chat：
+            // V24 的 trg_subagent_delete_chat 挂在 subagent_sessions 上、却引用这张表，
+            // 留着它会让下面 RENAME 那一刻的 schema 校验直接报
+            // "no such table: main.chat_message"。摘之前把 SQL 存下来，改名后原样建回。
+            var triggers = ReadTriggersReferencingChatMessage(conn, transaction);
+            foreach (var (name, _) in triggers)
+                Execute(conn, transaction, $"DROP TRIGGER IF EXISTS \"{name.Replace("\"", "\"\"")}\";");
+
             Execute(conn, transaction, createTable);
             Execute(conn, transaction, copyRows);
 
@@ -777,6 +1140,10 @@ public static class DatabaseService
             Execute(conn, transaction, "DROP TABLE chat_message;");
             Execute(conn, transaction, $"ALTER TABLE {tempTable} RENAME TO chat_message;");
             Execute(conn, transaction, recreateIndexes);
+
+            foreach (var (_, sql) in triggers)
+                Execute(conn, transaction, sql);
+            // 兜底：库里本来就没有 trg_msg_delete_chat 时（理论上不会），重建出的新表也得带上它。
             Execute(conn, transaction, recreateTrigger);
 
             transaction.Commit();
@@ -786,6 +1153,31 @@ public static class DatabaseService
             transaction.Rollback();
             throw;
         }
+    }
+
+    /// <summary>
+    /// 读出所有引用 chat_message 的触发器（名字 + 原始建表 SQL）。
+    ///
+    /// 重建表前必须把这类触发器摘掉：<c>DROP TABLE chat_message</c> 之后、临时表改名之前的
+    /// 那一瞬间，schema 里还挂着指向旧表的触发器，SQLite 会在 RENAME 时校验 schema 并直接报错。
+    /// 按 <c>sqlite_master.sql</c> 抓而不是写死名字 —— 以后再往别的表上挂引用 chat_message 的
+    /// 触发器，这里不用跟着改。
+    /// </summary>
+    private static List<(string Name, string Sql)> ReadTriggersReferencingChatMessage(
+        SqliteConnection conn, SqliteTransaction transaction)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            SELECT name, sql FROM sqlite_master
+            WHERE type = 'trigger' AND sql IS NOT NULL AND sql LIKE '%chat_message%';
+            """;
+
+        using var reader = cmd.ExecuteReader();
+        var result = new List<(string, string)>();
+        while (reader.Read())
+            result.Add((reader.GetString(0), reader.GetString(1)));
+        return result;
     }
 
     private static int CountMessages(SqliteConnection conn, SqliteTransaction? transaction)

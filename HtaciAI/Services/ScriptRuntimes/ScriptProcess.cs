@@ -66,31 +66,39 @@ public static class ScriptProcess
         var stdoutTask = p.StandardOutput.ReadToEndAsync();
         var stderrTask = p.StandardError.ReadToEndAsync();
 
-        // 工具入参能指定时长时按它走（AI 自己说要跑多久），否则用默认值
-        var timeout = timeoutSeconds is > 0 ? TimeSpan.FromSeconds(timeoutSeconds.Value) : DefaultTimeout;
+        // timeoutSeconds：null = 用默认值；0 = 一直等（工具页里设成「一直等待」）；
+        // >0 = 按这个秒数。以前把 0 当成「用默认」，于是设成一直等反而变成 5 分钟。
+        var timeout = timeoutSeconds is { } seconds
+            ? (seconds > 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.Zero)
+            : DefaultTimeout;
 
-        using var timeoutCts = new CancellationTokenSource(timeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-        try
+        var timeoutCts = timeout > TimeSpan.Zero ? new CancellationTokenSource(timeout) : null;
+        using var linkedCts = timeoutCts is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        using (timeoutCts)
         {
-            await p.WaitForExitAsync(linkedCts.Token);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // 用户点了停止：子进程必须一起收掉。原先这里直接 return，解释器进程会留在后台
-            // 继续跑，用户看到的就是「点了停止但东西还在动」。
-            try { p.Kill(entireProcessTree: true); } catch { /* 已退出则忽略 */ }
-            throw;
-        }
-        catch (OperationCanceledException)
-        {
-            try { p.Kill(entireProcessTree: true); } catch { /* 已退出则忽略 */ }
-            return new ScriptRunResult
+            try
             {
-                Success = false,
-                Error = $"脚本执行超时（>{timeout.TotalSeconds:0}s）",
-                CommandLine = commandLine,
-            };
+                await p.WaitForExitAsync(linkedCts.Token);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // 用户点了停止：子进程必须一起收掉。原先这里直接 return，解释器进程会留在后台
+                // 继续跑，用户看到的就是「点了停止但东西还在动」。
+                try { p.Kill(entireProcessTree: true); } catch { /* 已退出则忽略 */ }
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                try { p.Kill(entireProcessTree: true); } catch { /* 已退出则忽略 */ }
+                return new ScriptRunResult
+                {
+                    Success = false,
+                    Error = $"脚本执行超时（>{timeout.TotalSeconds:0}s）",
+                    CommandLine = commandLine,
+                };
+            }
         }
 
         var stdout = await stdoutTask;

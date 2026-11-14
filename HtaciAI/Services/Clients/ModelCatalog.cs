@@ -47,10 +47,17 @@ public static class ModelCatalog
         return list;
     }
 
-    /// <summary>按模型详情的协议构建对应客户端。</summary>
+    /// <summary>
+    /// 按模型详情的协议构建对应客户端。
+    ///
+    /// <b>返回值统一包一层 <see cref="ApiRecordingChatClient"/></b>：一次 API 往返要落一行
+    /// 统计流水（见「统计」页）。包在这里而不是在各调用点，是为了让压缩、话题命名、
+    /// 连接测试这些「不经过对话网关」的请求也被记上，且只有这一处可能漏。
+    /// 统计关掉时装饰器内部直接透传，没有额外开销。
+    /// </summary>
     public static IChatClient BuildClient(ModelDetails details)
     {
-        return details.Protocol switch
+        IChatClient inner = details.Protocol switch
         {
             ModelProtocol.OpenAI => new OpenAiChatClient(
                 details.Endpoint, details.ApiKey, details.ModelName, details.ThinkingField),
@@ -59,8 +66,13 @@ public static class ModelCatalog
             // LM Studio：OpenAI 兼容，但思考/强度走 reasoning_effort 而非 thinking 开关对象，固定用 ReasoningEffort。
             ModelProtocol.LMStudio => new OpenAiChatClient(
                 details.Endpoint, details.ApiKey, details.ModelName, ThinkingFieldKind.ReasoningEffort),
+            // Anthropic：max_tokens 是必填项，只能从模型表拿；未知时客户端有自己的保守默认值。
+            ModelProtocol.Anthropic => new AnthropicChatClient(
+                details.Endpoint, details.ApiKey, details.ModelName, details.MaxOutputTokens),
             _ => throw new NotSupportedException($"暂不支持协议：{details.Protocol}"),
         };
+
+        return new ApiRecordingChatClient(inner, details);
     }
 
     private static ModelDetails Assemble(AiModel m, AiProvider p) => new()
@@ -87,5 +99,11 @@ public static class ModelCatalog
         Vendor = m.Vendor,
         VendorName = VendorIcons.VendorName(m.Vendor),
         ConfigOrigin = m.ConfigOrigin,
+
+        // 价格原样带上：统计流水在写入时按它算一次金额快照（改了价格不追溯历史）
+        PriceInput = m.PriceInput,
+        PriceCacheHit = m.PriceCacheHit,
+        PriceOutput = m.PriceOutput,
+        Currency = m.Currency,
     };
 }

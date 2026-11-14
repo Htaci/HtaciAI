@@ -83,6 +83,27 @@ var add = new TextBlock { Text = "\uF10A", FontFamily = AppFonts.Icons };
 > 私用区字符在多数编辑器里**不可见**，务必写成上表的转义 / 实体形式，
 > 不要直接粘贴字形本身，否则后续无人能看出那是什么图标。
 
+## 插件里怎么用（`PluginFonts.IconFont`）
+
+插件与宿主同进程，**可以直接用宿主这份图标字体**，不必自己打包字体文件：
+
+```csharp
+new TextBlock
+{
+    Text = "\uF10A",                     // add_24_regular
+    FontFamily = PluginFonts.IconFont,   // HtaciAI.Plugin.Abstractions
+    FontSize = 14,
+}
+```
+
+- 它先取宿主 `App.axaml` 里注册的 `IconFont` 资源（宿主自己用的那一份，宿主换字体时插件不用改），
+  取不到再退回字体文件地址，最后退到默认字体（图标变方框，但界面照常画出来）。
+- **不要**自己 `new FontFamily("avares://HtaciAI/...")` 或硬编码 `"Segoe Fluent Icons"`：
+  前者把宿主的资源路径复制进插件，后者是微软专有字体、只在 Windows 上有且禁止再分发。
+- **只在 UI 线程取**（要读 `Application.Current` 的资源）。
+- 入口卡片（`LauncherCard.Glyph`）只填码位，字体由宿主负责，不要把 `FontFamily` 塞进去。
+- 内置浏览器插件（独立仓库 `HtaciAI.Plugins` 的 `HtaciAI.WebBrowser/Icons.cs`）就是这么用的，可作参照。
+
 ## 后续调整记录
 
 首批迁移按「语义直译」选的图标里，有两个在小尺寸（工具栏 14px）下可读性差，已改为更易辨识的：
@@ -118,5 +139,6 @@ print(hex(rev['ic_fluent_warning_24_regular']))"
 | 插件 | `puzzle_piece_24_regular` | U+E9EA | `Views/NewTabPage.axaml.cs` 的插件卡 |
 | 插件主页（回到卡片总览） | `home_24_regular` | U+F481 | `Views/PluginsPage.axaml` 左侧标题行 |
 | 上移 / 下移（调整加载顺序） | `chevron_up_24_regular` / `chevron_down_24_regular` | U+F2B7 / U+F2A4 | `Views/PluginsPage.axaml.cs` 列表项悬停时出现 |
+| 统计 | `data_bar_vertical_24_regular` | U+F340 | `Views/NewTabPage.axaml.cs` 的统计卡（「统计」页入口） |
 
 这两个提示图标点开都会跳到该模型的编辑页，补完保存即消失（见 `docs/model-table.md`）。

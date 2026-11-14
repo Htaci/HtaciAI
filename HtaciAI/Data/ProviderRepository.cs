@@ -28,7 +28,7 @@ public static class ProviderRepository
             cmd.CommandText = """
                 SELECT id, name, description, protocol, endpoint, api_key, thinking_field,
                        supports_array_content, supports_streaming, is_enabled, sort_order,
-                       created_at, updated_at
+                       created_at, updated_at, icon
                 FROM ai_provider
                 ORDER BY sort_order ASC, name ASC;
                 """;
@@ -50,7 +50,7 @@ public static class ProviderRepository
             cmd.CommandText = """
                 SELECT id, name, description, protocol, endpoint, api_key, thinking_field,
                        supports_array_content, supports_streaming, is_enabled, sort_order,
-                       created_at, updated_at
+                       created_at, updated_at, icon
                 FROM ai_provider WHERE id = $id;
                 """;
             cmd.Parameters.AddWithValue("$id", id);
@@ -78,9 +78,9 @@ public static class ProviderRepository
             cmd.Transaction = (SqliteTransaction)tx;
             cmd.CommandText = """
                 INSERT INTO ai_provider (id, name, description, protocol, endpoint, api_key, thinking_field,
-                    supports_array_content, supports_streaming, is_enabled, sort_order, created_at, updated_at)
+                    supports_array_content, supports_streaming, is_enabled, sort_order, created_at, updated_at, icon)
                 VALUES ($id, $name, $description, $protocol, $endpoint, $api_key, $thinking_field,
-                    $supports_array_content, $supports_streaming, $is_enabled, $sort_order, $created_at, $updated_at);
+                    $supports_array_content, $supports_streaming, $is_enabled, $sort_order, $created_at, $updated_at, $icon);
                 """;
             AddParams(cmd, p);
             await cmd.ExecuteNonQueryAsync();
@@ -105,7 +105,8 @@ public static class ProviderRepository
                 SET name = $name, description = $description, protocol = $protocol, endpoint = $endpoint,
                     api_key = $api_key, thinking_field = $thinking_field,
                     supports_array_content = $supports_array_content, supports_streaming = $supports_streaming,
-                    is_enabled = $is_enabled, sort_order = $sort_order, updated_at = $updated_at
+                    is_enabled = $is_enabled, sort_order = $sort_order, updated_at = $updated_at,
+                    icon = $icon
                 WHERE id = $id;
                 """;
             AddParams(cmd, p);
@@ -233,6 +234,7 @@ public static class ProviderRepository
         cmd.Parameters.AddWithValue("$sort_order", p.SortOrder);
         cmd.Parameters.AddWithValue("$created_at", p.CreatedAt);
         cmd.Parameters.AddWithValue("$updated_at", p.UpdatedAt);
+        cmd.Parameters.AddWithValue("$icon", (object?)p.Icon ?? DBNull.Value);
     }
 
     private static AiProvider Map(SqliteDataReader r) => new()
@@ -250,12 +252,14 @@ public static class ProviderRepository
         SortOrder = r.GetInt32(10),
         CreatedAt = r.GetInt64(11),
         UpdatedAt = r.GetInt64(12),
+        Icon = r.IsDBNull(13) ? null : r.GetString(13),
     };
 
     private static string MapProtocol(ModelProtocol p) => p switch
     {
         ModelProtocol.OpenAIResponses => "OpenAIResponses",
         ModelProtocol.LMStudio => "LMStudio",
+        ModelProtocol.Anthropic => "Anthropic",
         _ => "OpenAI",
     };
 
@@ -263,6 +267,7 @@ public static class ProviderRepository
     {
         "OpenAIResponses" => ModelProtocol.OpenAIResponses,
         "LMStudio" => ModelProtocol.LMStudio,
+        "Anthropic" => ModelProtocol.Anthropic,
         // "OpenAIEx" 是改名前的写法，老库里存着它，必须还能读出来 —— 否则那些服务商会静默退回默认协议。
         "OpenAIEx" or "OpenAI" => ModelProtocol.OpenAI,
         _ => ModelProtocol.OpenAI,

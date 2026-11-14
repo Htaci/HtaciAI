@@ -76,7 +76,8 @@ public sealed class ChatGateway
         IToolExecutor? tools,
         ChatPersistSink store,
         Func<ChatMessage, ChatRoundSink> beginRound,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? continuedFrom = null)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -116,6 +117,16 @@ public sealed class ChatGateway
         // 自动重试一律套在这一层，而不是让每个调用方自己包：
         // 重试的粒度是「一次 API 往返」，工具循环里的每一次请求各有一份新的 5 次额度。
         var active = new RetryingChatClient(client, RetryScheduled);
+
+        // 统计流水的上下文：这一轮的所有 API 往返都挂在同一个会话 / turn 下，
+        // 每次尝试各占一行（重试装饰器会写 attempt）。消息 id 在每轮开始后补上。
+        // 覆盖调用方传进来的值 —— 走网关的请求一律是对话请求。
+        options.ApiCall = new ApiCallContext
+        {
+            Kind = ApiRequestKinds.Chat,
+            SessionId = sessionId,
+            TurnId = aiTurnId,
+        };
 
         // 每轮用户消息重置工具状态（本轮已读取文件等）
         tools?.BeginTurn();
@@ -159,9 +170,15 @@ public sealed class ChatGateway
                 ModelName = client.ModelName,
                 CreatedAt = now,
                 UpdatedAt = now,
+                // 「继续」接出来的这一轮：只在这一轮第一条消息上留指针，
+                // 界面据此把它画成上一轮的后半截（见 BuildTurnBlock）。
+                ContinuedFrom = round == 0 ? continuedFrom : null,
             };
 
             var sink = beginRound(assistantMsg);
+
+            // 统计流水对回具体消息：这一轮的每一次往返都记它的 id
+            if (options.ApiCall is { } roundCall) roundCall.MessageId = assistantMsg.Id;
 
             // 单独攒一份流式正文与思考：被打断时 StreamAsync 不会返回结果，
             // 不在这里攒的话这一轮收到的内容只活在界面控件里，落库的是一条空消息 ——
@@ -456,6 +473,14 @@ public sealed class ModelDetails
 
     /// <summary>这行配置的来源，决定界面是否提示「配置需要补充」。见 <see cref="ModelConfigOrigin"/>。</summary>
     public ModelConfigOrigin ConfigOrigin { get; init; } = ModelConfigOrigin.Manual;
+
+    // ---- 价格：单位「每百万 token」，null = 未设置 ----
+    // 只给统计页算金额快照用；null 时统计页显示「—」而不是 0（0 会让人以为免费）。
+
+    public double? PriceInput { get; init; }
+    public double? PriceCacheHit { get; init; }
+    public double? PriceOutput { get; init; }
+    public string Currency { get; init; } = "CNY";
 }
 
 /// <summary>tool_calls 与 chat_message.metadata 之间的 JSON 序列化辅助。</summary>

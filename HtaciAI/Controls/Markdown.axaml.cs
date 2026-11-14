@@ -11,6 +11,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using HtaciAI.Models;
 using HtaciAI.Services.Attachments;
 
 namespace HtaciAI.Controls;
@@ -122,8 +123,20 @@ public class MarkdownStreamParser
     // 当前行缓冲
     private StringBuilder _lineBuffer = new();
 
-    // 当前段落 - 用于实时更新（单个富文本块，见 CreateInlineBlock）
+    /// <summary>当前段落 - 用于实时更新（单个富文本块，见 CreateInlineBlock）</summary>
     private CustomSelectableTextBlock? _currentParagraph;
+
+    /// <summary>
+    /// 上一次预览用过的文件卡片（路径 → 控件），供下一次重建时<b>原地复用</b>。
+    ///
+    /// 流式期间每来一个字符都会清空 Inlines 重建一遍；不复用的话，一段带卡片的回复
+    /// 会按字符数创建几十上百个控件。实测（Avalonia 12.0.4）<c>Inlines.Clear()</c> 之后
+    /// 复用同一个控件重新挂进新的 <see cref="InlineUIContainer"/> 是安全的。
+    /// </summary>
+    private readonly Dictionary<string, AttachmentChip> _previewChips = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>本遍预览正在用到的卡片。一遍画完才换给 <see cref="_previewChips"/>。</summary>
+    private Dictionary<string, AttachmentChip>? _buildingChips;
     private StringBuilder _currentParagraphText = new();
     private bool _paragraphProcessed = false;
 
@@ -185,10 +198,12 @@ public class MarkdownStreamParser
     /// <summary>
     /// 流式预览：把当前这一行画进一个临时段落。
     ///
-    /// <b>文件卡片在这一步不建</b>（<c>renderFileCards: false</c>）：流式期间每来一个字符
-    /// 都会清空 Inlines 重建一次，而 <see cref="InlineUIContainer"/> 里放的控件
-    /// 反复摘挂会留下逻辑父级引用，也会每秒建几十个控件。预览期先显示原始标记文本，
-    /// 段落定稿时（<c>ProcessLine</c>）再渲染一次，那时才真正建出卡片。
+    /// <b>文件卡片在预览期就渲染</b>：标记一闭合（<c>]</c> 到达）就变成卡片，
+    /// 不必等这一轮结束。标记没闭合时 <see cref="AttachmentMarker.Scan"/> 找不到它，
+    /// 自然显示成原文 —— 半截路径本来也没有可点的东西。
+    ///
+    /// 代价是每字符重建 Inlines，所以卡片<b>按路径复用</b>（见 <see cref="_previewChips"/>），
+    /// 不重复创建控件。
     /// </summary>
     private void UpdateCurrentParagraph()
     {
@@ -217,7 +232,7 @@ public class MarkdownStreamParser
         // 创建或更新当前段落
         if (_currentParagraph == null && ! string.IsNullOrWhiteSpace(currentLine))
         {
-            _currentParagraph = CreateInlineBlock(currentLine, renderFileCards: false);
+            _currentParagraph = CreateInlineBlock(currentLine);
             _currentParagraph.Margin = new Thickness(0, 5, 0, 5);
 
             _container.Children.Add(_currentParagraph);
@@ -229,9 +244,31 @@ public class MarkdownStreamParser
             _currentParagraphText.Clear();
             _currentParagraphText. Append(currentLine);
 
-            // 清空并重新生成行内元素
+            // 清空并重新生成行内元素。清空之后旧卡片只是脱离了容器，可以原地复用。
             _currentParagraph.Inlines?.Clear();
-            AppendInlineRuns(_currentParagraph, currentLine, renderFileCards: false);
+            RenderPreviewInlines(_currentParagraph, currentLine);
+        }
+    }
+
+    /// <summary>
+    /// 预览段落的一遍重绘：清空 → 复用上一遍的卡片 → 重新挂。
+    /// 复用池只在这一处（以及段落定稿）参与，别处的块每次都是新建 —— 它们不重绘。
+    /// </summary>
+    private void RenderPreviewInlines(CustomSelectableTextBlock block, string text)
+    {
+        _buildingChips = new Dictionary<string, AttachmentChip>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            AppendInlineRuns(block, text);
+        }
+        finally
+        {
+            _previewChips.Clear();
+            foreach (var (path, chip) in _buildingChips)
+                _previewChips[path] = chip;
+
+            _buildingChips = null;
         }
     }
 
@@ -390,10 +427,10 @@ public class MarkdownStreamParser
         {
             _paragraphProcessed = true;
 
-            // 预览期没建文件卡片（见 UpdateCurrentParagraph），这里定稿重绘一次。
-            // 之后这个 block 不会再被改写，卡片上的事件与提示因此不会重复挂。
+            // 定稿重绘一次：预览期那一遍是按「可能会再来字符」画的，这里用最终文本收口
+            // （行尾空白、未闭合标记等都在这时定型）。卡片同样按路径复用，不重建控件。
             _currentParagraph.Inlines?.Clear();
-            AppendInlineRuns(_currentParagraph, trimmedLine);
+            RenderPreviewInlines(_currentParagraph, trimmedLine);
         }
         else
         {
@@ -480,7 +517,7 @@ public class MarkdownStreamParser
             // 路径不存在（模型编的）时退回原始文本：一个点下去什么都没有的卡片，
             // 比直接显示路径更让人困惑。
             if (AttachmentStore.DescribeForDisplay(span.Path) is { } info)
-                inlines.Add(new InlineUIContainer(new AttachmentChip(info, null, compact: true, openOnClick: true)));
+                inlines.Add(new InlineUIContainer(GetFileChip(info)));
             else
                 inlines.Add(new Run(text.Substring(span.Start, span.Length)));
 
@@ -489,6 +526,25 @@ public class MarkdownStreamParser
 
         if (cursor < text.Length)
             AppendSegments(inlines, text[cursor..]);
+    }
+
+    /// <summary>
+    /// 取一个文件卡片控件：预览重绘时优先复用上一遍同路径的那个，否则新建。
+    ///
+    /// <b>同一路径在一行里出现两次必须建两个</b>：一个控件只能有一个父级，
+    /// 复用第二个会把前一个容器里的实例抢走，前半句就空了。所以复用是「取走」语义。
+    /// </summary>
+    private AttachmentChip GetFileChip(ChatAttachment info)
+    {
+        AttachmentChip? chip = null;
+
+        if (_previewChips.Remove(info.Path, out var reusable))
+            chip = reusable;
+
+        chip ??= new AttachmentChip(info, null, compact: true, openOnClick: true);
+
+        _buildingChips?.TryAdd(info.Path, chip);
+        return chip;
     }
 
     /// <summary>行内标记（粗体 / 斜体 / 行内代码 / 链接）→ Run。</summary>
@@ -800,21 +856,43 @@ public class MarkdownStreamParser
         _container.Children.Add(border);
     }
 
+    /// <summary>
+    /// 引用块：一张极淡的青粉渐变圆角卡片，左边描边加粗成一条竖条。
+    ///
+    /// <b>竖条是「描边的一部分」，不是额外画上去的方块</b>：之前用一个独立 Border 摆在左边，
+    /// 它会带自己的圆角、还会跟外层的 1px 描边错开半像素 —— 看着像卡片外面插了根胶囊。
+    /// 这里改成 <c>BorderThickness(3,1,1,1)</c>：同一条描边、同一个圆角，左边缘自然就粗了，
+    /// 与网页上 <c>border-left: 3px</c> 是同一回事。
+    ///
+    /// <b>整体很淡</b>：底色 alpha 压到 0.5 / 0.22，压在白色气泡上只留一层很薄的青粉；
+    /// 描边给到 0.45，靠那条线撑住存在感，而不是靠色块鲜艳。
+    /// </summary>
     private void StartQuote()
     {
         _inQuote = true;
         _quotePanel = new StackPanel
         {
-            Margin = new Thickness(10, 5, 0, 5)
+            Spacing = 2
         };
 
         var border = new Border
         {
-            BorderBrush = new SolidColorBrush(Color.FromRgb(100, 100, 100)),
-            BorderThickness = new Thickness(4, 0, 0, 0),
-            Padding = new Thickness(10, 5, 5, 5),
-            Background = new SolidColorBrush(Color.FromArgb(20, 100, 100, 100)),
-            Child = _quotePanel
+            Margin = new Thickness(0, 4, 0, 4),
+            Padding = new Thickness(13, 10, 14, 10),
+            CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(3, 1, 1, 1),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x73, 0x6E, 0xCB, 0xFF)),
+            Background = new LinearGradientBrush
+            {
+                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+                EndPoint = new RelativePoint(1, 1, RelativeUnit.Relative),
+                GradientStops =
+                {
+                    new GradientStop(Color.FromArgb(0x80, 0xD7, 0xF8, 0xFF), 0),
+                    new GradientStop(Color.FromArgb(0x38, 0xFF, 0xE4, 0xF7), 1),
+                },
+            },
+            Child = _quotePanel,
         };
 
         _container.Children.Add(border);

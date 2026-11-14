@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -20,11 +21,19 @@ public partial class McpSelectorControl : UserControl
     private readonly HashSet<string> _selected = new();
     private readonly List<MenuItem> _items = new();
 
+    /// <summary>菜单重建用的内容指纹（见 <see cref="Signature"/>）。</summary>
+    private string _lastSignature = "";
+
     public McpSelectorControl()
     {
         InitializeComponent();
         MenuTheme.Apply(RootBtn.Flyout as MenuFlyout);
         RebuildMenu();
+
+        // 菜单每次打开都通知宿主重新读一次 MCP 服务列表（服务页里新建 / 改名 / 启停，
+        // 切回会话就能看到）。用 Opening 而不是 Click：Click 时菜单已经开始展开。
+        if (RootBtn.Flyout is MenuFlyout menu)
+            menu.Opening += (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty);
     }
 
     // ============================================================
@@ -65,6 +74,12 @@ public partial class McpSelectorControl : UserControl
     /// <summary>选中集合变化时触发。</summary>
     public event EventHandler? SelectionChanged;
 
+    /// <summary>
+    /// 菜单即将打开。宿主应在此重新注入 <see cref="Servers"/> ——
+    /// 只在创建时读一次库的话，之后在服务页改了 MCP 服务，这个选择器会一直显示旧数据。
+    /// </summary>
+    public event EventHandler? RefreshRequested;
+
     // ============================================================
     // 属性变化
     // ============================================================
@@ -76,7 +91,7 @@ public partial class McpSelectorControl : UserControl
         if (change.Property == ServersProperty)
         {
             _servers = (Servers ?? Array.Empty<McpServerConfig>()).ToList();
-            RebuildMenu();
+            RebuildMenuIfChanged();
         }
         else if (change.Property == SelectedServerIdsProperty)
         {
@@ -104,8 +119,30 @@ public partial class McpSelectorControl : UserControl
     // 菜单构建
     // ============================================================
 
+    /// <summary>
+    /// 内容指纹：决定菜单结构与每一项文案的那些字段（启停状态影响「（未启动）」后缀，
+    /// 所以也算进去）。每次打开菜单宿主都会重新读库，内容没变时靠它跳过重建，否则会闪一下。
+    /// </summary>
+    private string Signature()
+    {
+        var builder = new StringBuilder();
+        foreach (var server in _servers)
+            builder.Append(server.Id).Append('\u0001')
+                   .Append(server.Name).Append('\u0001')
+                   .Append(server.Enabled ? '1' : '0').Append('\u0002');
+        return builder.ToString();
+    }
+
+    private void RebuildMenuIfChanged()
+    {
+        if (Signature() == _lastSignature) return;
+
+        RebuildMenu();
+    }
+
     private void RebuildMenu()
     {
+        _lastSignature = Signature();
         // 通过按钮 Flyout 访问菜单，避免 Flyout 上 x:Name 字段的编译歧义（与 ModelSelector 相同的已知坑）
         if (RootBtn.Flyout is not MenuFlyout menu) return;
         var items = menu.Items;

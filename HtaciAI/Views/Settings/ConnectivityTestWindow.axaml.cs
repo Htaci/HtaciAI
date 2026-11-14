@@ -66,6 +66,7 @@ public partial class ConnectivityTestWindow : Window
     {
         ModelProtocol.OpenAIResponses => "OpenAI Responses",
         ModelProtocol.LMStudio => "LM Studio",
+        ModelProtocol.Anthropic => "Anthropic",
         _ => "OpenAI",
     };
 

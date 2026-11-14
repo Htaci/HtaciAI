@@ -66,6 +66,16 @@
                            Foreground="#9CA3AF"
                            TextWrapping="Wrap"
                            Margin="0,4,0,0"/>
+                <!-- 开发文档：点一次才生成到 <数据根>/doc/ 并用浏览器打开。
+                     三类扩展共用同一份文档，这里落到「技能」那一类（SKILL.md 的字段与注入方式）。 -->
+                <TextBlock x:Name="DevDocLink"
+                           Text="技能开发文档 · SKILL.md 怎么写"
+                           FontSize="11.5"
+                           Foreground="#7C8AA0"
+                           TextDecorations="Underline"
+                           Cursor="Hand"
+                           Margin="0,6,0,0"
+                           ToolTip.Tip="生成到数据目录的 doc 文件夹，并用浏览器打开（含 frontmatter 字段与示例）"/>
             </StackPanel>
             <controls:SmoothScrollViewer Grid.Row="1"
                           HorizontalScrollBarVisibility="Disabled"

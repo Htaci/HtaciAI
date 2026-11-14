@@ -41,8 +41,16 @@ public interface ISessionFacade
     /// <summary>改这个会话的权限档位（会落库，等同于用户在输入框右下角切换）。</summary>
     Task<bool> SetPermissionModeAsync(string sessionId, PluginPermissionMode mode);
 
-    /// <summary>压缩这个会话的上下文（等价于用户点「压缩」）。返回是否真的压了。</summary>
-    Task<bool> CompressAsync(string sessionId);
+    /// <summary>
+    /// 压缩这个会话的上下文（等价于点「压缩」）。返回是否真的压了。
+    /// </summary>
+    /// <param name="keepRecentTurns">
+    /// 末尾保留几轮原文不压（默认 0 = 全压）。压缩之后最近这几轮仍然逐字发给模型，
+    /// 只有更早的部分变成摘要 —— <c>/compact -n</c> 用它做「保留最后 N 轮」。
+    /// 可压内容本来就不足 N 轮时什么都不压、返回 <c>false</c>：宁可不动，也不会把
+    /// 半轮历史塞进摘要再从原文里删掉。传负数按 0 处理。
+    /// </param>
+    Task<bool> CompressAsync(string sessionId, int keepRecentTurns = 0);
 
     /// <summary>
     /// 读这个会话最近 <paramref name="take"/> 条消息。会话没读过库时会顺带读一次。
@@ -58,13 +66,150 @@ public interface ISessionFacade
     /// 那东西只有用户知道。
     /// </summary>
     Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int take = 50, CancellationToken ct = default);
+
+    // ---- 插件自己的会话区 ----
+
+    /// <summary>
+    /// 给本插件新建一个<b>只属于自己的会话</b>（独立会话区，不与用户的普通会话混在一起）。
+    /// 返回新会话 id，失败返回 <c>null</c>。
+    ///
+    /// <b>它不会出现在用户的会话列表里</b>：插件会话单独存一张表，用户的会话列表、默认模型、
+    /// 「已删除会话」恢复页都扫不到它。要展示自己的会话，用 <see cref="ListMySessionsAsync"/>。
+    ///
+    /// 新会话默认不给任何工具（工具与 MCP 都为空、权限档位为普通）。
+    /// </summary>
+    /// <param name="title">会话标题，留空则用「插件会话」。</param>
+    Task<string?> CreateSessionAsync(string? title = null, CancellationToken ct = default);
+
+    /// <summary>列出本插件自己建的会话（最近活动在前），最多 <paramref name="take"/> 个。</summary>
+    Task<IReadOnlyList<SessionSummary>> ListMySessionsAsync(int take = 50, CancellationToken ct = default);
+
+    /// <summary>
+    /// 删除本插件自己的一个会话（软删除，消息保留）。<b>只能删自己的</b>：
+    /// 传别人的会话 id 一律返回 <c>false</c>，不会误删用户会话。
+    /// 正在跑的一轮会先被停掉。
+    /// </summary>
+    Task<bool> DeleteSessionAsync(string sessionId);
+
+    // ---- 用量、模型、工具集、交互桥 ----
+
+    /// <summary>
+    /// 这个会话的用量汇总：累计输入/输出/缓存命中、API 往返次数、当前上下文占用与窗口。
+    ///
+    /// <b>只读库，不加载会话</b>：问一次用量不该把整个会话的历史读进内存
+    /// （列 10 个会话就会读 10 份）。
+    ///
+    /// 会话不存在返回 <c>null</c>。窗口未知（模型没声明上限）时 <see cref="SessionUsage.ContextWindow"/> &lt;= 0，
+    /// 插件据此显示「未知」而不是算出一个 0%。
+    /// </summary>
+    Task<SessionUsage?> GetUsageAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// 这个会话用的模型与它的能力（是否支持视觉、窗口多大、是否支持思考）。
+    ///
+    /// 会话还没选过模型 / 选的模型已被删除时按宿主的默认模型回退，并在
+    /// <see cref="SessionModelInfo.IsFallbackToHostDefault"/> 里告诉你发生了回退。
+    /// 会话不存在返回 <c>null</c>。
+    /// </summary>
+    Task<SessionModelInfo?> GetModelInfoAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// 宿主当前可登记的全部工具（不含内部哨兵工具）。
+    /// 插件用它做 <c>/tools ls</c>，也用它校验自己要写进会话的 id 是否存在。
+    /// </summary>
+    Task<IReadOnlyList<PluginToolInfo>> ListAvailableToolsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 这个会话当前勾选的工具 id。会话不存在返回 <c>null</c>（与「勾了零个」区分开）。
+    /// </summary>
+    Task<IReadOnlyList<string>?> GetSessionToolsAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// 覆盖式写入这个会话的工具集。<b>只接受本插件自己的会话</b>：
+    /// 普通会话与工作空间会话的工具是用户在界面上选的，插件改它等于悄悄替用户做决定，
+    /// 那些会话一律返回 <c>false</c> 且不写库。
+    ///
+    /// 不存在的工具 id 会被丢掉（而不是让会话里留着解析不到的 id）。
+    /// 写入后下一轮请求就用新工具集，不必重开会话。
+    /// </summary>
+    Task<bool> SetSessionToolsAsync(
+        string sessionId, IReadOnlyList<string> toolIds, CancellationToken ct = default);
+
+    /// <summary>
+    /// 给这个会话登记一个交互桥：<b>会话窗口没打开时</b>，工具审批 / <c>ask_user_question</c> /
+    /// 「等人做完一件事」都转发给它（比如 QQ 机器人发一条消息等用户回复）。
+    ///
+    /// 不登记时的现状是：审批一律拒绝、提问返回「用户不在」—— 机器人于是只能跑只读工具。
+    ///
+    /// <b>窗口优先</b>：会话窗口打开着的时候，这些交互仍然交给界面，插件<em>不会</em>收到
+    /// （两处同时弹一张卡只会让人不知道点哪个）。
+    ///
+    /// 传 <c>null</c> 撤销登记。会话不存在返回 <c>false</c>。
+    /// </summary>
+    Task<bool> SetInteractionAsync(string sessionId, IPluginInteractionHost? host);
 }
 
 /// <summary>会话列表里的一项。只够画一个下拉列表，不含正文。</summary>
 /// <param name="SessionId">会话 id，之后传给 <c>SendAsync</c> 用这个。</param>
 /// <param name="Title">标题（可能为空，取决于宿主当前的自动命名状态）。</param>
 /// <param name="UpdatedAt">最近更新时间，Unix 毫秒。</param>
-public sealed record SessionSummary(string SessionId, string Title, long UpdatedAt);
+/// <param name="ContextUsed">当前上下文占用（token）。取不到时为 0。</param>
+/// <param name="ContextWindow">上下文窗口上限（token）。&lt;= 0 表示未知。</param>
+public sealed record SessionSummary(
+    string SessionId,
+    string Title,
+    long UpdatedAt,
+    long ContextUsed = 0,
+    long ContextWindow = 0);
+
+/// <summary><see cref="ISessionFacade.GetUsageAsync"/> 的结果。</summary>
+/// <param name="ModelId">会话存档里的模型 id；空 = 会话没选过模型。</param>
+/// <param name="ContextWindow">上下文窗口上限。&lt;= 0 = 未知（模型没声明）。</param>
+/// <param name="ContextUsed">当前上下文占用。口径与界面上的用量环一致。</param>
+/// <param name="InputTokens">累计输入（所有有 usage 的消息之和）。</param>
+/// <param name="CachedInputTokens">累计缓存命中输入。</param>
+/// <param name="OutputTokens">累计输出。</param>
+/// <param name="RequestCount">有 usage 的消息条数，约等于 API 往返次数。</param>
+/// <param name="UpdatedAt">最后一条有 usage 的消息时间，Unix 毫秒；没有则为 0。</param>
+public sealed record SessionUsage(
+    string ModelId,
+    long ContextWindow,
+    long ContextUsed,
+    long InputTokens,
+    long CachedInputTokens,
+    long OutputTokens,
+    int RequestCount,
+    long UpdatedAt);
+
+/// <summary><see cref="ISessionFacade.GetModelInfoAsync"/> 的结果。</summary>
+/// <param name="ModelId">解析出来的模型 id（会话选的那个，或回退到的默认模型）。</param>
+/// <param name="DisplayName">给人看的名字。</param>
+/// <param name="ContextWindow">上下文窗口。&lt;= 0 = 未知。</param>
+/// <param name="MaxOutputTokens">最大输出 token。&lt;= 0 = 未知。</param>
+/// <param name="SupportsVision">是否支持图像输入。不支持时图片只能落成文件路径交给 view_image。</param>
+/// <param name="SupportsThinking">是否支持思考链。</param>
+/// <param name="IsFallbackToHostDefault">true = 会话没选模型（或选的模型已失效），用的是宿主默认模型。</param>
+public sealed record SessionModelInfo(
+    string ModelId,
+    string DisplayName,
+    long ContextWindow,
+    long MaxOutputTokens,
+    bool SupportsVision,
+    bool SupportsThinking,
+    bool IsFallbackToHostDefault);
+
+/// <summary><see cref="ISessionFacade.ListAvailableToolsAsync"/> 里的一个工具。</summary>
+/// <param name="Id">工具 id（写进 <see cref="ISessionFacade.SetSessionToolsAsync"/> 的就是它）。</param>
+/// <param name="Name">发给模型的调用名。</param>
+/// <param name="Description">给模型看的说明（可能为空）。</param>
+/// <param name="DangerLevel">危险等级，与宿主审批闸门用的是同一套值。</param>
+/// <param name="Source">来源：<c>builtin</c> / <c>script</c> / <c>mcp</c> / <c>plugin</c>。</param>
+public sealed record PluginToolInfo(
+    string Id,
+    string Name,
+    string? Description,
+    PluginToolDangerLevel DangerLevel,
+    string Source);
 
 /// <summary><see cref="ISessionFacade.SendAsync"/> 的结果。</summary>
 public enum SessionSendStatus

@@ -1,3 +1,4 @@
+using System;
 using HtaciAI.Models;
 
 namespace HtaciAI.Services.Storage;
@@ -23,8 +24,20 @@ public static class AppSettingsStore
     public static bool Save(AppSettingsData data)
     {
         _current = data;
-        return JsonFileStore.Save(FilePath, data);
+        var saved = JsonFileStore.Save(FilePath, data);
+
+        // 每次保存都通知一遍（不是「内容变了才通知」）：设置页改动即存、一次点击一次落盘，
+        // 订阅方自己比对关心的那个值就够了。已经建好、甚至被缓存的窗口靠它刷新
+        // 「按设置算出来的界面」（如回复总结的按钮），不必等重建。
+        Changed?.Invoke();
+        return saved;
     }
+
+    /// <summary>
+    /// 设置刚写回磁盘。订阅方应<b>先比对自己关心的那个值</b>再决定要不要重绘 ——
+    /// 这个事件在一次「改个阈值」里同样会触发，无条件响应等于给每次点击都配一次整块重画。
+    /// </summary>
+    public static event Action? Changed;
 
     /// <summary>丢弃缓存，下次访问重新从磁盘读。切换数据根后应调用。</summary>
     public static void Reload() => _current = null;

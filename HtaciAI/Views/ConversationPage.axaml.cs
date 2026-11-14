@@ -128,12 +128,39 @@ public partial class ConversationPage : UserControl
 
     /// <summary>
     /// 保留时长。每次淘汰时现读设置，所以改设置立刻生效、不用重启。
-    /// 下限 1 分钟：设置里最小的档位就是 1 分钟，防住手改配置文件写进 0 或负数。
+    /// <b>0 = 不缓存</b>（返回 <see cref="TimeSpan.Zero"/>：切走即释放）；
+    /// 正数下限仍是 1 分钟，防住手改配置文件写进负数。
     /// </summary>
     private static TimeSpan CacheRetention()
-        => AppSettingsStore.Current.SessionCacheKeepForever
-            ? Timeout.InfiniteTimeSpan
-            : TimeSpan.FromMinutes(Math.Max(1, AppSettingsStore.Current.SessionCacheMinutes));
+    {
+        var settings = AppSettingsStore.Current;
+        if (settings.SessionCacheKeepForever) return Timeout.InfiniteTimeSpan;
+        if (settings.SessionCacheMinutes <= 0) return TimeSpan.Zero;
+
+        return TimeSpan.FromMinutes(Math.Max(1, settings.SessionCacheMinutes));
+    }
+
+    /// <summary>
+    /// 缓存关着（保留 0 分钟）时立刻收掉别的窗口，不等 30 秒一次的清扫器 ——
+    /// 「不缓存」要是切走之后还能从缓存切回来，就等于没生效。
+    ///
+    /// <b>正在显示的、以及还在跑任务的窗口不在此列</b>：前者由持有者登记挡住，
+    /// 后者由 <see cref="IsPinned"/> 挡住（见那里的注释，淘汰运行中的窗口会让同一个会话出现两个窗口）。
+    /// </summary>
+    private void TrimCacheIfDisabled()
+    {
+        if (CacheRetention() != TimeSpan.Zero) return;
+
+        foreach (var key in _viewCache.CollectExpired(DateTime.UtcNow, TimeSpan.Zero, IsPinned))
+            _viewCache.Evict(key);
+    }
+
+    /// <summary>交回本页持有的缓存登记，并按当前设置顺手收掉不再需要的窗口。</summary>
+    private void ReleaseHolder()
+    {
+        _viewCache.ReleaseHolder(holder: this);
+        TrimCacheIfDisabled();
+    }
 
     private void StartCacheSweeper()
     {
@@ -233,7 +260,7 @@ public partial class ConversationPage : UserControl
 
         if (ConversationDockHost.Instance.Find(sessionId) is { } docked)
         {
-            _viewCache.ReleaseHolder(this);
+            ReleaseHolder();
             _cacheKey = null;
             _showingDockPlaceholder = true;
             RightPanel.Content = CreateDockPlaceholder(docked);
@@ -341,7 +368,7 @@ public partial class ConversationPage : UserControl
         if (_cacheKey is not null)
         {
             _viewCache.Touch(_cacheKey, DateTime.UtcNow);
-            _viewCache.ReleaseHolder(this);
+            ReleaseHolder();
             RightPanel.Content = null;
         }
 
@@ -387,13 +414,20 @@ public partial class ConversationPage : UserControl
         // 打开会话就算已读：绿点只在「用户没在看这个会话」的时候才有意义
         ClearUnread(view!.SessionId);
 
+        // 同一件事：这个会话的提醒也该收掉了。用户已经把它打开看过了，
+        // 留着那张卡片只能让他再点一次关闭。
+        NotificationToast.DismissFor(view.SessionId);
+
         // 一个会话只能有一份窗口：缓存是共用的一份，这个窗口可能正挂在别的标签页上。
         // 先把它从原来的宿主摘下来，否则把它塞进本页的 ContentControl 会撞上「已有父级」。
         DetachFromOtherHost(view!);
 
-        // 登记「这个窗口在本页显示着」：别的标签页的淘汰器据此跳过它
-        _viewCache.ReleaseHolder(this);
+        // 登记「这个窗口在本页显示着」：别的标签页的淘汰器据此跳过它。
+        // 顺序是刻意的：先交回旧登记（此时顺手按「不缓存」设置收掉旧窗口），
+        // 再登记新窗口 —— 反过来的话 TrimCacheIfDisabled 会把刚要显示的这一个当成缓存里的闲置窗口扔掉。
+        _viewCache.ReleaseHolder(holder: this);
         _viewCache.Claim(key, this);
+        TrimCacheIfDisabled();
 
         _cacheKey = key;
         RightPanel.Content = view;
@@ -466,7 +500,7 @@ public partial class ConversationPage : UserControl
         {
             _activeSessionId = sessionId;
             _cacheKey = null;
-            _viewCache.ReleaseHolder(this);
+            ReleaseHolder();
             _showingDockPlaceholder = true;
             RightPanel.Content = CreateDockPlaceholder(docked);
             await ReloadAsync();
@@ -1207,7 +1241,7 @@ public partial class ConversationPage : UserControl
         _activeSessionId = null;
         _activeWorkspaceId = null;
         _cacheKey = null;             // 「新建」页不是某个会话的窗口，别让它挡住缓存淘汰
-        _viewCache.ReleaseHolder(this);
+        ReleaseHolder();
 
         var view = new NewChatView();
         view.SendRequested += OnNewChatSend;
@@ -1392,7 +1426,7 @@ public partial class ConversationPage : UserControl
             _activeSessionId = null;
             _activeWorkspaceId = null;
             _cacheKey = null;
-            _viewCache.ReleaseHolder(this);
+            ReleaseHolder();
             RightPanel.Content = EmptyHint("选择左侧会话，或点击「创建新会话」");
         }
 
@@ -1455,7 +1489,7 @@ public partial class ConversationPage : UserControl
             _activeSessionId = null;
             _activeWorkspaceId = null;
             _cacheKey = null;
-            _viewCache.ReleaseHolder(this);
+            ReleaseHolder();
             RightPanel.Content = EmptyHint("选择左侧会话，或点击「创建新会话」");
         }
 

@@ -50,6 +50,14 @@ public sealed class PluginStateRecord
     /// 换台机器、换个人用，顺序本来就该各自不同；写进 plugin.json 等于把用户的偏好钉死在插件里。
     /// </summary>
     public int? Order { get; set; }
+
+    /// <summary>
+    /// 最近一次 <b>成功加载</b> 时算出的插件文件指纹（见 <see cref="PluginFingerprint"/>）。
+    ///
+    /// <b>必须落盘</b>：它回答的是「内存里跑的那一份是什么」，跨进程才有意义 ——
+    /// 放在内存里的话，重启后每个插件都会被误报成「文件已更新」。
+    /// </summary>
+    public string? LoadedHash { get; set; }
 }
 
 /// <summary>

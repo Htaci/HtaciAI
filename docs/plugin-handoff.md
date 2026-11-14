@@ -1,7 +1,10 @@
 # 开发交接快照
 
 > 用途：上下文压缩 / 换人接手时，只读这一份就能接着干。
-> 最后更新：2026-10（M8 之后又按用户反馈改了一版插件页：去掉总开关、加安全警示条、
+> 最后更新：2026-11（M9 之后按 QQ 机器人插件提交的接口清单补了一轮 P0：
+> 用量与模型能力、工具集读写、交互桥、派发归属、工作区门面 —— 见第 9.5 节）
+>
+> 更早：2026-10（M8 之后又按用户反馈改了一版插件页：去掉总开关、加安全警示条、
 > 卡片直接排列、详情页换成 README + 版本号 + 能力标签 + 右上角开关；
 > 再之后加了 M9：会话视图借出 `conversation.dock` + 会话页右侧插槽 `conversation.sidebar`）
 
@@ -48,6 +51,12 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 | 插件能不能建窗口 / 插控件 | ✅ M4（`IPluginWindowHost` + `IUiExtensionRegistry`） |
 | 插件能不能提供工具给模型 | ✅ M7（`IToolRegistryApi` + `ToolSource.Plugin`） |
 | 插件能不能把某个会话的对话视图借到自己界面里 | ✅ M9（`IConversationDock` + `conversation.dock`） |
+| 插件能不能看会话用量 / 模型能力（窗口、视觉） | ✅ P0（`GetUsageAsync` + `GetModelInfoAsync`） |
+| 插件能不能给自己会话配工具 | ✅ P0（`ListAvailableToolsAsync` / `Get`/`SetSessionToolsAsync`） |
+| 没有窗口时审批与提问能不能问用户 | ✅ P0（`SetInteractionAsync` + `IPluginInteractionHost`） |
+| 插件能不能分辨「哪一轮是我派的」 | ✅ P0（`ChatEvent.TurnId` + `IsPluginInitiated`） |
+| 插件能不能往用户的工作空间派任务 | ✅ P0（`IWorkspaceFacade` + `workspace.delegate`） |
+| 插件能不能决定「任务跑完那条提醒」留多久 / 要不要弹 | ✅ P1（`IPluginNotifications` + `notice.control`） |
 | 清单能不能声明平台/前置/互斥 | ✅ M7（含拓扑加载、循环依赖、连带停用） |
 | 用户能不能在界面里看到开发文档 | ✅ M7（插件页小字入口 → `<数据根>/doc/`） |
 | 桌宠插件本体 | ⬜ M5（M2/M3/M4 已全部就绪） |
@@ -103,7 +112,7 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 | `IPluginContext` | `PluginId` `PluginDirectory` `Manifest` `HostVersion` `Log` `Storage` `Resources` |
 | `IPluginStorage` | `LoadText` / `SaveText`（**推荐**）+ `Load<T>` / `Save<T>`（会导致需重启） |
 | `PluginManifest` | `plugin.json` 显式字段绑定；`capabilities` 点分标识 |
-| `PluginCapabilities` | `prompt.contribute` `chat.observe` `chat.control` `ui.window` `ui.slot` `tools.provide` |
+| `PluginCapabilities` | `prompt.contribute` `chat.observe` `chat.control` `notice.control` `ui.window` `ui.slot` `tools.provide` |
 
 宿主侧 `HtaciAI/Services/Plugins/`：
 
@@ -126,7 +135,7 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 - 常规设置页新增「插件」卡片：总开关（切换即 `ReloadAsync`）、打开目录、运行状态
 - `App.OnFrameworkInitializationCompleted`：`ShutdownMode = OnMainWindowClose`；
   `ShutdownRequested` 改成「取消一次 → 收插件 → 收 MCP → 删运行标记 → 再 Shutdown」
-- 示例插件 `samples/HtaciAI.Plugin.Sample`（含 `plugin.json` 与 README）
+- 示例插件：独立仓库 `HtaciAI.Plugins` 的 `samples/HtaciAI.Plugin.Sample`（含 `plugin.json` 与 README）
 
 ### 6. 插件管理页（M6）
 
@@ -251,9 +260,15 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 | --- | --- |
 | `SendAsync(sessionId, text, ct)` | 用会话当前配置跑一轮，返回 `SessionSendResult`（`Sent` / `Busy` / `NotFound` / `NoModel` / `Failed`） |
 | `CancelAsync(sessionId)` | 等价于用户按「停止」，返回是否真的停了一轮 |
-| `SetPermissionModeAsync(sessionId, PluginPermissionMode)` | 改挡位并落库 |
-| `CompressAsync(sessionId)` | 等价于点「压缩」，返回是否真的压了 |
+| `SetPermissionModeAsync(sessionId, PluginPermissionMode)` | 改挡位并落库（**任意会话**，按用户选择不收紧，见 `qqbot-plugin-api-requests.md` 第八节） |
+| `CompressAsync(sessionId, int keepRecentTurns = 0)` | 等价于点「压缩」，返回是否真的压了。`keepRecentTurns` = 末尾保留几轮原文不压（0 = 全压），落点见 9.5 的 F' |
 | `GetRecentMessagesAsync(sessionId, take, ct)` | 最近 N 条快照（`SessionMessageSnapshot`），最多 500 |
+| `ListSessionsAsync` / `CreateSessionAsync` / `ListMySessionsAsync` / `DeleteSessionAsync` | 列会话、开自己的会话区、列自己的、删自己的 |
+| `GetUsageAsync(sessionId, ct)` | 累计输入/缓存/输出 + 往返次数 + **上下文占用与窗口**，只读库（P0） |
+| `GetModelInfoAsync(sessionId, ct)` | 模型能力：窗口、最大输出、`SupportsVision`、`SupportsThinking`、是否回退了默认模型（P0） |
+| `ListAvailableToolsAsync(ct)` | 可登记的全部工具（`PluginToolInfo`，带危险等级与来源）（P0） |
+| `GetSessionToolsAsync` / `SetSessionToolsAsync` | 读写会话工具集，**写入只认自己的插件会话**（P0） |
+| `SetInteractionAsync(sessionId, IPluginInteractionHost?)` | 登记/撤销交互桥，没窗口时代替界面接审批与提问（P0） |
 
 宿主实现 `HtaciAI/Services/Plugins/PluginSessionFacade.cs`：
 
@@ -294,6 +309,57 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 真实应用的 UI 线程有消息循环，路径本身与 `SessionNotifier` 用的是同一套写法。
 示例插件只确认「注入生效」并打日志，不主动发消息（每次启动都往会话塞一句会很打扰）。
 
+### 9.5 P0 追加：用量、模型、工具集、交互桥、派发归属、工作区
+
+来源是 `docs/qqbot-plugin-api-requests.md`（QQ 机器人插件提的清单），宿主侧全部落地。
+**契约细节看那份文档第八节，这里只记实现位置与踩点。**
+
+| 块 | 接口 | 宿主落点 |
+| --- | --- | --- |
+| A 用量 | `GetUsageAsync` + `SessionUsage`；`SessionSummary` 追加 `ContextUsed`/`ContextWindow` | `PluginSessionFacade.GetUsageCoreAsync`；新仓储方法 `ChatRepository.GetUsageMessagesAsync`（只捞带 usage 的行）；批量算法在 `Services/Plugins/PluginUsageReader.cs` |
+| B 模型能力 | `GetModelInfoAsync` + `SessionModelInfo` | `PluginSessionFacade.GetModelInfoCoreAsync`，视觉判定复用 `ConversationRuntime.SupportsVision`（已从 private 改 internal） |
+| C 工具集 | `ListAvailableToolsAsync` / `GetSessionToolsAsync` / `SetSessionToolsAsync` + `PluginToolInfo` | `PluginSessionFacade` + `ToolRegistry.Instance`；写入用「行里的 `PluginId`」判归属，不看 id 前缀 |
+| D 交互桥 | `SetInteractionAsync` + `IPluginInteractionHost`（新文件 `Plugin.Abstractions/IPluginInteractionHost.cs`） | 适配器 `Services/Plugins/PluginInteractionBridge.cs`；挂点 `ConversationRuntime.PluginInteraction` |
+| E 派发归属 | `ChatEvent.TurnId`（`string?`）+ `IsPluginInitiated` | `ChatEventBus.RuntimeHook.OnTurnEnded` 的 `ResolveTurnId`；`ConversationRuntime.IsPluginInitiatedRound` 来自 `ConversationTurnRequest.PluginInitiated` |
+| F 工作区 | 新接口 `IWorkspaceFacade` + `IPluginContext.Workspaces` + 能力 `workspace.delegate` | `Services/Plugins/PluginWorkspaceFacade.cs`；装配在 `PluginManager.BuildFacades` |
+| F' 压缩保留轮数（后补） | `CompressAsync(sessionId, int keepRecentTurns = 0)` | `ContextCompression.SliceForSummary(messages, keepRecentTurns)` + `HasCompressibleContent(messages, keepRecentTurns)` → `ConversationRuntime.CompressAsync(manual, keepRecentTurns, ct)` → `PluginSessionFacade.CompressCoreAsync` |
+
+**五条不给后来者踩的坑**
+
+1. **口径只能有一份**：原来 `TryGetContextUsage` 是 `ConversationRuntime` 的私有实现，
+   插件再算一遍百分比必然与界面漂开。已抽成 `Services/Conversations/ContextUsage.cs`
+   （`TryCompute` 按全量历史 / `TryComputeFromLatest` 按「新→旧」只读库），运行时与插件接口都调它。
+2. **查询不许拉运行时**：`Acquire + EnsureReadyAsync` 会读全量历史。`GetUsageAsync`、列表里的用量、
+   `ListAvailableToolsAsync` 全部只读库；只有真的要跑/改配置（`Send` / `SetSessionTools` /
+   `SetInteraction`）才进 UI 线程碰 runtime。
+3. **交互桥必须「窗口优先」**：桥挂在 `PluginInteraction` 上，取值处一律写成
+   `Interaction ?? PluginInteraction`（`ConversationRuntime.ActiveInteraction`）——
+   直接写成桥就会和界面的审批卡打架。改这三处（`AskUser` / `WaitForUser` / `ApprovalGate`）时别再退回 `Interaction`。
+4. **桥会吊住插件程序集**：桥里握着插件的对象，而 runtime 活得比插件久。
+   `PluginSessionFacade.Dispose` 里必须把已登记会话的 `PluginInteraction` 清空，
+   否则禁用插件后状态是「需重启」而不是「已禁用」（同第 10 节末尾那几个坑）。
+5. **`TurnId` 是字符串**：`chat_message.turn_id` 本来就是字符串（历史数据里还有 GUID），
+   做成 `int?` 会让老轮次对不上。`ChatEvent.TurnId = string?`，取值优先 `FinalAssistant.TurnId`，
+   失败/被停止的轮次退回历史最后一条消息的 `turn_id`。
+
+**多出来的两条定论**（`qqbot-plugin-api-requests.md` 第 7/8 条）：
+
+- 第 7 条「压缩保留最近 N 轮」**已做**，就是上表 F'。切点落在第 N 条 `user` 消息上
+  （与 `BuildWireHistory` 数轮次的口径一致），所以不会切出「有 tool 结果没有它的调用」的半轮；
+  可压内容不足 N 轮时返回 `false` 且什么都不压。界面的「压缩」仍传 0，行为不变。
+- 第 8 条「`PluginToolDefinition.TimeoutSeconds`」**已做**（2026-11 补上）：`int?`，`null` = 宿主默认
+  5 分钟、`0` = 一直等、`>0` = 秒数（上限 24 小时，负数按默认，两者都记 `PluginLog.Warn`）。
+  `PluginToolRegistry.Register` 落到 `ToolDefinition.TimeoutSeconds`，由
+  `ToolExecutorDispatcher.ResolveTimeoutSeconds` 统一生效；**工具页里用户单独配的时长优先于它**，
+  schema 里声明的 `timeout` 仍可让模型为单次抬高（取大者）。
+  但**等人仍然走 D 的交互桥** `WaitForUserAsync`（超时、提示、超时后回什么由插件自己定），
+  拿工具当「等人」的通道只会让模型看到一条假的「超时失败」。两条各管一件事。
+
+**没验证**：交互桥的真机链路（QQ 侧还没有桥的实现，只在宿主侧编译通过）；
+`SetSessionToolsAsync` 写入后下一轮请求体里真的出现新工具（要用假 OpenAI 服务 dump 请求体，
+与 `qqbot-plugin-api-requests.md` 第五节的验收办法一致）。
+`keepRecentTurns` 的切片同样没实测 —— 办法是把摘要请求体 dump 出来，断言最后 N 轮的原文不在里面。
+
 ### 10. `PromptComposer` + `IChatEventBus`（M2）
 
 **目标**：插件能往上下文里加东西（`prompt.contribute`）、能看会话流（`chat.observe`）。
@@ -305,7 +371,7 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 | --- | --- |
 | `IPromptRegistry` / `IPromptContributor` | `Add(contributor)` 登记；`Order` 决定追加顺序，`BuildAsync(PromptContext, ct)` 返回要追加的文本 |
 | `IChatEventBus` / `IChatEventSink` | `Subscribe(sink, filter)`；`OnEventAsync(ChatEvent, ct)` |
-| `ChatEvent` / `ChatEventKind` / `ChatEventFilter` | 一条事件带全部字段（按 `Kind` 分流）；过滤按 sessionId + 事件种类 |
+| `ChatEvent` / `ChatEventKind` / `ChatEventFilter` | 一条事件带全部字段（按 `Kind` 分流）；过滤按 sessionId + 事件种类。轮次结束类事件另带 `TurnId` / `IsPluginInitiated`（P0 追加） |
 
 宿主侧：
 
@@ -320,7 +386,7 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 | 东西 | 做法 | 为什么 |
 | --- | --- | --- |
 | 落点 | `ConversationRuntime.RunTurnAsync` 里原来那行 `Profile.BuildSystemPrompt` 换成 `PromptComposer.ComposeAsync` | 不把 profile 接口改成异步：它只是字符串拼接，改了要动接口、两个实现和「工作空间不能合流」的注释 |
-| 配额 | 每插件 4096 字、单轮合计 8192 字；超了截断 + `PluginLog.Warn`；单贡献者 500 ms 超时；抛异常只跳过它 | 这个入口能悄悄改变模型行为，必须既有上限又有可见性 |
+| 配额 | **无字符上限**（原先的每插件 4096 / 单轮合计 8192 截断已移除）；单贡献者 500 ms 超时；抛异常只跳过它 | 字符数上限挡不住真问题，真正限制上下文的是模型窗口；超时与异常才是稳定性问题 |
 | 来源标记 | 每段贡献前写 `<!-- plugin: id -->` | 出问题时一眼看出是谁写的 |
 | 挂载 | 注册表加 `RuntimeCreated` / `RuntimeRemoved`，总线订阅这两个事件转订阅 | runtime 是按需创建的，不挂就只能看见插件自己借过的会话 |
 | 合并 | 每 runtime 一份累积缓冲，50 ms `Timer` 冲一次；`Text` = 累积正文，`Delta` = 本次新增 | 空闲时一个 tick 都不该有；插件拿到累积文本才不用自己拼 |
@@ -338,12 +404,12 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 **已验证**（两套无头 harness，不建界面，本地假 OpenAI 服务）：
 
 - 上下文贡献：落在 system 末尾、带来源标记、字数被记到 `PluginInfo.ContributionChars`；
-  单插件超配额截断到 4096；合计超配额时后来者被跳过 / 截断；抛异常与 500 ms 超时都只是少一段内容，
-  这一轮照常发送成功
+  贡献不再截断（原「单插件超 4096 截断 / 合计超 8192 跳过」的两条验证已随配额一起移除）；
+  抛异常与 500 ms 超时都只是少一段内容，这一轮照常发送成功
 - 会话事件：合并后的增量拼接与最终回复**一字不差**；40 片突发只合并成 1 条事件；
   按 sessionId 过滤生效；退订后不再收到；runtime 被回收后重建仍能自动挂上；
   撤销（= 禁用插件）后贡献与事件同时停止
-- 端到端（真 `PluginManager` + 真 `samples/HtaciAI.Plugin.Sample`）：
+- 端到端（真 `PluginManager` + 真 `HtaciAI.Plugins` 仓库的 `samples/HtaciAI.Plugin.Sample`）：
   插件贡献进入 system、插件日志里出现「一轮开始 / 这一轮完成」、禁用后既不再贡献也不再收事件、
   字数清零，并且**禁用后仍是「已禁用」而不是「需重启」**（说明新门面没有吊住插件程序集）
 
@@ -433,7 +499,7 @@ cb47997  M4：窗口宿主 + 界面插槽 + 插件控件安全壳
 | 失败 | 返回 `PluginToolResult.Fail` 或抛异常 → 都变成一条失败结果回给模型 | 插件 bug 不能掀掉整轮对话 |
 | 撤销 | 单个 `IDisposable` 或整个门面 `Dispose`（禁用插件时自动） | 与会话里选着的 id 自动失联 |
 | 审批 | 走 `ToolExecutorDispatcher` 原有那条路（危险等级 + 权限档位） | 与内置工具完全一致，没有第二套规则 |
-| 超时 | 沿用默认 5 分钟；schema 里声明 `timeout` 则由模型给 | 复用已有守卫，插件不必自己写超时 |
+| 超时 | 默认 5 分钟；`PluginToolDefinition.TimeoutSeconds` 可按工具声明（`0` = 一直等，上限 24 小时），工具页里用户的配置优先；schema 里声明 `timeout` 则模型也能为单次抬高 | 复用 `ToolExecutorDispatcher` 那条守卫，插件不必自己写超时 |
 
 #### b) 清单的 `platforms` / `requires` / `conflicts`
 
@@ -626,6 +692,41 @@ M8 先把它从详情页挪到主页；**随后按用户反馈整张卡删掉了
 
 ---
 
+### 9.6 P1：任务提醒留多久、要不要弹（`IPluginNotifications` + `notice.control`）
+
+**问题**：插件派出去的一轮跑完，宿主会在右下角弹一条提醒 —— 之前是**一直留着**，只能由用户点关闭。
+桌宠那种「人就在电脑前」的场景无所谓；机器人（QQ / 微信）反过来：
+用户在手机上看结果，桌面浮窗一条条堆上去，最后叠满半个屏幕。
+
+**做法**：
+
+| 东西 | 做法 |
+| --- | --- |
+| 默认行为 | 自动收起：完成 8 秒、出错 10 秒；审批 / 提问 30 秒（这两类要人动手，给足反应时间）。鼠标停在上面时倒计时暂停，人一离开接着走 |
+| 契约 | 新文件 `Plugin.Abstractions/IPluginNotifications.cs`：`PluginNoticeMode`（`Auto` / `Persistent` / `Off`）+ `SetMode` |
+| 注入 | `IPluginContext.Notifications`，清单声明 `notice.control` 才不是 null（与其余门面同一条规则） |
+| 策略存哪 | `Services/Plugins/PluginNoticePolicyStore.cs`：插件级、只在内存；门面 `Dispose` 时清掉 |
+| 谁派的 | `ConversationTurnRequest.PluginId`（`PluginSessionFacade` 填自己的 id）→ `ConversationRuntime._noticePluginId` → `SessionNotifier.Notify(..., pluginId:)` |
+| 落点 | `SessionNotice.AutoDismissAfter` 带到 `NotificationToast`，它自己起 `DispatcherTimer`、悬停暂停 |
+
+**三条取舍**：
+
+1. **策略挂在插件上，不挂在每一轮上**：`SendAsync` 的签名保持不动。插件表达的是
+   「我这个插件希望怎么提醒」，不是「这一条结果特别重要」—— 后者会让每个调用点多一个参数，
+   而且真正需要「这条必须看见」的场合，插件自己会弹一个更好的东西。
+2. **不写盘**：这是「这次运行想怎么提醒」。插件自己的用户开关由插件存
+   （`GetDataDirectory()` / `Storage`），`InitializeAsync` 时重新声明一次就行，宿主不替它记。
+3. **`Off` 只关浮窗，不关未读**：会话列表与会话里的卡片照旧。浮窗只是「叫人回来」的手段，
+   结果本身从来没有只靠浮窗传达。
+
+**已验证**：`dotnet build HtaciAI/HtaciAI.csproj` 0 错误（8 个既有告警不变）；
+三个档位的分支（`Off` 提前返回、`Persistent` 不给超时、其余按类型给时长）按代码路径核对过；
+示例插件已声明 `notice.control` 并调用 `SetMode(Auto)` 作为抄写范本。
+**没验证**：真弹窗以后等 8 秒自动收起、悬停暂停的实际手感（要真实窗口 + 等待，没做无头测试）；
+插件声明 `Persistent` 后禁用 / 重启宿主的策略清理（策略在内存里，重启必然回到默认）。
+
+---
+
 ## 二、M0 踩过的坑（别再踩）
 
 ### 坑 1：`LoadFromAssemblyPath` 会锁死文件
@@ -726,7 +827,7 @@ M0 / M1 / M2 / M3 / M4 / M6 / M7 / M8 / M9 已完成，只剩 **M5（桌宠插�
 # 构建
 dotnet build HtaciAI/HtaciAI.csproj -t:Rebuild
 dotnet build HtaciAI.Desktop/HtaciAI.Desktop.csproj
-dotnet build samples/HtaciAI.Plugin.Sample/HtaciAI.Plugin.Sample.csproj -c Release
+dotnet build ..\HtaciAI.Plugins\samples\HtaciAI.Plugin.Sample\HtaciAI.Plugin.Sample.csproj -c Release
 
 # 装示例插件（<数据根> 见「设置 → 数据管理」）
 #   plugins/htaci.sample/  →  HtaciAI.Plugin.Sample.dll + plugin.json
@@ -746,3 +847,27 @@ dotnet build samples/HtaciAI.Plugin.Sample/HtaciAI.Plugin.Sample.csproj -c Relea
 - 崩溃归因措辞用「**疑似**」：宿主无法证明因果；面包屑为空时不归咎任何插件
 - `plugins/state.json` 归宿主独占，插件不许碰（崩溃后要读它决定这次不加载谁）
 - 文件换行：仓库里部分文件是 CRLF、部分是 LF，改动前先看一眼，别整篇转换
+
+### 14. 输入框插件工具栏 + 插件数据目录规范
+
+**两个真实需求**：
+1. 输入框底部那排按钮（附件 / 工具 / 技能 / MCP / 权限 / 更多）右边需要有插件的位置，
+   用一条竖线隔开，让人一眼分得出哪些是宿主自带的。内置浏览器插件要在这里显示「本会话开了几个网页」。
+2. 插件的数据得让**用户自己管得动**：跟插件放在一起，删插件目录 = 数据一起清掉。
+
+**做法**：
+
+| 东西 | 做法 |
+| --- | --- |
+| 新插槽 | `PluginSlots.ConversationInputToolbar`（`conversation.input.toolbar`），在 `ChatInputControl` 里紧跟「更多」按钮之后，横排 |
+| 分隔线 | `PluginToolbarDivider` 与插槽同生共死：插槽空时一起隐藏，不留一条孤零零的竖线 |
+| 自定义菜单 | 插槽里的控件由插件给，`Button` + `Flyout` 就是一个带菜单的入口 —— 宿主不规定菜单长什么样 |
+| 数据目录 | 新增 `IPluginContext.GetDataDirectory()`，返回 `<插件目录>/data` 并按需创建；文档里写成**推荐规范**：SQLite 库、缓存、导出文件一律放这里 |
+
+**为什么数据放插件目录（而不是宿主数据根）**：插件页「打开插件目录」一步就能到；
+清理 / 备份 / 整包换机器都是处理一个目录；删插件目录 = 插件与数据一起消失，不留孤儿。
+老的 `Storage`（`<数据根>/plugin-data/<id>/`）保留不动，但新插件不再推荐。
+
+**文档**：`PluginDocs` 第三章新增「插件数据目录（推荐做法）」小节（含 SQLite 例子），
+第六章插槽表加了新行，并补了一段「输入框工具栏 + 自己的菜单」的完整示例。
+第四章补了一句：`context.Prompts` 就是追加 system 提示词的唯一入口，只能追加、不能覆盖。

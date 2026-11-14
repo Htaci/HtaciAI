@@ -59,7 +59,18 @@ public sealed record PluginInfo(
     bool CrashSuspected,
     string? CrashLogPath,
     /// <summary>最近一次往 system 提示词里贡献了多少字（0 = 最近一次没有贡献）。</summary>
-    int ContributionChars)
+    int ContributionChars,
+    /// <summary>
+    /// 磁盘上的插件文件已经和正在运行的那一份不一样了（加载时记的哈希与现在不一致）。
+    /// 界面据此提示「插件文件更新」，并给出「重新加载」。
+    /// </summary>
+    bool UpdatePending,
+    /// <summary>
+    /// 插件目录里正被占用、无法覆盖的文件（通常是插件自己加载的原生 dll，比如
+    /// <c>WebView2Loader.dll</c>）。托管 dll 走字节流加载、随时可换；原生库被映射后不行，
+    /// 所以要把名字说出来，用户才知道是哪一个卡住了更新。
+    /// </summary>
+    string? LockedFile)
 {
     /// <summary>把 <see cref="State"/> 翻译成界面文案。</summary>
     public string StateText => State switch
@@ -78,3 +89,15 @@ public sealed record PluginInfo(
     /// <summary>是否需要在界面上显示「需重启」提示。</summary>
     public bool RequiresRestart => State == PluginRunState.NeedsRestart;
 }
+
+/// <summary>
+/// 「重新加载一个插件」的结果。
+///
+/// <b>为什么把「需要重启」单列一个状态</b>：它不是失败（插件已经停下来了），
+/// 也不是成功（新版本没跑起来），处置办法只有一条 —— 重启程序。
+/// 混进错误文案里，用户会去反复点「重新加载」。
+/// </summary>
+/// <param name="Success">新版本是否已经跑起来了。</param>
+/// <param name="NeedsRestart">是否因为卸不掉而必须重启程序。</param>
+/// <param name="Error">失败原因（给人看的一句话）。</param>
+public sealed record PluginReloadResult(bool Success, bool NeedsRestart, string? Error);

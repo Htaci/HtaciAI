@@ -3,12 +3,12 @@
         xmlns:controls="clr-namespace:HtaciAI.Controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="480" d:DesignHeight="560"
+        mc:Ignorable="d" d:DesignWidth="480" d:DesignHeight="680"
         x:Class="HtaciAI.Views.Settings.ProviderSettingsWindow"
         Icon="/Assets/logo.ico"
         Title="服务商设置"
         Width="480" MinWidth="480" MaxWidth="480"
-        Height="560" MinHeight="560"
+        Height="680" MinHeight="680"
         Background="#F7F8FA"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
@@ -42,7 +42,8 @@
                    Margin="24,18,24,6"/>
 
         <controls:SmoothScrollViewer Grid.Row="1"
-                                     Margin="24,8,24,8"
+                                     Classes="thin-scrollbar"
+                                     Margin="24,8,18,8"
                                      HorizontalScrollBarVisibility="Disabled"
                                      VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="12">
@@ -55,8 +56,32 @@
                              Height="34"
                              Padding="10,0"
                              CornerRadius="6"
+                             Classes="center-text"
                              PlaceholderText="如：深度求索"/>
-                    <TextBlock Text="显示在服务商卡片、模型选择器与模型表格的归属里。"
+                    <TextBlock Text="显示在服务商卡片、模型选择器与模型表格的归属里，不能与已有服务商重名。"
+                               FontSize="11"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="图标"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <Grid ColumnDefinitions="*,Auto">
+                        <ComboBox x:Name="IconCombo"
+                                  Height="34"
+                                  CornerRadius="6"
+                                  HorizontalAlignment="Stretch"
+                                  VerticalContentAlignment="Center"/>
+                        <!-- 预览：和卡片上的头像是同一个控件，选完立刻能看到实际效果 -->
+                        <Border x:Name="IconPreviewHost"
+                                Grid.Column="1"
+                                Margin="10,0,0,0"
+                                VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBlock Text="设为「首字母头像」时用名称首字 + 稳定底色生成，不读图标文件。"
                                FontSize="11"
                                Foreground="#9CA3AF"
                                TextWrapping="Wrap"/>
@@ -67,8 +92,11 @@
                                FontSize="13"
                                FontWeight="SemiBold"
                                Foreground="#374151"/>
-                    <ComboBox x:Name="ThinkingCombo" Height="34" CornerRadius="6"/>
-                    <TextBlock Text="think：thinking: enabled/disabled；enable_thinking：true/false；reasoning_effort：只用强度控制；none：不支持该字段。仅对 OpenAI 协议生效——Responses 与 LM Studio 固定走推理强度。"
+                    <ComboBox x:Name="ThinkingCombo"
+                              Height="34"
+                              CornerRadius="6"
+                              VerticalContentAlignment="Center"/>
+                    <TextBlock Text="think：thinking: enabled/disabled；enable_thinking：true/false；reasoning_effort：只用强度控制；none：不支持该字段。仅对 OpenAI 协议生效——Responses 与 LM Studio 固定走推理强度，Anthropic 走自己的 thinking 配置，都不看这一项。"
                                FontSize="11"
                                Foreground="#9CA3AF"
                                TextWrapping="Wrap"/>
@@ -101,6 +129,13 @@
         <Grid Grid.Row="2"
               ColumnDefinitions="*,Auto,Auto"
               Margin="24,8,24,18">
+            <!-- 校验失败的提示放在保存按钮左边（原先临时顶到标题上，标题一换就看不出这是哪个窗口了） -->
+            <TextBlock x:Name="ErrorText"
+                       FontSize="12"
+                       Foreground="#DC2626"
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap"
+                       Margin="0,0,12,0"/>
             <Button Grid.Column="1"
                     Height="34"
                     Padding="20,0"

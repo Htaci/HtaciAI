@@ -414,6 +414,12 @@ public sealed class ChatEventBus
                 Text = outcome.Result?.Error
                        ?? (outcome.StoppedByUser ? "这一轮被停止了。" : null),
                 Status = outcome.StoppedByUser ? "stopped" : success ? "completed" : "failed",
+
+                // 这一轮属于哪次派发：插件「派一个任务 → 等它跑完」全靠它认领。
+                // 只看会话 id 是不够的 —— 同一会话上可能同时有用户开着窗口在聊，
+                // 插件也可能连着派了两个任务，结果会串到别人身上。
+                TurnId = ResolveTurnId(outcome),
+                IsPluginInitiated = _runtime.IsPluginInitiatedRound,
                 Timestamp = Now(),
             });
 
@@ -422,6 +428,14 @@ public sealed class ChatEventBus
 
             return Task.CompletedTask;
         }
+
+        /// <summary>
+        /// 这一轮的 turn_id：优先取成功收尾的那条 AI 消息（与 <c>chat_message.turn_id</c> 一致），
+        /// 失败 / 被停止那几轮退回历史里最后一条消息的 —— 那些轮次同样带着同一个 turn_id。
+        /// </summary>
+        private string? ResolveTurnId(TurnOutcome outcome)
+            => outcome.Result?.FinalAssistant?.TurnId
+               ?? _runtime.Messages.LastOrDefault()?.TurnId;
 
         /// <summary>清空累积状态（新一轮开始、运行时被回收时调）。</summary>
         public void Reset()

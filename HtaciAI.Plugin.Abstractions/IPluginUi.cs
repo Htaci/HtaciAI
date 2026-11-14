@@ -121,6 +121,44 @@ public sealed class LauncherCard
 }
 
 /// <summary>
+/// 插槽控件拿到的上下文：<b>它此刻显示在哪个位置、属于哪个会话</b>。
+///
+/// <b>为什么需要它</b>：同一个插槽会被多个会话各创建一份（会话 A 和会话 B 各有一个输入框）。
+/// 插件要是不知道「我这一份是哪个会话的」，就只能把「跟会话相关」的按钮做成全局的 ——
+/// 那样用户点开菜单也看不出哪个是当前会话的、点了到底给了谁。
+///
+/// <b>怎么拿</b>：用 <see cref="Find"/> 从你的控件往上找。
+/// 宿主把它放在插槽外面那层 <c>PluginControlHost</c> 的 <c>DataContext</c> 上，
+/// 所以 <b>你只要没有覆盖自己的 DataContext，直接读 DataContext 也能拿到</b>；
+/// 不覆盖别人的东西也更好 —— 但覆盖了也别慌，<see cref="Find"/> 照样能找到。
+///
+/// <b>会话 id 可能为 null</b>：新建会话页那种「还没有会话」的界面，以及
+/// <c>newtab.cards</c> 这类与会话无关的插槽。此时把「需要会话的功能」置灰并说明原因，
+/// <b>不要</b>瞎猜一个会话 —— 那等于把授权交给一个用户没指定的地方。
+/// </summary>
+public sealed record PluginSlotContext(string SlotId, string? SessionId)
+{
+    /// <summary>
+    /// 从 <paramref name="control"/> 往上找最近的 <see cref="PluginSlotContext"/>，找不到返回 null。
+    /// <b>在 UI 线程调用</b>（它要读可视树）。
+    /// </summary>
+    public static PluginSlotContext? Find(Avalonia.Controls.Control? control)
+    {
+        for (var node = control; node is not null;)
+        {
+            if (node.DataContext is PluginSlotContext context) return context;
+
+            // 先走可视父（真实布局树），再退回逻辑父：
+            // 有的控件（模板化出来的那些）只在其中一条链上挂着，只走一条会漏。
+            node = Avalonia.VisualTree.VisualExtensions.GetVisualParent(node) as Avalonia.Controls.Control
+                   ?? node.Parent as Avalonia.Controls.Control;
+        }
+
+        return null;
+    }
+}
+
+/// <summary>
 /// 宿主提供的插槽 id。<b>用常量而不是自由字符串</b>：
 /// 拼错一个字符就永远插不进去，而且没有任何报错能提示你。
 /// </summary>
@@ -134,6 +172,19 @@ public static class PluginSlots
 
     /// <summary>输入框左侧的侧边栏（竖排，适合放一排小按钮）。</summary>
     public const string ConversationInputSide = "conversation.input.side";
+
+    /// <summary>
+    /// 输入框底部工具栏里、内建按钮（附件 / 工具 / 技能 / MCP / 权限 / 更多）的右侧，
+    /// 与内建按钮之间有一条竖线分隔。<b>横向排列</b>。
+    ///
+    /// 适合放「与当前会话相关」的入口：一张图标按钮，点开是插件自己的菜单
+    /// （<see cref="Avalonia.Controls.Control"/> 交给你了，用 <c>Button.Flyout</c> 就够）。
+    /// 内置浏览器插件就是在这里显示「本会话开了几个网页」并让人随手切换。
+    ///
+    /// <b>要按会话区分内容时读 <see cref="PluginSlotContext"/></b>（<c>PluginSlotContext.Find(this)</c>），
+    /// 里面的 <c>SessionId</c> 就是当前这个输入框所属的会话；新建会话页上它是 <c>null</c>。
+    /// </summary>
+    public const string ConversationInputToolbar = "conversation.input.toolbar";
 
     /// <summary>会话列表下方的剩余空间（左侧导航底部）。</summary>
     public const string SidebarBelow = "sidebar.below";
@@ -150,7 +201,7 @@ public static class PluginSlots
     /// <summary>全部插槽 id，供插件页展示与文档引用。</summary>
     public static IReadOnlyList<string> All { get; } = new[]
     {
-        NewTabCards, ConversationHeader, ConversationInputSide, SidebarBelow, MainWindowTitlebarRight,
-        ConversationSidebar,
+        NewTabCards, ConversationHeader, ConversationInputSide, ConversationInputToolbar, SidebarBelow,
+        MainWindowTitlebarRight, ConversationSidebar,
     };
 }

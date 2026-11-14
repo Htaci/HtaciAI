@@ -72,6 +72,10 @@ public sealed class RetryingChatClient : IChatClient
     {
         for (var attempt = 1; ; attempt++)
         {
+            // 统计流水要能看出「这是同一轮的第二次尝试」：记在 options 上，由内层的
+            // ApiRecordingChatClient 读走（它每次调用都会落一行，失败的尝试也留痕）。
+            if (options.ApiCall is { } apiCall) apiCall.Attempt = attempt;
+
             // 本次尝试往界面里送过什么。emitted 决定「还能不能重来」，
             // 两个缓冲用来在放弃时把已生成的内容交还给上层（见 ChatStreamException）。
             var emitted = false;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -12,6 +13,7 @@ using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services.Attachments;
+using HtaciAI.Services.Network;
 using HtaciAI.Services.ScriptRuntimes;
 using HtaciAI.Services.Skills;
 using HtaciAI.Services.Storage;
@@ -57,6 +59,13 @@ public sealed class BuiltinToolContext
     /// 不支持时 view_image 直接返回错误，让模型自己知道看不了图并继续。
     /// </summary>
     public bool SupportsVision { get; set; }
+
+    /// <summary>
+    /// 派发子 Agent。为 null 时 task 工具直接报不可用 ——
+    /// 只有拿到「父会话的配置快照与交互宿主」的那一侧（<c>ConversationRuntime</c>）才能提供它，
+    /// 插件在别处调工具时本来也不该凭空派发出一个会话。
+    /// </summary>
+    public Func<Subagents.SubagentTaskRequest, CancellationToken, Task<Subagents.SubagentTaskResult>>? RunSubagent { get; set; }
 
     /// <summary>把入参（可为相对路径）解析为绝对路径；空入参返回空串。</summary>
     public static string ResolvePath(BuiltinToolContext ctx, string? path)
@@ -138,7 +147,7 @@ public sealed class BuiltinToolContext
 /// </summary>
 public sealed class BuiltinToolExecutor
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private static HttpClient Http => HttpClientProvider.Get(TimeSpan.FromSeconds(30));
     private const double MaxFileBytes = 1024 * 1024; // 单文件搜索上限 1MB
 
     public async Task<ToolExecution> ExecuteAsync(ToolDefinition tool, ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
@@ -150,7 +159,7 @@ public sealed class BuiltinToolExecutor
         {
             return tool.Name switch
             {
-                "bash" => await RunBashAsync(call, ctx, ct),
+                "bash" => await RunBashAsync(tool, call, ctx, ct),
                 "read" => Read(call, ctx),
                 "edit" => await EditAsync(call, ctx),
                 "write" => await WriteAsync(call, ctx),
@@ -162,6 +171,7 @@ public sealed class BuiltinToolExecutor
                 "ask_user_question" => await AskUserQuestionAsync(call, ctx, ct),
         "ask_user_continue" => await AskUserContinueAsync(call, ctx, ct),
                 "view_image" => ViewImage(call, ctx),
+                BuiltinTools.TaskToolName => await RunTaskAsync(call, ctx, ct),
                 BuiltinTools.CreateToolName => await CreateToolAsync(call),
                 BuiltinTools.CreateSkillName => await CreateSkillAsync(call),
                 "invalid" => Invalid(call),
@@ -180,49 +190,92 @@ public sealed class BuiltinToolExecutor
         }
     }
 
+    // ---- task（派发子 Agent） ----
+
+    /// <summary>
+    /// 解析 task 的入参并交给宿主去跑。<b>这里不碰会话</b>：
+    /// 子会话的创建、配置收紧、runtime 借出全在 <see cref="Subagents.SubagentRunner"/> 里，
+    /// 工具这一层只管参数与结果形状 —— 否则「哪些工具算安全」和「怎么继承权限」会混进同一个文件。
+    /// </summary>
+    private static async Task<ToolExecution> RunTaskAsync(ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
+    {
+        if (ctx.RunSubagent is null)
+            return ToolExecution.Fail("当前环境不支持派发子 Agent（没有会话上下文）");
+
+        var agent = BuiltinToolContext.GetArg(call, "agent");
+        if (string.IsNullOrWhiteSpace(agent))
+            return ToolExecution.Fail("缺少 agent 参数：要派给哪个子 Agent");
+
+        var prompt = BuiltinToolContext.GetArg(call, "prompt");
+        if (string.IsNullOrWhiteSpace(prompt))
+            return ToolExecution.Fail("缺少 prompt 参数：子 Agent 看不到本会话历史，必须把任务写全");
+
+        var request = new Subagents.SubagentTaskRequest(
+            agent.Trim(),
+            prompt,
+            BuiltinToolContext.GetArg(call, "session"),
+            BuiltinToolContext.GetIntArg(call, "max_turns"));
+
+        var result = await ctx.RunSubagent(request, ct);
+
+        // 失败也走 Ok/失败两种形状：失败时主 Agent 需要读到原因才能换做法，
+        // 所以把文本原样交给它（ToolExecution.Fail 会把 Error 作为工具结果回给模型）。
+        return result.Success ? ToolExecution.Ok(result.Text) : ToolExecution.Fail(result.Text);
+    }
+
     // ---- bash ----
 
-    private static async Task<ToolExecution> RunBashAsync(ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
+    private static async Task<ToolExecution> RunBashAsync(
+        ToolDefinition tool, ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
     {
         var command = BuiltinToolContext.GetArg(call, "command") ?? "";
         if (string.IsNullOrWhiteSpace(command))
             return ToolExecution.Fail("缺少 command 参数");
 
         var workdir = BuiltinToolContext.GetArg(call, "workdir");
-        var timeout = BuiltinToolContext.GetIntArg(call, "timeout") ?? 60;
+
+        // 命令自己等多久：入参（模型为这一次申请）> 工具页配的值（0 = 一直等）> 60 秒。
+        // 分派器那层还有一道更外层的守卫，两处取同一个值，先触发的一定是这条更具体的。
+        var timeout = BuiltinToolContext.GetIntArg(call, "timeout")
+                      ?? tool.TimeoutSeconds
+                      ?? 60;
 
         var psi = new ProcessStartInfo
         {
             UseShellExecute = false,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
 
+        // 会弹系统窗口的命令直接拒掉：这类窗口是模态的，ShellExecute 不返回、cmd 不返回，
+        // 工具就一直卡着（超时也救不了，框还在桌面上等用户点确定）。见 ShellEnvironment.RejectGuiCommand。
+        if (ShellEnvironment.RejectGuiCommand(command) is { } rejection)
+            return ToolExecution.Fail(rejection);
+
         // 用 ArgumentList 传递参数，避免引号/空格被二次解析。
+        //
+        // 执行器由「环境配置 → 命令行工具」决定（默认 cmd.exe）。命令开头自己点名了
+        // powershell / pwsh 的仍然按它走：模型知道在 cmd 里要显式调用别的 shell 时不会套两层。
         var trimmed = command.TrimStart();
-        if (OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows() &&
+            (trimmed.StartsWith("powershell", StringComparison.OrdinalIgnoreCase) ||
+             trimmed.StartsWith("pwsh", StringComparison.OrdinalIgnoreCase)))
         {
-            if (trimmed.StartsWith("powershell", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("pwsh", StringComparison.OrdinalIgnoreCase))
-            {
-                psi.FileName = "powershell";
-                psi.ArgumentList.Add("-NoProfile");
-                psi.ArgumentList.Add("-Command");
-                psi.ArgumentList.Add(command);
-            }
-            else
-            {
-                psi.FileName = "cmd.exe";
-                psi.ArgumentList.Add("/c");
-                psi.ArgumentList.Add(command);
-            }
+            psi.FileName = trimmed.StartsWith("pwsh", StringComparison.OrdinalIgnoreCase) ? "pwsh" : "powershell";
+            psi.ArgumentList.Add("-NoProfile");
+            // 需要确认 / 读输入时立即失败，不留在提示上等人（子进程没有窗口，人看不见它在等）
+            psi.ArgumentList.Add("-NonInteractive");
+            // 走 base64：模型写的命令里可能带着引号，-Command 那条路会被命令行转义吃掉
+            psi.ArgumentList.Add("-EncodedCommand");
+            psi.ArgumentList.Add(Convert.ToBase64String(Encoding.Unicode.GetBytes(
+                ShellEnvironment.PowerShellPrefix + command)));
         }
         else
         {
-            psi.FileName = "/bin/bash";
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(command);
+            // 各 shell 的拼法不同（cmd 不能走 ArgumentList），交给 EffectiveShell 自己装
+            ShellEnvironment.Resolve().Configure(psi, command);
         }
 
         if (!string.IsNullOrWhiteSpace(workdir))
@@ -239,11 +292,23 @@ public sealed class BuiltinToolExecutor
         if (!p.Start())
             return ToolExecution.Fail($"无法启动进程：{psi.FileName}");
 
-        var stdoutTask = p.StandardOutput.ReadToEndAsync();
-        var stderrTask = p.StandardError.ReadToEndAsync();
+        // stdin 立刻关掉：子进程既没有窗口也没有人守着，任何「等你敲一下」的东西
+        // （pause / choice / Read-Host / git 要账号）都拿到 EOF 立刻失败，而不是把这一轮吊死。
+        if (psi.RedirectStandardInput)
+        {
+            try { p.StandardInput.Close(); } catch { /* 已退出则忽略 */ }
+        }
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, timeoutSec)));
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cts.Token);
+        var stdoutTask = ReadTextAsync(p.StandardOutput);
+        var stderrTask = ReadTextAsync(p.StandardError);
+
+        // timeoutSec <= 0 表示「一直等」：不建计时器，只跟随用户停止。
+        using var cts = timeoutSec > 0
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec))
+            : null;
+        using var linked = cts is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : CancellationTokenSource.CreateLinkedTokenSource(ct, cts.Token);
 
         try
         {
@@ -261,7 +326,9 @@ public sealed class BuiltinToolExecutor
         {
             try { p.Kill(entireProcessTree: true); } catch { /* 已退出则忽略 */ }
             await TryDrainAsync(stdoutTask, stderrTask);
-            return ToolExecution.Fail($"命令执行超时（>{timeoutSec}s）");
+            return ToolExecution.Fail(
+                $"命令执行超时（>{timeoutSec}s）。常见原因：在等输入、或弹出了系统窗口等人点确定、" +
+                "或本身就是常驻进程（那样请显式设更大的 timeout）");
         }
 
         var stdout = await stdoutTask;
@@ -283,10 +350,64 @@ public sealed class BuiltinToolExecutor
         return err.Length > 0 ? err : (outl.Length > 0 ? outl : "无输出");
     }
 
+    /// <summary>
+    /// 读子进程的输出并解成文本。**不能直接用 StreamReader 的默认编码**：.NET 默认按 UTF-8 解，
+    /// 而 cmd 的内建命令（<c>dir</c> / <c>echo</c> / <c>findstr</c>）在中文系统上按 GBK 输出 ——
+    /// 含中文的文件名与提示会整片变成 U+FFFD，模型看到的就是一串乱码路径，接着按乱码去拼命令。
+    /// 这里先按<b>严格</b> UTF-8 试，不合法再按系统 OEM 代码页解，两头的输出都能读对。
+    /// </summary>
+    private static async Task<string> ReadTextAsync(StreamReader reader)
+    {
+        using var buffer = new MemoryStream();
+        await reader.BaseStream.CopyToAsync(buffer).ConfigureAwait(false);
+        return DecodeOutput(buffer.ToArray());
+    }
+
+    private static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
+
+    private static string DecodeOutput(byte[] bytes)
+    {
+        if (bytes.Length == 0) return "";
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            // 不是合法 UTF-8：当作系统本地编码（中文 Windows 上是 GBK / 936）
+            try
+            {
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+                var page = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
+                return Encoding.GetEncoding(page > 0 ? page : 936).GetString(bytes);
+            }
+            catch
+            {
+                return Encoding.UTF8.GetString(bytes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 进程杀掉之后把两条流收尾，但<b>不能无限等</b>：孙进程还攥着管道时
+    /// <c>ReadToEndAsync</c> 永远不完成，那「超时」就变成「还是卡着」——只等 2 秒，拿不到就放弃。
+    /// </summary>
     private static async Task TryDrainAsync(Task<string> a, Task<string> b)
     {
-        try { await a; } catch { }
-        try { await b; } catch { }
+        var both = Task.WhenAll(a, b);
+        try
+        {
+            await both.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // 超时 / 流已断：结果反正不要了
+        }
+        finally
+        {
+            // 丢掉的那个 WhenAll 之后可能异常，观察掉，别留成未观察异常
+            _ = both.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+        }
     }
 
     // ---- read ----

@@ -82,6 +82,35 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     private readonly Dictionary<string, int> _compressionCovered = new();
 
     /// <summary>
+    /// 已经画到界面上的「继续」按钮，按轮次记着。
+    ///
+    /// 为什么需要这份登记：按钮是不是该出现，是在建操作栏那一刻问 <see cref="ConversationRuntime.IsTurnResumable"/>
+    /// 定下来的；而操作栏一旦建好就没人再看它一眼。于是「这一轮被停止 → 出现继续按钮 → 用户接着聊了下一轮」
+    /// 之后，那颗按钮会一直挂在旧那一轮下面，看起来像还能点。这里登记下来，历史一变就回头复核一遍。
+    /// </summary>
+    private readonly List<(string TurnId, Button Button)> _continueButtons = new();
+
+    /// <summary>
+    /// 每轮操作栏上「总结 / 已总结」那个槽位。留着是为了设置一改就能就地重填 ——
+    /// 与 <see cref="_continueButtons"/> 同一个理由：槽位建好之后再没人回头看它。
+    /// </summary>
+    private readonly List<(string TurnId, StackPanel Slot)> _summarySlots = new();
+
+    /// <summary>
+    /// 每轮的操作栏（含 Tokens 汇总），按轮次记着。
+    ///
+    /// 需要它是因为「继续」会把整条链的操作栏收到最后一段上：前一段那一排按钮已经画在界面上了，
+    /// 光靠建控件时的判断没法把它收走（那一刻这轮还是末尾）。于是点「继续」时按轮次把它隐藏掉。
+    /// </summary>
+    private readonly Dictionary<string, Control> _turnOpsRows = new();
+
+    /// <summary>正在总结的轮次：槽位当场显示「正在总结…」，而不是另找一处提示。</summary>
+    private readonly HashSet<string> _summarizingTurns = new(StringComparer.Ordinal);
+
+    /// <summary>总结失败的轮次与原因。重新点总结时清掉；只影响槽位里那行提示。</summary>
+    private readonly Dictionary<string, string> _summaryErrors = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// 已渲染窗口的起始分组下标。0 = 最早的分组也已渲染（没有更早的可加载了）。
     /// </summary>
     private int _firstRenderedGroup;
@@ -236,6 +265,15 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     /// fire-and-forget」的两种时序，顺带消除后者两路并发的竞态。
     /// </summary>
     public async Task InitializeAsync()
+    {
+        // 插件工具栏要按会话区分内容（「这个窗口共享给了哪个会话」），
+        // 所以会话 id 必须在插件控件重建之前交过去。
+        Input.SessionId = Profile.State.SessionId;
+
+        await InitializeCoreAsync();
+    }
+
+    private async Task InitializeCoreAsync()
     {
         if (_initialized) return;
         _initialized = true;
@@ -530,7 +568,12 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     private void OnMessageInserted(ChatMessage m)
     {
         if (m.Role == "user")
+        {
             AddMessage(m);
+
+            // 用户开了新一轮：上一轮那颗「继续」从此不该再出现（它已经不是末尾了）
+            RefreshContinueButtons();
+        }
         else if (m.Role == "assistant")
         {
             IndexToolCallInputs(m);
@@ -762,9 +805,243 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         }
     }
 
-    /// <summary>压缩记录在消息流里的呈现：一条分割线 + 可展开的摘要卡。</summary>
-    private Control CreateCompressionDivider(ChatMessage message, int covered)
+    // ---- 消息流末尾的临时状态行（压缩中 / 总结中） ----
+
+    /// <summary>消息流末尾那一行临时状态。null = 没有。</summary>
+    private Control? _statusRow;
+
+    /// <summary>状态行的自动消失计时（只有「总结失败」这类结论性提示才用）。</summary>
+    private DispatcherTimer? _statusRowTimer;
+
+    /// <summary>
+    /// 在消息流末尾放一行临时状态。
+    ///
+    /// <b>为什么不用输入框的提示行</b>：压缩与总结都是发生在「历史」上的事，
+    /// 用户此刻看的是对话本身 —— 提示放在输入框工具栏上，眼睛根本不在那儿。
+    /// 放在消息流末尾则正好是它们将要产生结果的位置（压缩记录就是追加在末尾的）。
+    /// </summary>
+    private void ShowStatusRow(Control row, TimeSpan? autoHide = null)
     {
+        HideStatusRow();
+
+        _statusRow = row;
+        MessagesPanel.Children.Add(row);
+
+        if (autoHide is { } delay)
+        {
+            _statusRowTimer = new DispatcherTimer { Interval = delay };
+            _statusRowTimer.Tick += (_, _) => HideStatusRow();
+            _statusRowTimer.Start();
+        }
+
+        ScrollToEnd();
+    }
+
+    private void HideStatusRow()
+    {
+        _statusRowTimer?.Stop();
+        _statusRowTimer = null;
+
+        if (_statusRow is not { } row) return;
+        _statusRow = null;
+
+        // 面板可能已经整块重绘过（那时这行早就随控件树一起没了）
+        if (row.Parent is Panel panel) panel.Children.Remove(row);
+    }
+
+    /// <summary>
+    /// 把状态行挪回末尾。期间追加的任何消息块都排在它后面，
+    /// 看上去就像「状态已经过去了、后面才是新的内容」。
+    /// </summary>
+    private void BringStatusRowToEnd()
+    {
+        if (_statusRow is not { } row) return;
+        if (row.Parent is not Panel panel)
+        {
+            _statusRow = null;
+            return;
+        }
+
+        if (panel.Children.Count > 0 && ReferenceEquals(panel.Children[^1], row)) return;
+
+        panel.Children.Remove(row);
+        panel.Children.Add(row);
+    }
+
+    /// <summary>
+    /// 一条分割线形态的状态行（用于「正在压缩上下文」）。
+    /// 视觉与 <see cref="CompressedContextCard"/> 那条一致，只是不可点 —— 还没有摘要可展开。
+    /// </summary>
+    private static Control CreateDividerStatusRow(string text)
+    {
+        var line = new SolidColorBrush(Color.Parse("#E5E7EB"));
+
+        var label = new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,*"),
+            Margin = new Thickness(6, 0),
+        };
+
+        grid.Children.Add(new Rectangle
+        {
+            Height = 1,
+            Fill = line,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0),
+        });
+        grid.Children.Add(label);
+        Grid.SetColumn(label, 1);
+        grid.Children.Add(new Rectangle
+        {
+            Height = 1,
+            Fill = line,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+        });
+        Grid.SetColumn(grid.Children[^1], 2);
+
+        return new Border
+        {
+            Height = 30,
+            Margin = new Thickness(20, 2, 20, 2),
+            Child = grid,
+        };
+    }
+
+
+    /// <summary>「继续中断的任务」分界线：把「继续」接出来的那一段接回它承接的那一轮。</summary>
+    ///
+    /// <b>为什么不是模型头像</b>：这一段本来就是同一轮的后半截（只是中间被停止过），
+    /// 再画一个头像等于告诉用户「这是另一轮新的回复」。它需要的只是一个「这里断过一次」的标记，
+    /// 以及点开能看到断在哪 —— 原因由 runtime 按这一轮最后一条消息的形状推出来。
+    /// </summary>
+    private Control CreateContinuationDivider(ChatMessage first)
+    {
+        var reason = _runtime.DescribeInterruption(first.ContinuedFrom)
+                     ?? "没有记录到中断原因（这一段可能是升级前留下的）。";
+
+        var line = new SolidColorBrush(Color.Parse("#E5E7EB"));
+        var labelBrush = new SolidColorBrush(Color.Parse("#9CA3AF"));
+        var hoverBrush = new SolidColorBrush(Color.Parse("#374151"));
+
+        var play = new TextBlock
+        {
+            Text = ContinueIcon,
+            FontFamily = AppFonts.Icons,
+            FontSize = 11,
+            Foreground = labelBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+        var label = new TextBlock
+        {
+            Text = "继续中断的任务",
+            FontSize = 12,
+            Foreground = labelBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var chevron = new TextBlock
+        {
+            Text = "\uF2A4",                     // ChevronDown
+            FontFamily = AppFonts.Icons,
+            FontSize = 10,
+            Foreground = labelBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+        };
+        var caption = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { play, label, chevron },
+        };
+
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,*"),
+            Margin = new Thickness(6, 0),
+        };
+        grid.Children.Add(new Rectangle
+        {
+            Height = 1,
+            Fill = line,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0),
+        });
+        grid.Children.Add(caption);
+        Grid.SetColumn(caption, 1);
+        var rightLine = new Rectangle
+        {
+            Height = 1,
+            Fill = line,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+        };
+        grid.Children.Add(rightLine);
+        Grid.SetColumn(rightLine, 2);
+
+        // 展开区：断在哪。默认收起 —— 分界线只是路标，不该替用户占掉一屏。
+        var detail = new Border
+        {
+            IsVisible = false,
+            CornerRadius = new CornerRadius(8),
+            Background = new SolidColorBrush(Color.Parse("#F9FAFB")),
+            Padding = new Thickness(10, 8),
+            Margin = new Thickness(0, 6, 0, 0),
+            Child = new TextBlock
+            {
+                Text = reason,
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
+                TextWrapping = TextWrapping.Wrap,
+            },
+        };
+
+        var stack = new StackPanel { Children = { grid, detail } };
+
+        var root = new Border
+        {
+            Margin = new Thickness(20, 2, 20, 2),
+            Padding = new Thickness(0, 3),
+            Background = Brushes.Transparent,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = stack,
+        };
+        ToolTip.SetTip(root, "点开看这一轮断在哪");
+
+        root.PointerEntered += (_, _) =>
+        {
+            label.Foreground = hoverBrush;
+            play.Foreground = hoverBrush;
+            chevron.Foreground = hoverBrush;
+        };
+        root.PointerExited += (_, _) =>
+        {
+            label.Foreground = labelBrush;
+            play.Foreground = labelBrush;
+            chevron.Foreground = labelBrush;
+        };
+        root.PointerPressed += (_, e) =>
+        {
+            detail.IsVisible = !detail.IsVisible;
+            chevron.Text = detail.IsVisible ? "\uF2B7" : "\uF2A4";   // ChevronUp / ChevronDown
+            e.Handled = true;
+        };
+
+        return root;
+    }
+
+
+    /// <summary>压缩记录在消息流里的呈现：一条分割线 + 可展开的摘要卡。</summary>
+    private Control CreateCompressionDivider(ChatMessage message, int covered)    {
         var model = string.IsNullOrWhiteSpace(message.ModelName) ? "" : $" · {message.ModelName}";
 
         var card = new CompressedContextCard();
@@ -858,7 +1135,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         // 用户主动发消息：无论刚才在看哪一段，都跟着这一轮走
         _autoScroll = true;
 
-        var turn = await _runtime.SendAsync(new ConversationTurnRequest
+        await _runtime.SendAsync(new ConversationTurnRequest
         {
             Settings = new TurnSettings(selected, client, Input.ModelSelector.ThinkingMode,
                 Input.ToolSelector.SelectedToolIds),
@@ -867,9 +1144,9 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             RequestPreview = text,
         });
 
-        // 发送成功后清空输入区（正文 + 附件一起）。空附件栏由控件自己收起。
-        // 没被接受（已有任务在跑）时不动，用户刚贴上的附件还在。
-        if (turn is not null) Input.Clear();
+        // 收尾时绝不能再清一次输入区。SendAsync 要等整轮跑完才返回（工具循环可能几十秒），
+        // 这期间用户往往已经开始写下一句了 —— 在这里 Clear() 会把刚打的字连同撤销栈一起抹掉。
+        // 该发的内容在本方法开头就已经清过，附件 chip 也在那次 TextChanged 里被 Prune 掉了。
     }
 
     // ============================================================
@@ -899,7 +1176,23 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         _runtime.ToolCallsRepaired += BuildToolCallIndex;
         _runtime.HistoryRebuildRequested += OnHistoryRebuildRequested;
         _runtime.CompressingChanged += OnCompressingChanged;
+        _runtime.TurnSummarized += OnTurnSummarized;
+        _runtime.SummarizingChanged += OnSummarizingChanged;
+        _runtime.TurnSummaryFailed += OnTurnSummaryFailed;
+        _runtime.SessionTouched += OnSessionTouched;
+
+        // 设置是「改动即存」的，别的窗口（设置页、甚至另一个标签页）改了它，
+        // 本窗口不会重建 —— 只有订阅这个事件才能跟着刷新按设置算出来的那部分界面。
+        AppSettingsStore.Changed += OnSettingsChanged;
     }
+
+    /// <summary>
+    /// 「最后对话时间」刚写进库：立刻让宿主重排侧栏，会话当场挪到最前面。
+    ///
+    /// 不能等到 TurnEnded —— 那时一轮可能跑了很久，用户发完消息看到列表毫无变化，
+    /// 会以为「没发出去」或者「会话没被使用」。侧栏排序用的就是这一列，此刻已经变了。
+    /// </summary>
+    private void OnSessionTouched() => Updated?.Invoke();
 
     /// <summary>
     /// 刷新两个插件插槽（顶部一行、输入区左侧一排）。
@@ -945,6 +1238,13 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         _runtime.ToolCallsRepaired -= BuildToolCallIndex;
         _runtime.HistoryRebuildRequested -= OnHistoryRebuildRequested;
         _runtime.CompressingChanged -= OnCompressingChanged;
+        _runtime.TurnSummarized -= OnTurnSummarized;
+        _runtime.SummarizingChanged -= OnSummarizingChanged;
+        _runtime.TurnSummaryFailed -= OnTurnSummaryFailed;
+        _runtime.SessionTouched -= OnSessionTouched;
+
+        // 静态事件：不退订的话这个窗口会被一直吊着（缓存淘汰也不放）
+        AppSettingsStore.Changed -= OnSettingsChanged;
     }
 
     /// <summary>
@@ -991,11 +1291,151 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         RefreshContextUsage();
     }
 
-    /// <summary>压缩开始 / 结束：进度的可见反馈只有这里能给。</summary>
+    /// <summary>
+    /// 按当前状态重填某一轮操作栏上的总结槽位。
+    ///
+    /// 三种形态：已有总结 → 「已总结」；功能开着 → 「总结」按钮；
+    /// 功能关着且没总结过 → 什么都不放（那时的「总结」点了也不进上下文，
+    /// 见 <see cref="ContextCompression.ResolveKeepTurns"/>，摆一个按了没用的按钮比不摆更糟）。
+    /// </summary>
+    private void FillSummarySlot(StackPanel slot, string turnId)
+    {
+        slot.Children.Clear();
+
+        // 进行中 / 刚失败：都占用同一个位置，用户点的那颗按钮原地变成状态，
+        // 视线不用在「按钮」和「消息流末尾的一条提示」之间来回找。
+        if (_summarizingTurns.Contains(turnId))
+        {
+            slot.Children.Add(CreateSummaryStatusChip("正在总结…"));
+            return;
+        }
+
+        if (_summaryErrors.TryGetValue(turnId, out var error))
+        {
+            slot.Children.Add(CreateSummaryStatusChip($"总结失败：{error}"));
+            return;
+        }
+
+
+        var summary = ContextCompression.FindTurnSummary(
+            Messages.Where(m => m.TurnId == turnId));
+        if (summary is not null)
+        {
+            slot.Children.Add(CreateSummarizedChip(summary));
+            return;
+        }
+
+        if (!AppSettingsStore.Current.TurnSummaryEnabled) return;
+
+        slot.Children.Add(CreateGlyphButton("\uF379",
+            "总结这一轮（把工具调用过程压成摘要，之后构建上下文时用它替代原文）",
+            () => _ = SummarizeTurnAsync(turnId)));
+    }
+
+    /// <summary>
+    /// 复核所有已画出来的总结槽位。控件已经不在树上的（整块重绘 / 那一轮被删）登记作废。
+    ///
+    /// 与 <see cref="RefreshContinueButtons"/> 同一个套路，理由也一样：槽位建好之后再没人回头看它，
+    /// 而「总开关被改」「这一轮刚被总结」都发生在建完之后。
+    /// </summary>
+    private void RefreshSummarySlots()
+    {
+        for (var i = _summarySlots.Count - 1; i >= 0; i--)
+        {
+            var (turnId, slot) = _summarySlots[i];
+
+            if (slot.Parent is null)
+            {
+                _summarySlots.RemoveAt(i);
+                continue;
+            }
+
+            FillSummarySlot(slot, turnId);
+        }
+    }
+
+    /// <summary>
+    /// 设置刚保存。只关心回复总结的开关：它决定操作栏上那个按钮出不出现，
+    /// 而已经画好的、甚至被页面缓存挂着的窗口不会因为设置变了就重建 —— 不重填就一直是旧的。
+    /// </summary>
+    private void OnSettingsChanged()
+    {
+        var enabled = AppSettingsStore.Current.TurnSummaryEnabled;
+        if (enabled == _turnSummaryEnabled) return;
+
+        _turnSummaryEnabled = enabled;
+
+        // 保存设置通常就在 UI 线程上，但这里同样按防御写法处理（与「正在重试」那条一致）：
+        // 重填槽位会动控件树，跑到别的线程上就是随机崩溃。
+        if (Dispatcher.UIThread.CheckAccess()) RefreshSummarySlots();
+        else Dispatcher.UIThread.Post(RefreshSummarySlots);
+    }
+
+    /// <summary>上一段落库时的「启用回复总结」取值，用来判断设置变化是否需要重填槽位。</summary>
+    private bool _turnSummaryEnabled = AppSettingsStore.Current.TurnSummaryEnabled;
+
+    /// <summary>
+    /// 某一轮的回复总结落库了：就地重填所有总结槽位，
+    /// 「总结」当场变成「已总结」。<b>不整块重绘</b>：那会把实时流式的控件拆掉、还会把视口跳到底部。
+    /// </summary>
+    private void OnTurnSummarized(string turnId)
+    {
+        RefreshSummarySlots();
+    }
+
+    /// <summary>
+    /// 手动总结某一轮。总结只影响「发给模型的上下文」，界面上的原文一个字都不会少。
+    ///
+    /// <b>这里只管发起</b>：进行中 / 失败 / 完成的显示全由 runtime 的事件驱动
+    /// （见 <see cref="OnSummarizingChanged"/>、<see cref="OnTurnSummaryFailed"/>），
+    /// 于是手动与自动总结走的是同一条反馈路径，不会只有手动那条有过程提示。
+    /// </summary>
+    private async Task SummarizeTurnAsync(string turnId)
+    {
+        // 状态就显示在操作栏原位（用户刚点的那颗按钮那里），不另起一行提示：
+        // 总结是跟「这一轮」绑定的动作，反馈也该出现在那一轮上。
+        _summaryErrors.Remove(turnId);
+        RefreshSummarySlots();
+
+        await _runtime.SummarizeTurnAsync(turnId, manual: true);
+    }
+
+    /// <summary>
+    /// 某一轮的总结开始 / 结束。自动总结同样会走到这里 ——
+    /// 之前它只在手动点击那条路上设置状态，于是自动总结全程无声，
+    /// 用户看到的只是按钮静默地变成「已总结」。
+    /// </summary>
+    private void OnSummarizingChanged(string turnId, bool summarizing)
+    {
+        if (summarizing) _summarizingTurns.Add(turnId);
+        else _summarizingTurns.Remove(turnId);
+
+        RefreshSummarySlots();
+    }
+
+    /// <summary>
+    /// 某一轮的总结失败了。原因留在槽位上（多半是「没配模型」这类要用户动手的事），
+    /// 下次点总结时清掉 —— 一闪而过的提示等于没说。
+    /// </summary>
+    private void OnTurnSummaryFailed(string turnId, string reason)
+    {
+        _summaryErrors[turnId] = reason;
+        RefreshSummarySlots();
+    }
+
+    /// <summary>
+    /// 压缩开始 / 结束。提示放在消息流末尾的分割线上 ——
+    /// 压缩记录本身就是追加在末尾的，提示落在它将要出现的位置。
+    /// </summary>
     private void OnCompressingChanged(bool compressing)
     {
-        if (compressing) Input.ShowHint("正在压缩上下文…", InputHintKind.Info, autoHide: false);
-        else Input.HideHint();
+        if (compressing)
+        {
+            ShowStatusRow(CreateDividerStatusRow("正在压缩上下文…"));
+            return;
+        }
+
+        HideStatusRow();
     }
 
     /// <summary>
@@ -1047,7 +1487,13 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             var turnAssistants = Messages
                 .Where(m => m.Role == "assistant" && m.TurnId == _activeTurnId)
                 .ToList();
-            _activeTurnRoot.Children.Add(CreateAiReplyOps(_activeTurnId, turnAssistants, _activeTurnHost));
+            var ops = CreateAiReplyOps(_activeTurnId, turnAssistants, _activeTurnHost);
+            _turnOpsRows[_activeTurnId] = ops;
+            _activeTurnRoot.Children.Add(ops);
+
+            // 刚给这一轮画好操作栏：顺带复核之前那些轮的「继续」按钮
+            // （本轮如果是「继续」接出来的，上一轮那颗到这里就必须收掉）
+            RefreshContinueButtons();
         }
 
         if (outcome.IsRegenerate)
@@ -1065,6 +1511,12 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         {
             ScrollToEnd();
         }
+
+        // 正文定稿：<see cref="TurnBodyView.Complete"/> 会走一遍 MarkdownStreamParser 的收尾，
+        // 把还在「预览态」的最后一段重绘成正式内容（文件卡片就是在这一步建出来的）。
+        // 实时流式路径原本从不调用它 —— 那一段于是永远停在预览态，标记一直显示成原文，
+        // 只有重开会话（历史渲染那条路会 Complete）才变成卡片。
+        _round?.Body.Complete();
 
         // 这一段的控件归属到此为止：之后不会再有增量，留着只会让迟到的回调写进旧块
         _round = null;
@@ -1200,10 +1652,14 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
 
         await WaitForHistoryAsync("继续");
 
-        // 按钮的显示条件已经保证过一次，但期间历史可能变了（这一轮后面又跑出了新回复、或那一轮被删了）。
-        // 说清楚为什么不动，别让点了没反应 —— 那颗按钮留在原地是正常的，收掉它反而更奇怪。
+        // 保底：按下这一刻重新问一次「这一轮是不是还停在末尾」。
+        // 按钮的显示条件早就保证过一次，但控件是那一刻画的，期间历史完全可能已经变了
+        // （这一轮后面又跑出了新回复、或那一轮被删了）。真到了这里就不许发请求，
+        // 否则等于把中断的旧轮硬插到新内容后面，上下文顺序会被搅乱。
+        // 同时顺手复核一遍所有按钮，把这类过期的那颗收掉 —— 留着它只会让人再点一次。
         if (!_runtime.IsTurnResumable(turnId))
         {
+            RefreshContinueButtons();
             Input.ShowHint("这一轮后面已经有新内容了，不能再接着继续", InputHintKind.Info, autoHide: true);
             return;
         }
@@ -1270,6 +1726,11 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     private void RenderHistory(string? keepRendered = null)
     {
         MessagesPanel.Children.Clear();
+
+        // 旧的操作栏随面板一起没了，它们身上的「继续」按钮与总结槽位登记也随之作废
+        _continueButtons.Clear();
+        _summarySlots.Clear();
+        _turnOpsRows.Clear();
 
         _turnGroups = new List<(string? TurnId, List<ChatMessage> Msgs)>();
         _compressionCovered.Clear();
@@ -1559,13 +2020,23 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         if (first.Role == "user")
             return CreateUserMessageBlock(first);
 
-        var (displayName, providerName, vendorId) = ModelInfo(first.ModelName ?? "");
         var rootPanel = new StackPanel
         {
             Margin = new Thickness(20, 2, 20, 2),
             Spacing = 10,
         };
-        rootPanel.Children.Add(CreateModelHeader(displayName, providerName, vendorId, first.CreatedAt));
+
+        // 「继续」接出来的这一段不是新的一轮，而是同一轮被停止后的后半截：
+        // 所以不重复模型头像，改用一条分界线把它接在上一段后面（点开能看断在哪）。
+        if (first.ContinuedFrom is not null)
+        {
+            rootPanel.Children.Add(CreateContinuationDivider(first));
+        }
+        else
+        {
+            var (displayName, providerName, vendorId) = ModelInfo(first.ModelName ?? "");
+            rootPanel.Children.Add(CreateModelHeader(displayName, providerName, vendorId, first.CreatedAt));
+        }
 
         // 内容区（思考/工具聚合卡 + 各正文块）统一放进蓝框宿主，供原文模式切换
         var host = new TurnSelectionHost { BuildFullRawText = () => BuildFullRawText(turnId) };
@@ -1644,8 +2115,14 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         if (CreateFileChangesCard(msgs) is { } files)
             rootPanel.Children.Add(files);
 
-        if (turnId is not null)
-            rootPanel.Children.Add(CreateAiReplyOps(turnId, msgs.Where(m => m.Role == "assistant").ToList(), host));
+        // 操作栏只留在这一条链的最后一段：中间那几段各挂一份的话，
+        // 用户看到的是「正文、一排按钮、分界线、正文」—— 同一轮被切成了好几截。
+        if (turnId is not null && !_runtime.HasContinuation(turnId))
+        {
+            var ops = CreateAiReplyOps(turnId, msgs.Where(m => m.Role == "assistant").ToList(), host);
+            _turnOpsRows[turnId] = ops;
+            rootPanel.Children.Add(ops);
+        }
 
         return rootPanel;
     }
@@ -1912,6 +2389,32 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         => CreateGlyphButton(ContinueIcon, "继续（接着被中断的那一轮往下做）",
             () => _ = ContinueTurnAsync(turnId), hoverColor: "#2563EB");
 
+    /// <summary>
+    /// 复核所有已画出来的「继续」按钮：这一轮后面已经有消息了（用户开了新一轮、或又跑出回复），
+    /// 就把它收起来。
+    ///
+    /// 为什么非要有这一步：显示与否是在建操作栏那一刻问出来的，而操作栏建好后再没人回头看它。
+    /// 「停止 → 出现继续 → 接着聊下一轮」之后那颗按钮会一直挂在旧轮下面，看着像还能点 ——
+    /// 点下去虽然会被 <see cref="ContinueTurnAsync"/> 的复核挡住，但那是挡，不是正确显示。
+    ///
+    /// 只切 IsVisible 不删控件：操作栏是行内布局，抽走控件会让同行按钮跳位。
+    /// </summary>
+    private void RefreshContinueButtons()
+    {
+        for (var i = _continueButtons.Count - 1; i >= 0; i--)
+        {
+            var (turnId, button) = _continueButtons[i];
+
+            // 控件已经不在树上了（整块重绘 / 那一轮被删）：这条登记作废
+            if (button.Parent is null)
+            {
+                _continueButtons.RemoveAt(i);
+                continue;
+            }
+
+            button.IsVisible = _runtime.IsTurnResumable(turnId);
+        }
+    }
 
     private static (long Input, long Cache, long Output) ParseUsage(ChatMessage m)
     {
@@ -1981,17 +2484,31 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         var copyBtn = CreateGlyphButton("\uF32C", "复制", async () => await CopyText(copyText.ToString()));
         var delBtn = CreateGlyphButton("\uF34D", "删除", async () => await DeleteTurnAsync(turnId), hoverColor: "#DC2626");
 
+        // 回复总结：把这一轮的工具调用过程压成一段摘要，此后构建上下文时用它替代原文。
+        // 已经总结过的换成「已总结」，点开可以看摘要全文 —— 原文仍然在界面上，不受影响。
+        //
+        // 放在一个槽位里、由 FillSummarySlot 现算内容：总开关一变（设置页里勾一下，或者别的
+        // 窗口保存了设置），已经建好、甚至被缓存的窗口都要跟着变，而槽位能就地重填。
+        var summarySlot = new StackPanel { Orientation = Orientation.Horizontal };
+        FillSummarySlot(summarySlot, turnId);
+        _summarySlots.Add((turnId, summarySlot));
+
         var left = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 2,
             Children = { copyBtn, RegenerateButton(() => Messages.FirstOrDefault(
-                m => m.TurnId == turnId && m.Role is "assistant" or "tool")), host.CreateModeButtons(), delBtn },
+                m => m.TurnId == turnId && m.Role is "assistant" or "tool")), host.CreateModeButtons(), delBtn, summarySlot },
         };
 
-        // 「继续」排在最前面：这一轮停在半路时它就是用户最想要的那个动作
-        if (_runtime.IsTurnResumable(turnId))
-            left.Children.Insert(0, ContinueButton(turnId));
+        // 「继续」排在最前面：这一轮停在半路时它就是用户最想要的那个动作。
+        // 位置定在最前，是因为它只在这一轮「就是末尾」时出现，属于临时状态；
+        // 一旦不该出现就得能立刻收掉（见 RefreshContinueButtons）。
+        // 先按当前历史判一次，之后每次历史变化都回头复核。
+        var continueBtn = ContinueButton(turnId);
+        continueBtn.IsVisible = _runtime.IsTurnResumable(turnId);
+        left.Children.Insert(0, continueBtn);
+        _continueButtons.Add((turnId, continueBtn));
         var tokens = new TextBlock
         {
             Text = $"Tokens: {total}  ↑{input}  ↑*{cache}  ↓{output}",
@@ -2009,6 +2526,105 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         grid.Children.Add(tokens);
         Grid.SetColumn(tokens, 1);
         return grid;
+    }
+
+    /// <summary>
+    /// 「已总结」标记，接在删除按钮后面。点开是一张只读卡片，里面是这一轮摘要的全文。
+    ///
+    /// 用它而不是在正文里再画一块卡片：总结换掉的只是「发给模型的那一份」，
+    /// 界面上这一轮的原文一个字都没动，没必要为它占正文的位置。
+    /// </summary>
+    /// <summary>
+    /// 操作栏上的黄色状态 chip（正在总结 / 总结失败）。
+    ///
+    /// 与「已总结」同尺寸、同位置，只换颜色：用户点的是按钮，反馈就该出现在
+    /// 那颗按钮原来的地方 —— 不用去消息流末尾另找一条提示。
+    /// </summary>
+    private static Border CreateSummaryStatusChip(string text)
+    {
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#FFFBEB")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#FDE68A")),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Height = 26,
+            Padding = new Thickness(8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = text,
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.Parse("#92400E")),
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+    }
+
+    /// <summary>
+    /// 「已总结」标记，接在删除按钮后面。点开是一张只读卡片，里面是这一轮摘要的全文，可以复制。
+    ///
+    /// 用它而不是在正文里再画一块卡片：总结换掉的只是「发给模型的那一份」，
+    /// 界面上这一轮的原文一个字都没动，没必要为它占正文的位置。
+    /// </summary>
+    private Button CreateSummarizedChip(string summaryText)
+    {
+        var text = string.IsNullOrWhiteSpace(summaryText) ? "（空）" : summaryText;
+
+        var chip = new Button
+        {
+            Content = new TextBlock
+            {
+                Text = "已总结",
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.Parse("#2563EB")),
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+            Height = 26,
+            Padding = new Thickness(8, 0),
+            CornerRadius = new CornerRadius(4),
+            Background = new SolidColorBrush(Color.Parse("#EFF6FF")),
+            BorderThickness = new Thickness(0),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+
+        ToolTip.SetTip(chip, "这一轮已被总结：构建上下文时用摘要替代原文。点开查看摘要内容。");
+
+        // 原生选择必须单独打开：卡片在 Popup 里，不在轮次的选区树中
+        // （TurnTextSelector 只收轮次内的块），不打开就只是「能看不能选」。
+        var body = new CustomSelectableTextBlock
+        {
+            Text = text,
+            FontSize = 12.5,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(Color.Parse("#374151")),
+            NativeSelectionEnabled = true,
+        };
+
+        var copyBtn = CreateGlyphButton("\uF32C", "复制摘要全文", async () => await CopyText(text));
+
+        chip.Flyout = new Flyout
+        {
+            Placement = PlacementMode.Top,
+            Content = new Border
+            {
+                Background = Brushes.White,
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(14, 12),
+                MaxWidth = 620,
+                Child = new StackPanel
+                {
+                    Spacing = 8,
+                    Children =
+                    {
+                        new ScrollViewer { MaxHeight = 340, Content = body },
+                        copyBtn,
+                    },
+                },
+            },
+        };
+
+        return chip;
     }
 
     private Control CreateUserOps(ChatMessage msg)
@@ -2098,6 +2714,9 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             var transfer = new DataTransfer();
             transfer.Add(DataTransferItem.CreateText(text));
             await top.Clipboard.SetDataAsync(transfer);
+
+            // 复制成功才提示：失败时弹「已复制」等于骗人
+            CopyToast.Show(this);
         }
         catch
         {
@@ -2108,8 +2727,19 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     private async Task DeleteTurnAsync(string turnId)
     {
         var owner = TopLevel.GetTopLevel(this) as Window;
-        if (!await ConfirmDialog.ShowAsync(owner, "确定删除这段回复吗？")) return;
-        try { await ChatRepository.SoftDeleteTurnAsync(Profile.State.SessionId, turnId); } catch { /* 忽略 */ }
+
+        // 「继续」把一轮拉成了几段：界面上它们本来就是一条（只有一个头像、一份操作栏），
+        // 删除自然也该整条一起走 —— 只删末尾那一段，前面的分界线会指向一段不存在的内容。
+        var chain = _runtime.ResolveTurnChain(turnId);
+        var message = chain.Count > 1
+            ? $"确定删除这段回复吗？\n\n这一轮被「继续」接成了 {chain.Count} 段，会一起删掉。"
+            : "确定删除这段回复吗？";
+
+        if (!await ConfirmDialog.ShowAsync(owner, message)) return;
+
+        foreach (var id in chain)
+            try { await ChatRepository.SoftDeleteTurnAsync(Profile.State.SessionId, id); } catch { /* 忽略 */ }
+
         await ReloadMessagesAsync();
     }
 
@@ -2167,7 +2797,19 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
                 Margin = new Thickness(20, 2, 20, 2),
                 Spacing = 10,
             };
-            root.Children.Add(CreateModelHeader(displayName, providerName, vendorId, assistantMsg.CreatedAt));
+
+            // 「继续」接出来的这一轮：与历史渲染同一套长相 —— 一条分界线替掉模型头像，
+            // 同时把上一段已经画好的操作栏收起来（整条链只在最后一段留一份）。
+            if (assistantMsg.ContinuedFrom is not null)
+            {
+                root.Children.Add(CreateContinuationDivider(assistantMsg));
+                if (_turnOpsRows.TryGetValue(assistantMsg.ContinuedFrom, out var previousOps))
+                    previousOps.IsVisible = false;
+            }
+            else
+            {
+                root.Children.Add(CreateModelHeader(displayName, providerName, vendorId, assistantMsg.CreatedAt));
+            }
 
             var turnId = assistantMsg.TurnId;
             var host = new TurnSelectionHost { BuildFullRawText = () => BuildFullRawText(turnId) };
@@ -2186,6 +2828,9 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             {
                 MessagesPanel.Children.Add(root);
             }
+
+            // 状态行（压缩中 / 总结中）永远贴在末尾，否则会被新插进来的这一轮挤到上面去
+            BringStatusRowToEnd();
             ScrollToEnd();
             _activeTurnId = assistantMsg.TurnId;
             _activeTurnRoot = root;
@@ -2197,6 +2842,9 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             // 计时从请求发出算起（此刻紧接着就是本轮第一次 StreamAsync）
             _turnStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             StartTurnTimer();
+
+            // 新一轮开始了：上一轮即使当时停在半路，现在也已经不是末尾 —— 它的「继续」该收了
+            RefreshContinueButtons();
         }
 
         // 每条 assistant 消息一个正文块；整轮只把最后那段留在卡外，更早的等下一次工具调用出现时收进卡里
@@ -2286,6 +2934,9 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
                 MessagesPanel.Children.Add(plainRoot);
                 break;
         }
+
+        // 状态行（压缩中 / 总结中）永远贴在末尾
+        BringStatusRowToEnd();
     }
 
     /// <summary>用户消息：浅蓝气泡（黑字，便于选中高亮可辨），靠右。</summary>

@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using HtaciAI.Services.Network;
 using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Services;
@@ -26,7 +27,8 @@ namespace HtaciAI.Services;
 /// </summary>
 public sealed class OpenAiResponsesClient : IChatClient
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
+    /// <summary>共享客户端：走不走代理由设置页的「使用系统代理」决定，见 <see cref="HttpClientProvider"/>。</summary>
+    private static HttpClient Http => HttpClientProvider.Get(TimeSpan.FromMinutes(5));
 
     private readonly string _endpoint;
     private readonly string _apiKey;
@@ -265,6 +267,10 @@ public sealed class OpenAiResponsesClient : IChatClient
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
             body["instructions"] = systemPrompt;
+
+        // 输出上限：只在调用方明确要求时下发（见 ChatRequestOptions.MaxOutputTokens）
+        if (options.MaxOutputTokens is > 0 and var maxTokens)
+            body["max_output_tokens"] = maxTokens;
 
         switch (options.Thinking)
         {

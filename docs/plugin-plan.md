@@ -133,16 +133,19 @@ public interface IPluginContext
     IChatEventBus Chat { get; }
     ISessionFacade Sessions { get; }
     IPluginWindowHost Windows { get; }
-    IUiSlotRegistry Slots { get; }
+    IUiExtensionRegistry Slots { get; }
     IToolRegistryApi Tools { get; }
+    IConversationDock Dock { get; }
+    IWorkspaceFacade Workspaces { get; }
 }
 ```
 
 > **实装后的差异**（以 [`plugin-handoff.md`](./plugin-handoff.md) 为准）：
 > `IUiSlotRegistry` 实装名是 `IUiExtensionRegistry`；`IPromptContributor` 去掉了 `Layer`
 > （只有「追加到 system 末尾」一种用法）；`BuildAsync` 的签名就是现在这一份：
-> 每插件 4 KB / 单轮合计 8 KB 配额、500 ms 超时。**`IPluginContext` 的七项门面现已全部实装**
-> —— `Prompts` / `Chat`（M2）、`Sessions`（M3）、`Windows` / `Slots`（M4）、`Tools`（M7）。
+> 每插件 4 KB / 单轮合计 8 KB 配额（**后续已取消**，改为不限长度）、500 ms 超时。**`IPluginContext` 的门面现已全部实装**
+> —— `Prompts` / `Chat`（M2）、`Sessions`（M3）、`Windows` / `Slots`（M4）、`Tools`（M7）、
+> `Dock`（M9）、`Workspaces`（P0，能力 `workspace.delegate`）。
 
 ### 2.3 扩展点
 
@@ -162,7 +165,7 @@ public interface IPromptContributor
   `PromptComposer.ComposeAsync(...)`（M2 实装）。
 - **没有把 profile 接口改成异步**：它只是字符串拼接，改了要动接口、两个实现和
   「工作空间不能与普通对话合流」的注释，收益为零。包一层就够。
-- 硬约束：每插件配额（默认 4 KB），单次总配额（默认 8 KB）；超限截断并记日志；异常吞掉并跳过该贡献者，不影响本轮发送。
+- 硬约束：**不限贡献长度**（原先的每插件 4 KB / 单轮 8 KB 配额与截断已取消）；500 ms 超时；异常吞掉并跳过该贡献者，不影响本轮发送。
 - 每个插件的实际贡献长度要能在设置页看到——这是唯一能悄悄改变模型行为的入口。
 
 **b) 会话事件**
@@ -172,11 +175,18 @@ public interface IChatEventBus { IDisposable Subscribe(IChatEventSink sink, Chat
 public interface IChatEventSink { ValueTask OnEventAsync(ChatEvent e, CancellationToken ct); }
 ```
 
-事件种类：`RoundStarted`、`ContentDelta`、`ThinkingDelta`、`ToolCallStarted`、`ToolCallFinished`、`MessagePersisted`、`RoundCompleted`、`RoundFailed`、`ApprovalRequested`、`QuestionAsked`、`ActivityChanged`。
+事件种类（实装）：`RoundStarted`、`ContentDelta`、`ThinkingDelta`、`ToolCallStarted`、`MessagePersisted`、`RoundCompleted`、`RoundFailed`、`ActivityChanged`。
+
+> 草案里的 `ToolCallFinished` / `ApprovalRequested` / `QuestionAsked` **没有实装**：
+> 前者的信息已经由 `MessagePersisted`（工具行的 `Status` 变化）覆盖；后两者是要**等用户结果**的，
+> 事件没有返回值，它们走的是 `IInteractionHost` / `IPluginInteractionHost`，不是事件总线。
 
 - `ChatEventFilter`：按 sessionId（null = 全部，可选「仅当前活跃会话」）、按事件类型。
 - **节流由宿主做**，不指望插件自律：`ContentDelta` 在投递前按 50 ms 合并成一段再发，插件拿到的是累积文本 + 本次增量。
 - 投递顺序保证按会话串行；插件回调不阻塞主流程——用有界队列 + 丢弃最旧增量（文本合并后不会丢语义）。
+- **轮次归属**（P0 追加）：`RoundCompleted` / `RoundFailed` 带 `TurnId`（`string?`，等于
+  `chat_message.turn_id`）与 `IsPluginInitiated`。同一会话上可能同时有用户自己聊的一轮，
+  插件派发任务后必须靠这两个字段认领结果，只看 `SessionId` 会把别人的完成当成自己的。
 
 **c) 注入与控制**
 
@@ -186,7 +196,7 @@ public interface ISessionFacade
     Task<SendResult> SendAsync(string sessionId, string text, SendOptions? options = null, CancellationToken ct = default);
     Task CancelAsync(string sessionId);
     Task<bool> SetPermissionModeAsync(string sessionId, PermissionMode mode);
-    Task<bool> CompressAsync(string sessionId);
+    Task<bool> CompressAsync(string sessionId, int keepRecentTurns = 0);
     IReadOnlyList<MessageSnapshot> GetRecentMessages(string sessionId, int take);
 }
 ```
@@ -201,13 +211,39 @@ public interface ISessionFacade
 > 去掉 `SendOptions`（一轮发送会写回会话存档，插件指定等于改用户的选择）、
 > `GetRecentMessages` 改异步、`AppendNoticeAsync` 不做（`role=agent` 已被压缩摘要占用）、
 > 来源标记写 `logs/plugin.log` 而不是加数据库列。
+>
+> **P0 追加**（按 QQ 机器人插件的清单，见 [`qqbot-plugin-api-requests.md`](./qqbot-plugin-api-requests.md)）：
+> 同一接口上多了 `GetUsageAsync` / `GetModelInfoAsync` / `ListAvailableToolsAsync` /
+> `GetSessionToolsAsync` / `SetSessionToolsAsync` / `SetInteractionAsync`，
+> `SessionSummary` 追加 `ContextUsed`/`ContextWindow`；另开 `IWorkspaceFacade`（能力 `workspace.delegate`）
+> 让插件往用户的工作空间里派任务。契约签名以代码与交接文档为准，这份草案不再跟着改。
+
+**c-2) 没窗口时问用户**
+
+宿主的默认规则是「没有窗口 → 审批拒绝、提问返回用户不在」，机器人因此只能跑只读工具。
+`SetInteractionAsync(sessionId, IPluginInteractionHost)` 登记的桥会在这条路上接手：
+
+```csharp
+public interface IPluginInteractionHost
+{
+    Task<bool> ApproveAsync(PluginToolApprovalRequest request, CancellationToken ct);
+    Task<IReadOnlyList<PluginAskAnswer>?> AskAsync(IReadOnlyList<PluginAskQuestion> questions, CancellationToken ct);
+    Task<bool?> WaitForUserAsync(string title, string instructions, CancellationToken ct);
+}
+```
+
+**窗口优先**：会话窗口开着时交互仍归界面，桥收不到（两处同时弹卡只会让用户不知道点哪个）。
+超时由插件自己管，等不到就回 `false` / `null`，这一轮照常跑完。
 
 **d) 工具注册**
 
 ```csharp
 public interface IToolRegistryApi
 {
-    IDisposable Register(ToolDefinition definition, Func<ChatToolCall, CancellationToken, Task<ToolExecution>> execute);
+    // 实装签名：definition 是插件侧的 PluginToolDefinition（带 Toolset / DangerLevel），
+    // 执行体由插件提供；宿主把它翻译成 ToolDefinition（Source = Plugin）登记进注册表，
+    // 执行体另存进 PluginToolRegistry（不放进定义里，否则禁用后回收不掉程序集）。
+    IDisposable Register(PluginToolDefinition definition, PluginToolHandler execute);
 }
 ```
 
@@ -466,6 +502,8 @@ public sealed class WindowOptions
 | M7 | 插件工具（`IToolRegistryApi` + `tools.provide`）、清单的 `platforms`/`requires`/`conflicts`/`tags`/`author` 与拓扑加载、内置开发文档（`<数据根>/doc/`） | M0、M4 | ✅ 已完成 |
 | M6 | 「插件」页（新标签页入口）：列表、启用/禁用、能力清单、错误状态、需重启提示、崩溃记录与崩溃日志、崩溃后仍自动加载；与设置页总开关联动 | M0 | ✅ 已完成（含「最近一次贡献字数」） |
 | M9 | 会话视图借出（`conversation.dock`：`IConversationDock` + 会话页占位/召回）+ 会话页右侧插槽（`conversation.sidebar`） | M1、M4 | ✅ 已完成（见交接文档第 14 节） |
+| P0 | 按 QQ 机器人插件的清单补的宿主接口：用量与模型能力、工具集读写、交互桥、`ChatEvent.TurnId`/`IsPluginInitiated`、`IWorkspaceFacade`（`workspace.delegate`） | M1、M2、M3 | ✅ 已完成（见交接文档 9.5 与 `qqbot-plugin-api-requests.md` 第八节） |
+| P1 | `CompressAsync(sessionId, keepRecentTurns)`：压缩时末尾保留 N 轮原文不压；`PluginToolDefinition.TimeoutSeconds`：插件工具可声明自己的时长 | M1 | ✅ 已完成（交接文档 9.5 的 F' 与第 8 条）；等人仍走交互桥 |
 
 **下一步**：M5（桌宠插件本体）。`IPluginContext` 上的门面已全部就绪，
 开工要点写在 [`plugin-handoff.md`](./plugin-handoff.md) 的「三、待办」里。
@@ -482,7 +520,7 @@ public sealed class WindowOptions
 - 上下文压缩（手动 / 自动）后行为不变
 - 会话缓存淘汰后重进，不出现两份视图、不出现「看起来已结束但还在跑」
 
-**M0（已实现，见 `HtaciAI/Services/Plugins` 与 `samples/HtaciAI.Plugin.Sample`）**
+**M0（已实现，见 `HtaciAI/Services/Plugins` 与独立仓库 `HtaciAI.Plugins` 的 `samples/HtaciAI.Plugin.Sample`）**
 - 关掉总开关时插件目录存在也不加载
 - 清单非法（JSON 坏了 / id 与目录名不符 / 版本不够 / 入口缺失）时状态为「无法加载」并给出原因
 - 加载成功后在 `logs/plugin.log` 留下记录；插件私有存储落在 `plugin-data/<id>/`

@@ -1296,4 +1296,10 @@ internal static class BuiltinModelTable
 
     /// <summary>Assets/icon/models/dark 下实际存在的图标名。通常是 light 的子集，缺的走浅色兜底。</summary>
     public static readonly string[] IconNamesDark = new[] { "baai", "deepseek", "glm", "grok", "mimo", "openai" };
+
+    /// <summary>Assets/icon/providers/light 下实际存在的服务商图标名（生成时扫描目录得到）。</summary>
+    public static readonly string[] ProviderIconNamesLight = new[] { "alibaba", "amazon", "anthropic", "baidu", "deepseek", "grok", "huggingface", "hunyuan", "lmstudio", "longcat", "mimo", "minimax", "mistral", "moonshot", "newapi", "ollama", "openai", "siliconflow", "tencent", "volcengine", "xai", "xiaomi", "zhipu" };
+
+    /// <summary>Assets/icon/providers/dark 下实际存在的服务商图标名。缺的走浅色兜底。</summary>
+    public static readonly string[] ProviderIconNamesDark = new[] { "amazon", "anthropic", "deepseek", "grok", "mimo", "ollama", "openai", "xai" };
 }

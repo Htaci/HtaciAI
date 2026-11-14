@@ -12,7 +12,7 @@
                    FontWeight="Bold"
                    Foreground="#1A1A2E"/>
         <TextBlock Grid.Row="1"
-                   Text="程序依赖的外部环境（脚本运行时、版本控制）。可自动检测系统 PATH，也可手动指定。"
+                   Text="程序依赖的外部环境（脚本运行时、版本控制）与 AI 执行命令用的命令行工具。可自动检测系统 PATH，也可手动指定。"
                    FontSize="12"
                    Foreground="#9CA3AF"
                    Margin="0,6,0,20"
@@ -34,7 +34,7 @@
                 Background="#F8FAFC"
                 BorderBrush="#E5E7EB"
                 BorderThickness="1">
-            <TextBlock Text="当前支持：Python（.py）、Node.js（.js / .ts）、Git。本页面可扩展更多环境。"
+            <TextBlock Text="当前支持：Python（.py）、Node.js（.js / .ts）、Git，以及 bash 工具的执行器（cmd / Windows PowerShell / PowerShell 7 / Git Bash / bash）。选中的 shell 会写进 bash 工具的介绍里，AI 据此决定命令怎么写。本页面可扩展更多环境。"
                        FontSize="12"
                        Foreground="#6B7280"
                        TextWrapping="Wrap"/>

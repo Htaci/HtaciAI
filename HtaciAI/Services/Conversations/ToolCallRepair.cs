@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using HtaciAI.Models;
 
 namespace HtaciAI.Services.Conversations;
@@ -105,8 +107,11 @@ public static class ToolCallRepair
     }
 
     /// <summary>
-    /// 这条 assistant 消息的副本，只把 metadata 换成 <paramref name="calls"/>（一个不剩就清空）。
-    /// <see cref="ForWire"/> 用它作为发出去的版本，不动调用方手里的原对象。
+    /// 这条 assistant 消息的副本，只把 metadata 里的 <c>tool_calls</c> 换成 <paramref name="calls"/>
+    /// （一个不剩就摘掉这个键）。<see cref="ForWire"/> 用它作为发出去的版本，不动调用方手里的原对象。
+    ///
+    /// <b>只动 tool_calls、其他键一律保留</b>：metadata 是共享的，回复总结（<c>turn_summary</c>）
+    /// 就挂在同一行上。整体重建 metadata 会让「配对残缺的那一轮」的总结在发出的上下文里凭空消失。
     /// </summary>
     private static ChatMessage WithCalls(ChatMessage source, List<ChatToolCall> calls) => new()
     {
@@ -122,13 +127,36 @@ public static class ToolCallRepair
         Status = source.Status,
         UsageJson = source.UsageJson,
         ModelName = source.ModelName,
-        Metadata = calls.Count == 0 ? null : ToolCallJson.Serialize(calls),
+        Metadata = MergeToolCalls(source.Metadata, calls),
         DurationMs = source.DurationMs,
         IsDeleted = source.IsDeleted,
         DeletedAt = source.DeletedAt,
         CreatedAt = source.CreatedAt,
         UpdatedAt = source.UpdatedAt,
     };
+
+    /// <summary>替换 metadata 里的 <c>tool_calls</c>，其余键原样保留（见 <see cref="WithCalls"/>）。</summary>
+    private static string? MergeToolCalls(string? metadata, List<ChatToolCall> calls)
+    {
+        JsonObject? root = null;
+        if (!string.IsNullOrWhiteSpace(metadata))
+        {
+            try { root = JsonNode.Parse(metadata) as JsonObject; }
+            catch (JsonException) { root = null; }
+        }
+
+        if (calls.Count == 0)
+        {
+            if (root is null) return null;
+
+            root.Remove("tool_calls");
+            return root.Count == 0 ? null : root.ToJsonString();
+        }
+
+        root ??= new JsonObject();
+        root["tool_calls"] = JsonSerializer.SerializeToNode(calls);
+        return root.ToJsonString();
+    }
 
     /// <summary>这个调用有没有结果回它。id 为空一律算配不上 —— 那种行本来也发不出去（见 BuildMessages）。</summary>
     private static bool IsAnswered(ChatToolCall call, HashSet<string> answered)

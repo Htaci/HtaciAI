@@ -98,6 +98,9 @@ public static class PluginToolRegistry
             Target = pluginId,
             DangerLevel = Map(definition.DangerLevel),
 
+            // 插件声明的默认时长；用户在「工具」页单独配过的值会在 ToolRegistry.Register 里覆盖它
+            TimeoutSeconds = NormalizeTimeout(pluginId, name, definition.TimeoutSeconds),
+
             // 插件工具默认就启用：用户装插件就是为了用它的工具。
             // 但会话里仍然要显式勾选才会传给模型（与会话自带的 EnabledToolIds 一致）。
             Enabled = true,
@@ -293,6 +296,30 @@ public static class PluginToolRegistry
         PluginToolDangerLevel.Danger => ToolDangerLevel.Danger,
         _ => ToolDangerLevel.Safe,
     };
+
+    /// <summary>
+    /// 把插件声明的超时夹到合法范围：<c>null</c> = 不设（走默认 5 分钟）；
+    /// 负数当没声明（记一条日志），超过上限按上限算 —— 不因为一个数字写错就让工具「一直等」。
+    /// </summary>
+    private static int? NormalizeTimeout(string pluginId, string toolName, int? seconds)
+    {
+        if (seconds is not { } value) return null;
+
+        if (value < 0)
+        {
+            PluginLog.Warn(pluginId, $"工具 {toolName} 的超时为负（{value}），已按宿主默认值处理");
+            return null;
+        }
+
+        if (value > ToolExecutorDispatcher.MaxTimeoutSeconds)
+        {
+            PluginLog.Warn(pluginId,
+                $"工具 {toolName} 的超时 {value} 秒超过上限，已按 {ToolExecutorDispatcher.MaxTimeoutSeconds} 秒处理");
+            return ToolExecutorDispatcher.MaxTimeoutSeconds;
+        }
+
+        return value;
+    }
 
     private static string OneLine(string? text)
     {

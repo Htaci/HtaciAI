@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 
 namespace HtaciAI.Models;
 
@@ -41,6 +41,7 @@ public sealed class AppSettingsData
     /// <summary>
     /// 会话窗口切走后保留多久（分钟）。保留期内切回来直接复用原窗口，不重新加载历史。
     /// 与下面那个开关配合：<see cref="SessionCacheKeepForever"/> 为真时本字段被忽略。
+    /// <b>0 = 不缓存</b>：切走的窗口立刻释放（还在跑任务的除外），切回来重新读库重建。
     /// </summary>
     public int SessionCacheMinutes { get; set; } = 10;
 
@@ -72,6 +73,16 @@ public sealed class AppSettingsData
     public string? UpdateManifestUrl { get; set; }
 
     /// <summary>
+    /// 出站请求是否走系统代理（Windows 的代理设置，以及 <c>HTTP_PROXY</c> / <c>HTTPS_PROXY</c> 环境变量）。
+    ///
+    /// <b>默认关闭（直连）</b>：装了 Clash 这类工具的机器上，系统代理往往指向一个本地端口，
+    /// 默认跟随它会让「第一次启动就连不上」变成很难排查的问题。打开后由
+    /// <see cref="Services.Network.HttpClientProvider"/> 统一把关，对话、列模型、检查更新、
+    /// web_fetch、MCP 全部一起切过去（它们共用同一批 HttpClient）。
+    /// </summary>
+    public bool UseSystemProxy { get; set; }
+
+    /// <summary>
     /// 上下文占用超过 <see cref="AutoCompressThresholdPercent"/> 时，发请求前先自动压缩一次。
     /// 手动压缩（输入框「更多功能」菜单里那一项）不受本开关影响，随时可用。
     /// </summary>
@@ -83,6 +94,39 @@ public sealed class AppSettingsData
     /// 静默回退默认值，int 没有这个风险。
     /// </summary>
     public int AutoCompressThresholdPercent { get; set; } = 80;
+
+    /// <summary>
+    /// 回复总结的总开关。<b>默认关闭</b>：关着时构建上下文、system 提示词、界面上的标记
+    /// 全部与升级前一致 —— 下面几项即使填了也不生效。
+    ///
+    /// 打开后每一轮 AI 回复（含它的几十次工具调用）会被压成一段摘要，
+    /// 构建上下文时用它替代那一轮的原文。原文不删，仍在库里和界面上。
+    /// </summary>
+    public bool TurnSummaryEnabled { get; set; }
+
+    /// <summary>
+    /// 一轮成功结束后自动总结它的回复（只在 <see cref="TurnSummaryEnabled"/> 打开时生效）。
+    /// 关掉后仍可在操作栏上手动点「总结」。
+    /// </summary>
+    public bool AutoSummarizeReply { get; set; } = true;
+
+    /// <summary>
+    /// 构建上下文时末尾保留几轮原文，更早的轮换成它们各自的总结。
+    /// <b>0 = 全换成总结</b>（用户消息仍原样保留），此时模型完全失去最近的行为样本。
+    /// </summary>
+    public int TurnSummaryKeepTurns { get; set; } = 3;
+
+    /// <summary>
+    /// 一轮至少要有多大（token）才值得自动总结；0 = 不设阈值。
+    /// 只有一两次小工具调用的轮次压了也省不下什么，反而是白花一次模型请求。
+    /// </summary>
+    public int TurnSummaryThresholdTokens { get; set; } = 8000;
+
+    /// <summary>
+    /// 距最后一条消息超过这么多分钟，就认为服务端的提示词缓存已经过期：
+    /// 这时候保留最近几轮原文只换来一次实实在在的缓存写入，不如只发总结。0 = 不做这个降级。
+    /// </summary>
+    public int TurnSummaryIdleMinutes { get; set; } = 5;
 
     /// <summary>
     /// 直接执行任务：在 system 提示词里追加一段「按用户明确要求执行、不空泛推脱」的指令。
@@ -106,4 +150,33 @@ public sealed class AppSettingsData
     /// 只影响渲染，不影响发给模型的上下文（始终是完整历史）。
     /// </summary>
     public int HistoryInitialTurns { get; set; } = 10;
+
+    /// <summary>
+    /// 记录 API 请求流水（「统计」页的数据来源）。<b>默认开启</b>：
+    /// 不记的话「这个月花了多少钱」这类问题永远回答不了，而记录本身只是几十字节一行。
+    ///
+    /// 关掉后新的请求不再入库，<b>已有的历史不删</b> —— 想清空用统计页的「清空记录」。
+    /// 只记元数据（模型、耗时、token、金额快照），不记请求体、响应体和 api_key。
+    /// </summary>
+    public bool ApiRequestLogEnabled { get; set; } = true;
+
+    /// <summary>
+    /// API 流水保留多少天，超期在启动时清一次。
+    /// <b>0 = 永久保留</b>；统计页可选 30 / 90 / 180 / 365，默认 365。
+    /// 一年重度使用约几十万行、几十 MB，永久保留也不是不能承受，
+    /// 只是 SQLite 的库文件会一直长。
+    /// </summary>
+    public int ApiRequestLogRetentionDays { get; set; } = 365;
+
+    // ---- 命令行工具 ----
+
+    /// <summary>
+    /// <c>bash</c> 工具背后执行命令的 shell（<see cref="Services.ScriptRuntimes.ShellKind"/> 的名字，
+    /// 如 <c>"Cmd"</c> / <c>"PowerShell7"</c> / <c>"GitBash"</c>）。<c>null</c> = 自动：
+    /// Windows 用 cmd，其他平台用 /bin/bash。
+    ///
+    /// <b>用字符串不用枚举</b>：JsonFileStore 遇到无法识别的枚举值会让整份 settings.json
+    /// 静默回退默认值；字符串解析失败只影响这一项，别的设置不受牵连。
+    /// </summary>
+    public string? CommandShell { get; set; }
 }

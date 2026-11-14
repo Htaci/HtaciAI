@@ -22,6 +22,9 @@ namespace HtaciAI.Services;
 ///   <item>XAML 里用 App.axaml 里的 <c>{StaticResource IconFont}</c>。</item>
 /// </list>
 /// 换字体文件 / 改名时只动这一处与 App.axaml 的资源，别在别处再硬编码族名字符串。
+/// <b>插件拿的是同一个字体</b>，出口是契约里的
+/// <see cref="HtaciAI.Plugin.Abstractions.PluginFonts.IconFont"/>（先取这里的资源，
+/// 取不到才退回它自己那份地址），所以换字体时那边只改 <c>IconFontUri</c> 常量即可。
 /// </summary>
 public static class AppFonts
 {

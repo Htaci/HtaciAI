@@ -18,7 +18,10 @@ using HtaciAI.Services.Notifications;
 namespace HtaciAI.Views;
 
 /// <summary>
-/// 系统消息提醒的浮窗：贴屏幕右下角弹出，<b>常驻不自动消失</b>，由右上角的关闭按钮收起。
+/// 系统消息提醒的浮窗：贴屏幕右下角弹出，<b>默认过一会儿自动收起</b>
+/// （多久由 <see cref="SessionNotice.AutoDismissAfter"/> 决定，插件声明「常驻」时才是 0 = 不自动收），
+/// 也可以随时点右上角的关闭按钮收起。
+/// 鼠标停在上面时倒计时暂停 —— 人正在读它，不该在这时候消失。
 /// 点正文跳到对应会话；审批类消息还带「拒绝 / 同意 / 全部同意」三个按钮，可以直接作答。
 ///
 /// 为什么用独立窗口而不是往主窗口里叠一层：提醒的意义就在于<b>主窗口不在前面时也能看见</b>——
@@ -58,6 +61,15 @@ public sealed class NotificationToast : Window
 
     private readonly Border _card;
     private readonly SessionNotice _notice;
+
+    /// <summary>自动收起的心跳间隔：0.5 秒够准（收起的时刻误差不超过半秒），也不至于空转得太勤。</summary>
+    private static readonly TimeSpan DismissPollInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>自动收起的倒计时；<see cref="SessionNotice.AutoDismissAfter"/> 为 0 时始终是 null。</summary>
+    private DispatcherTimer? _dismissTimer;
+
+    /// <summary>该收起的时刻（指针压着时一路往后推 = 暂停计时）。null = 还没开始计时。</summary>
+    private DateTime? _dismissDueAt;
 
     private NotificationToast(SessionNotice notice)
     {
@@ -123,11 +135,73 @@ public sealed class NotificationToast : Window
 
         toast.Show();
 
+        // 只有浮窗、没有声音时很容易被漏掉（尤其是人不在屏幕前）。
+        // 用系统提示音，音量与开关跟随 Windows 的「声音」设置。
+        NoticeSound.Play();
+
         // 定位与底色都要等首帧布局跑完才准：SizeToContent 撑出来的高度这时才有值，
         // ActualTransparencyLevel 也才被平台回填成真实级别。
         Dispatcher.UIThread.Post(
-            () => { toast.ApplySurface(); Place(); },
+            () => { toast.ApplySurface(); Place(); toast.StartAutoDismiss(); },
             DispatcherPriority.Loaded);
+    }
+
+    /// <summary>开始自动收起的倒计时（<see cref="SessionNotice.AutoDismissAfter"/> 为 0 就不开始）。</summary>
+    private void StartAutoDismiss()
+    {
+        if (_notice.AutoDismissAfter <= TimeSpan.Zero) return;
+        Schedule(_notice.AutoDismissAfter);
+    }
+
+    /// <summary>
+    /// 起一段倒计时：记下「到什么时候该收」，再按 <see cref="DismissPollInterval"/> 心跳。
+    ///
+    /// <b>为什么用心跳而不是一次性定时器</b>：要支持「指针压在浮窗上就不计时」。
+    /// 一次性定时器只能停 / 重排，而「暂停」期间的剩余时间得自己记；
+    /// 心跳只用把截止时刻往后推同样的量，暂停就自然成立了。
+    /// </summary>
+    private void Schedule(TimeSpan hold)
+    {
+        _dismissTimer?.Stop();
+        _dismissDueAt = DateTime.UtcNow + hold;
+
+        _dismissTimer = new DispatcherTimer { Interval = DismissPollInterval };
+        _dismissTimer.Tick += OnDismissTick;
+        _dismissTimer.Start();
+    }
+
+    private void OnDismissTick(object? sender, EventArgs e)
+    {
+        // 指针正压在浮窗上（含卡片里的按钮和文字）：人正在读它，把截止时刻一起往后挪。
+        // 判定用 IsPointerOver 而不是 PointerEntered/Exited —— 那两个是「这一层控件」的进出，
+        // 指针挪到卡片里的按钮上时会先给父级一次 Exited，计时会变成一停一走。
+        if (IsPointerOver)
+        {
+            if (_dismissDueAt is { } held) _dismissDueAt = held + DismissPollInterval;
+            return;
+        }
+
+        if (_dismissDueAt is { } due && DateTime.UtcNow >= due) Dismiss();
+    }
+
+    /// <summary>
+    /// 收起某个会话的提醒：用户已经打开了它，这条提醒要说的事已经传达到，
+    /// 留着只会让他再点一次关闭。可从任意线程调用。
+    /// </summary>
+    public static void DismissFor(string sessionId)
+    {
+        if (string.IsNullOrEmpty(sessionId)) return;
+
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(() => DismissFor(sessionId));
+            return;
+        }
+
+        // 倒着遍历：Dismiss 会把自己从 Visible 里摘掉，正序会漏项
+        for (var i = Visible.Count - 1; i >= 0; i--)
+            if (string.Equals(Visible[i]._notice.SessionId, sessionId, StringComparison.Ordinal))
+                Visible[i].Dismiss();
     }
 
     /// <summary>收起（关闭按钮、动作按钮、被挤掉时都走这里）。</summary>
@@ -140,6 +214,12 @@ public sealed class NotificationToast : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        // 停表：DispatcherTimer 活着会一直挂着这个窗口的委托，
+        // 窗口虽然关了，计时器还在按秒叫醒它。
+        _dismissTimer?.Stop();
+        _dismissTimer = null;
+        _dismissDueAt = null;
+
         Visible.Remove(this);
         base.OnClosed(e);
     }

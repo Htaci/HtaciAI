@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -23,11 +24,20 @@ public partial class ToolSelectorControl : UserControl
     private readonly List<MenuItem> _toolsetItems = new();
     private readonly List<MenuItem> _toolItems = new();
 
+    /// <summary>菜单重建用的内容指纹（见 <see cref="Signature"/>）。</summary>
+    private string _lastSignature = "";
+
     public ToolSelectorControl()
     {
         InitializeComponent();
         MenuTheme.Apply(RootBtn.Flyout as MenuFlyout);
         RebuildMenu();
+
+        // 菜单每次打开都通知宿主重新注入工具列表（工具页里新建 / 删除 / 改名，切回会话就能看到）。
+        // 用 Opening 而不是 Click：Click 时菜单已经开始展开，事件顺序不可控
+        // （与 ModelSelector 同一个理由）。
+        if (RootBtn.Flyout is MenuFlyout menu)
+            menu.Opening += (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty);
     }
 
     // ============================================================
@@ -81,6 +91,12 @@ public partial class ToolSelectorControl : UserControl
     /// <summary>选中集合变化时触发。</summary>
     public event EventHandler? SelectionChanged;
 
+    /// <summary>
+    /// 菜单即将打开。宿主应在此重新注入 <see cref="Toolsets"/> / <see cref="Tools"/> ——
+    /// 只有创建时注入一次的话，之后在工具页改了工具，这个选择器会一直显示旧数据。
+    /// </summary>
+    public event EventHandler? RefreshRequested;
+
     // ============================================================
     // 属性变化
     // ============================================================
@@ -92,12 +108,12 @@ public partial class ToolSelectorControl : UserControl
         if (change.Property == ToolsetsProperty)
         {
             _toolsets = (Toolsets ?? Array.Empty<Toolset>()).ToList();
-            RebuildMenu();
+            RebuildMenuIfChanged();
         }
         else if (change.Property == ToolsProperty)
         {
             _tools = (Tools ?? Array.Empty<ToolDefinition>()).ToList();
-            RebuildMenu();
+            RebuildMenuIfChanged();
         }
         else if (change.Property == SelectedToolIdsProperty)
         {
@@ -132,9 +148,33 @@ public partial class ToolSelectorControl : UserControl
     // 菜单构建
     // ============================================================
 
+    /// <summary>
+    /// 内容指纹：决定菜单结构与每一项文案的那些字段。
+    /// 每次打开菜单宿主都会重新注入一次列表，内容没变时靠它跳过重建 ——
+    /// 否则菜单刚展开就被清空重填，会闪一下。
+    /// </summary>
+    private string Signature()
+    {
+        var builder = new StringBuilder();
+        foreach (var ts in _toolsets)
+            builder.Append(ts.Id).Append('\u0001').Append(ts.Name).Append('\u0002');
+        builder.Append('\u0003');
+        foreach (var tool in _tools)
+            builder.Append(tool.Id).Append('\u0001').Append(tool.Name).Append('\u0002');
+        return builder.ToString();
+    }
+
+    private void RebuildMenuIfChanged()
+    {
+        if (Signature() == _lastSignature) return;
+
+        RebuildMenu();
+    }
+
     /// <summary>重建菜单：快捷操作 → 工具集勾选区 → 工具勾选区。</summary>
     private void RebuildMenu()
     {
+        _lastSignature = Signature();
         // 通过按钮 Flyout 访问菜单，避免 Flyout 上 x:Name 字段的编译歧义（与 ModelSelector 相同的已知坑）
         if (RootBtn.Flyout is not MenuFlyout menu) return;
         var items = menu.Items;

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,23 +18,20 @@ namespace HtaciAI.Services.Plugins;
 /// 以及「工作空间那套三层拼装不能与普通对话合流」的注释一起搅动，收益为零。
 /// 这里包一层就够了。
 ///
-/// <b>配额是硬约束</b>：插件这条路能悄悄改变模型行为，所以既有单插件上限也有单轮合计上限，
-/// 超了就截断并记日志 —— 而不是让某一个插件把整个 system 撑爆。
+/// <b>不设字符配额</b>：贡献多少就拼多少。早先有「单插件 4 KB、单轮合计 8 KB」的硬上限，
+/// 但那是按字符数拍脑袋定的 —— 真正限制上下文的是模型自己的窗口，而同一段提示词在
+/// 不同模型下该不该带、带多少，宿主管不着也管不好。所以截断整段拿掉，
+/// 只剩超时与异常兜底（这两条是稳定性问题，不是配额）。
+/// 每个插件最近一次贡献了多少字仍然记着，插件页照旧显示。
 /// </summary>
 public static class PromptComposer
 {
-    /// <summary>单个插件每轮最多贡献多少字符。</summary>
-    public const int PerPluginLimit = 4 * 1024;
-
-    /// <summary>一轮所有插件合计最多贡献多少字符。</summary>
-    public const int TotalLimit = 8 * 1024;
-
     /// <summary>单个贡献者的超时。慢插件不能拖住发送。</summary>
     private static readonly TimeSpan ContributorTimeout = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// 组装本轮 system：先取档案自己的提示词，再按 <see cref="IPromptContributor.Order"/>
-    /// 依次追加插件贡献，最后统一截断。
+    /// 依次追加插件贡献，不截断。
     ///
     /// <b>永远返回可用字符串</b>：贡献者抛异常、超时、返回空白，都只是少一段内容，
     /// 绝不会让这一轮发送失败。
@@ -45,7 +42,7 @@ public static class PromptComposer
         var builder = new StringBuilder(profile.BuildSystemPrompt(modelId));
 
         // 「直接执行任务」是用户自己的偏好，排在档案提示词之后、插件贡献之前：
-        // 插件贡献是附加信息，不该插在用户偏好与档案之间。它也不占插件的字数配额。
+        // 插件贡献是附加信息，不该插在用户偏好与档案之间。
         var directive = TaskExecutionDirective.Build();
         if (directive.Length > 0)
         {
@@ -53,11 +50,20 @@ public static class PromptComposer
             builder.AppendLine(directive);
         }
 
+        // 回复总结的说明：只在这项功能打开时才追加，关着时提示词与升级前一字不差。
+        // 放在这里而不是两个档案的 BuildSystemPrompt 里：那是纯字符串拼接，
+        // 改成读设置会把「工作空间的拼装不能与普通对话合流」那套约束一起搅动。
+        var summaryDirective = ContextCompression.BuildSystemDirective();
+        if (summaryDirective.Length > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine(summaryDirective);
+        }
+
         var contributors = PluginPromptRegistry.Snapshot();
         if (contributors.Count == 0) return builder.ToString();
 
         var context = new PromptContext(sessionId, modelId);
-        var total = 0;
 
         foreach (var entry in contributors)
         {
@@ -70,36 +76,10 @@ public static class PromptComposer
                 continue;
             }
 
-            var pluginChars = text.Length;
-            if (pluginChars > PerPluginLimit)
-            {
-                PluginLog.Warn(entry.PluginId,
-                    $"上下文贡献超过单插件上限（{pluginChars} > {PerPluginLimit} 字），已截断");
-                text = text[..PerPluginLimit];
-                pluginChars = PerPluginLimit;
-            }
-
-            var remaining = TotalLimit - total;
-            if (remaining <= 0)
-            {
-                PluginLog.Warn(entry.PluginId, $"本轮上下文贡献已达合计上限 {TotalLimit} 字，跳过该贡献者");
-                PluginPromptUsage.Set(entry.PluginId, 0);
-                continue;
-            }
-
-            if (pluginChars > remaining)
-            {
-                PluginLog.Warn(entry.PluginId,
-                    $"本轮上下文贡献合计将超过 {TotalLimit} 字，该贡献者截断到 {remaining} 字");
-                text = text[..remaining];
-                pluginChars = remaining;
-            }
-
             builder.AppendLine();
             builder.AppendLine($"<!-- plugin: {entry.PluginId} -->");
             builder.AppendLine(text.TrimEnd());
-            total += pluginChars;
-            PluginPromptUsage.Set(entry.PluginId, pluginChars);
+            PluginPromptUsage.Set(entry.PluginId, text.Length);
         }
 
         return builder.ToString();

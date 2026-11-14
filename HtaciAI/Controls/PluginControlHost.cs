@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using HtaciAI.Plugin.Abstractions;
 using HtaciAI.Services.Plugins;
 
 namespace HtaciAI.Controls;
@@ -20,12 +21,17 @@ namespace HtaciAI.Controls;
 /// </summary>
 public sealed class PluginControlHost : ContentControl
 {
-    public PluginControlHost(string pluginId, Func<Control> factory)
+    public PluginControlHost(string pluginId, Func<Control> factory, string? slotId = null, string? sessionId = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(pluginId);
         ArgumentNullException.ThrowIfNull(factory);
 
         PluginId = pluginId;
+
+        // 先设上下文再建控件：插件的工厂函数里可能立刻就要读「我是哪个会话的」。
+        // 反过来做的话，第一次画出来的那一份永远是「不知道会话」的状态。
+        if (slotId is not null)
+            DataContext = new PluginSlotContext(slotId, sessionId);
 
         try
         {
@@ -79,12 +85,16 @@ public static class PluginSlotPanel
     /// 用 <paramref name="slotId"/> 的内容重建 <paramref name="target"/>。
     /// <b>没有内容时把 target 隐藏</b>：留一个空的面板会白白占掉一条边距。
     /// </summary>
-    public static void Fill(Panel target, string slotId)
+    /// <param name="sessionId">
+    /// 这个位置的会话 id（会话页里就是当前会话）；<b>与会话无关或还没有会话时传 null</b>。
+    /// 插件通过 <see cref="PluginSlotContext.Find"/> 读它，用来区分「我这一份是谁的」。
+    /// </param>
+    public static void Fill(Panel target, string slotId, string? sessionId = null)
     {
         target.Children.Clear();
 
         foreach (var entry in PluginUiRegistry.Instance.GetSlot(slotId))
-            target.Children.Add(new PluginControlHost(entry.PluginId, entry.Factory));
+            target.Children.Add(new PluginControlHost(entry.PluginId, entry.Factory, slotId, sessionId));
 
         target.IsVisible = target.Children.Count > 0;
     }

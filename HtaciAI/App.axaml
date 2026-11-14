@@ -61,6 +61,89 @@
             <Setter Property="MinHeight" Value="0"/>
             <Setter Property="Padding" Value="12,6"/>
         </Style>
+
+        <!-- ===== 细滚动条：给容器加 Classes="thin-scrollbar" 即可 =====
+             4px 圆角滑块、没有上下箭头按钮、不占内容宽度。
+             对话页左侧导航、消息卡片内容区、以及设置页里那些贴着圆角卡片的列表都用它：
+             原生滚动条是 10px 带箭头的灰条，压在白卡片的圆角上会直接盖掉边角，
+             悬停时还会整条变宽变深，和这几处的观感完全不搭。
+
+             第一段用 .thin-scrollbar（类选择器）而不是 ScrollViewer.thin-scrollbar，
+             免得依赖 Avalonia 的类型选择器是否匹配子类 —— 容器是 SmoothScrollViewer。 -->
+        <Style Selector=".thin-scrollbar ScrollBar">
+            <Setter Property="Width" Value="4"/>
+            <Setter Property="MinWidth" Value="4"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Width="4" Background="Transparent">
+                            <Rectangle Fill="Transparent"/>
+                            <!-- Value 必须双向，且必须用 {TemplateBinding} 而不是
+                                 {Binding RelativeSource={RelativeSource TemplatedParent}}：
+                                 TemplateBindingExpression 的优先级是 Template，回写走 SetCurrentValue，
+                                 不会顶掉 ScrollBar 自己那条 Template 优先级的 Offset→Value 绑定。
+                                 换成普通 Binding 后回写是 SetValue（LocalValue 优先级），拖一次滑块就会
+                                 把那条绑定永久压死 —— 现象是「能拖能滚，但滚轮滚动时滑块不动」。
+                                 其余属性照抄 Avalonia Fluent 的 ScrollBar 模板。 -->
+                            <Track Name="PART_Track"
+                                   Orientation="{TemplateBinding Orientation}"
+                                   IsDirectionReversed="True"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value, Mode=TwoWay}"
+                                   ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.DecreaseButton>
+                                <Track.IncreaseButton>
+                                    <RepeatButton IsTabStop="False" Focusable="False"
+                                                  Opacity="0" Width="0" Height="0"/>
+                                </Track.IncreaseButton>
+                                <Track.Thumb>
+                                    <Thumb MinHeight="28" IsTabStop="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="#D8D8DC" CornerRadius="2"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ===== 单行输入框的文字上下居中 =====
+             Fluent 的 TextBox 模板没有把 VerticalContentAlignment 传给模板内元素：
+             固定高度（Height=34 这种）时正文会贴着上边，占位文字（PART_Placeholder）
+             更是固定贴在顶部 —— 看起来就像「输入框里的字没对齐」。
+             给输入框加 Classes="center-text" 即可，两处一起改。
+             ⚠️ 不要做成全局 TextBox 规则：多行输入框（描述、系统提示、聊天输入）
+             必须保持顶部对齐，整段文字在框里垂直居中会很怪。 -->
+        <Style Selector="TextBox.center-text">
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="TextBox.center-text /template/ TextBlock#PART_Placeholder">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- ===== 按钮内容的垂直居中 =====
+             Avalonia 12 的 Button 默认 VerticalContentAlignment 是 Stretch：
+             固定高度的按钮（Height=34 那种）里，内容被拉满整个内容区，正文于是贴着顶边，
+             看起来就是「按钮上的字没居中」。竖向居中永远是按钮想要的，统一给上；
+             横向不动 —— 需要左对齐内容的按钮自己设 HorizontalContentAlignment。 -->
+        <Style Selector="Button">
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <!-- 悬停滑块加深，提示可拖拽 -->
+        <Style Selector=".thin-scrollbar ScrollBar /template/ Thumb:pointerover /template/ Border">
+            <Setter Property="Background" Value="#A6A6AD"/>
+        </Style>
     </Application.Styles>
 
     <Application.Resources>

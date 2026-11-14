@@ -111,6 +111,22 @@ public sealed record ChatEvent
     /// <summary>会话内顺序号（<see cref="ChatEventKind.MessagePersisted"/>）。</summary>
     public int SequenceNumber { get; init; }
 
+    /// <summary>
+    /// 这一轮属于哪一次派发（等于 <c>chat_message.turn_id</c>，是宿主内的字符串编号）。
+    ///
+    /// <b>只有轮次结束类事件带它</b>（<see cref="ChatEventKind.RoundCompleted"/> /
+    /// <see cref="ChatEventKind.RoundFailed"/>）。插件派发完一轮再等结果时必须靠它认领：
+    /// 同一条会话上可能同时有用户开着窗口在聊，或者插件连着派了两个任务，
+    /// 只看 <see cref="SessionId"/> 会把别人的结果当成自己的。
+    /// </summary>
+    public string? TurnId { get; init; }
+
+    /// <summary>
+    /// 这一轮是不是由插件经 <see cref="ISessionFacade"/> 发起的（用户自己发的为 false）。
+    /// 与 <see cref="TurnId"/> 配合用更省事：「只认自己派的那一轮」直接看它。
+    /// </summary>
+    public bool IsPluginInitiated { get; init; }
+
     /// <summary>事件产生时间（Unix 毫秒）。</summary>
     public long Timestamp { get; init; }
 }
