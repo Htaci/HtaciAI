@@ -120,3 +120,5 @@ $RECYCLE.BIN/
 # --- macOS / junk (AppleDouble) ---
 .DS_Store
 ._*
+# --- Claude Code ---
+.claude/
