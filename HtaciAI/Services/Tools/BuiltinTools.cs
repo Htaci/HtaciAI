@@ -38,6 +38,8 @@ public static class BuiltinTools
     private const string IdAskUser = "builtin-ask-user";
     private const string IdAskContinue = "builtin-ask-continue";
     private const string IdViewImage = "builtin-view-image";
+    private const string IdViewVideo = "builtin-view-video";
+    private const string IdViewVideoFrames = "builtin-view-video-frames";
     private const string IdCreateTool = "builtin-create-tool";
     private const string IdCreateSkill = "builtin-create-skill";
     private const string IdTask = "builtin-task";
@@ -179,6 +181,32 @@ public static class BuiltinTools
             DangerLevel = ToolDangerLevel.Safe,
             InputSchemaJson =
                 "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"图片文件的绝对路径\"}},\"required\":[\"path\"]}",
+        },
+        new ToolDefinition
+        {
+            Id = IdViewVideo,
+            Name = "view_video",
+            Description = "查看本地视频文件的内容（原样交给支持视频输入的模型，本地不做解码或抽帧）。用户消息里给出的视频路径就是让你用这个工具去看的，看完再回答。安全：只读。需要当前模型支持视频。",
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Safe,
+            InputSchemaJson =
+                "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"视频文件的绝对路径\"}},\"required\":[\"path\"]}",
+        },
+        new ToolDefinition
+        {
+            Id = IdViewVideoFrames,
+            Name = "view_video_frames",
+            Description = """
+                查看本地视频文件的内容：用本机的 ffmpeg 把视频按固定间隔抽成若干张图片，随工具结果一起交给你。
+                需要当前模型支持视觉（不需要支持视频输入）——支持视频输入的模型可以直接用 view_video，看不了视频时用这个。
+                适合：视频里讲了什么、某段时间画面是什么、有没有出现某个东西。默认 12 帧、每帧压到长边 768 像素。
+                安全：只读，只是把解码出的帧写到数据目录的 frames 下。需要本机装了 ffmpeg（设置 → 环境配置）。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Safe,
+            InputSchemaJson = """
+                {"type":"object","properties":{"path":{"type":"string","description":"视频文件的绝对路径"},"start":{"type":"number","description":"从第几秒开始抽（默认 0）"},"duration":{"type":"number","description":"抽多长的片段，单位秒（默认到视频结尾）"},"interval":{"type":"number","description":"每几秒抽一帧（默认按 max_frames 在片段内均分）；帧数因此超过 max_frames 时会自动放宽"},"max_frames":{"type":"integer","description":"最多抽几帧，默认 12，上限 24"}},"required":["path"]}
+                """,
         },
         new ToolDefinition
         {

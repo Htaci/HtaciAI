@@ -381,29 +381,36 @@ public sealed class OpenAiResponsesClient : IChatClient
     /// 工具结果的 output。带图片的 view_image 结果在模型支持视觉时展开成 part 数组，
     /// 不支持视觉、或文件已被挪走时退回纯文本 —— 与 Chat Completions 客户端的降级策略一致，
     /// 保证换模型 / 删文件之后历史仍然能发出去。
+    ///
+    /// Responses 协议目前没有视频输入类型，view_video 的结果在这里同样只剩纯文本。
     /// </summary>
     private static object BuildToolOutput(ChatMessage m, bool supportsVision)
     {
         var text = m.Content ?? "";
         if (!supportsVision) return text;
 
-        var imagePath = ToolImageJson.Deserialize(m.Metadata);
-        if (imagePath is null || !File.Exists(imagePath)) return text;
+        var parts = new List<object>
+        {
+            new Dictionary<string, object?> { ["type"] = "input_text", ["text"] = text },
+        };
 
-        try
+        // 一个结果可能带多张图（view_video_frames 抽出来的帧）：按抽帧顺序各成一个 input_image
+        foreach (var imagePath in ToolImageJson.DeserializeMany(m.Metadata))
         {
-            var uri = $"data:{OpenAiChatClient.MimeFor(imagePath)};base64," +
-                      Convert.ToBase64String(File.ReadAllBytes(imagePath));
-            return new List<object>
+            if (!File.Exists(imagePath)) continue;
+            try
             {
-                new Dictionary<string, object?> { ["type"] = "input_text", ["text"] = text },
-                new Dictionary<string, object?> { ["type"] = "input_image", ["image_url"] = uri },
-            };
+                var uri = $"data:{OpenAiChatClient.MimeFor(imagePath)};base64," +
+                          Convert.ToBase64String(File.ReadAllBytes(imagePath));
+                parts.Add(new Dictionary<string, object?> { ["type"] = "input_image", ["image_url"] = uri });
+            }
+            catch
+            {
+                // 这一张读不出来：跳过它，别让整轮请求发不出去
+            }
         }
-        catch
-        {
-            return text;
-        }
+
+        return parts.Count > 1 ? parts : text;
     }
 
     private static string? GetString(JsonElement el, string name)

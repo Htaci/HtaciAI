@@ -14,8 +14,8 @@ using HtaciAI.Services.Tools;
 namespace HtaciAI.Views.Settings;
 
 /// <summary>
-/// 环境配置页：管理脚本工具依赖的运行时（Python / Node.js）、版本控制 Git，
-/// 以及 <c>bash</c> 工具背后执行命令的 shell。
+/// 环境配置页：管理脚本工具依赖的运行时（Python / Node.js）、版本控制 Git、
+/// 视频抽帧用的 FFmpeg，以及 <c>bash</c> 工具背后执行命令的 shell。
 /// 自动检测系统 PATH，检测失败可手动指定解释器；数据驱动结构便于未来扩展其他运行时。
 /// </summary>
 public partial class RuntimeSettingsPage : UserControl
@@ -31,7 +31,7 @@ public partial class RuntimeSettingsPage : UserControl
         // 命令行工具排在最前：它决定 AI 用什么语法写命令，比「装没装 Python」更常影响使用
         RuntimeList.Children.Add(CreateShellCard());
 
-        foreach (var kind in new[] { ScriptRuntimeKind.Python, ScriptRuntimeKind.Node, ScriptRuntimeKind.Git })
+        foreach (var kind in new[] { ScriptRuntimeKind.Python, ScriptRuntimeKind.Node, ScriptRuntimeKind.Git, ScriptRuntimeKind.Ffmpeg })
             RuntimeList.Children.Add(CreateCard(kind));
 
         _ = RefreshAllAsync();

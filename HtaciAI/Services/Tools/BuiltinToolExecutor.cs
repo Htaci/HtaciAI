@@ -61,6 +61,12 @@ public sealed class BuiltinToolContext
     public bool SupportsVision { get; set; }
 
     /// <summary>
+    /// 当前模型是否支持视频输入。与 <see cref="SupportsVision"/> 同一套刷新时机：
+    /// 不支持时 view_video 直接报错，历史里遗留的视频结果由客户端降级成文本。
+    /// </summary>
+    public bool SupportsVideo { get; set; }
+
+    /// <summary>
     /// 派发子 Agent。为 null 时 task 工具直接报不可用 ——
     /// 只有拿到「父会话的配置快照与交互宿主」的那一侧（<c>ConversationRuntime</c>）才能提供它，
     /// 插件在别处调工具时本来也不该凭空派发出一个会话。
@@ -171,6 +177,8 @@ public sealed class BuiltinToolExecutor
                 "ask_user_question" => await AskUserQuestionAsync(call, ctx, ct),
         "ask_user_continue" => await AskUserContinueAsync(call, ctx, ct),
                 "view_image" => ViewImage(call, ctx),
+                "view_video" => ViewVideo(call, ctx),
+                "view_video_frames" => await ViewVideoFramesAsync(call, ctx, ct),
                 BuiltinTools.TaskToolName => await RunTaskAsync(call, ctx, ct),
                 BuiltinTools.CreateToolName => await CreateToolAsync(call),
                 BuiltinTools.CreateSkillName => await CreateSkillAsync(call),
@@ -992,6 +1000,8 @@ public sealed class BuiltinToolExecutor
             return ToolExecution.Fail("当前模型不支持视觉图像，无法查看图片内容。请基于文件名与用户描述继续，或请用户直接说明图片内容。");
 
         if (!File.Exists(path)) return ToolExecution.Fail($"文件不存在：{path}");
+        if (AttachmentStore.IsVideo(path))
+            return ToolExecution.Fail($"这是视频文件，请用 view_video 查看：{path}");
         if (!AttachmentStore.IsImage(path)) return ToolExecution.Fail($"不是可识别的图片格式：{path}");
 
         var bytes = new FileInfo(path).Length;
@@ -999,6 +1009,243 @@ public sealed class BuiltinToolExecutor
             return ToolExecution.Fail($"图片过大（{bytes / 1024 / 1024} MB），上限 {MaxImageBytes / 1024 / 1024} MB");
 
         return ToolExecution.OkImage($"已读取图片：{path}", path);
+    }
+
+    // ---- view_video ----
+
+    /// <summary>
+    /// 单段视频的大小上限。视频不做解码或抽帧，整段 base64 进请求体，
+    /// 所以这里守的是「一次性内联」这条路的上限：base64 会把体积撑大约 4/3，
+    /// 20 MB 的源文件编码后约 27 MB，已接近多数端点（Gemini / Qwen / GLM）的内联额度。
+    /// </summary>
+    private const long MaxVideoBytes = 20 * 1024 * 1024;
+
+    private static ToolExecution ViewVideo(ChatToolCall call, BuiltinToolContext ctx)
+    {
+        var path = BuiltinToolContext.ResolvePath(ctx, BuiltinToolContext.GetArg(call, "path"));
+        if (string.IsNullOrEmpty(path)) return ToolExecution.Fail("缺少 path 参数");
+
+        // 不支持视频的模型：明确告诉它看不了，而不是让整轮请求被 API 拒掉
+        if (!ctx.SupportsVideo)
+            return ToolExecution.Fail("当前模型不支持视频输入，无法查看视频内容。请基于文件名与用户描述继续，或请用户直接说明视频内容。");
+
+        if (!File.Exists(path)) return ToolExecution.Fail($"文件不存在：{path}");
+        if (AttachmentStore.IsImage(path))
+            return ToolExecution.Fail($"这是图片，请用 view_image 查看：{path}");
+        if (!AttachmentStore.IsVideo(path)) return ToolExecution.Fail($"不是可识别的视频格式：{path}");
+
+        var bytes = new FileInfo(path).Length;
+        if (bytes > MaxVideoBytes)
+            return ToolExecution.Fail(
+                $"视频过大（{bytes / 1024 / 1024} MB），上限 {MaxVideoBytes / 1024 / 1024} MB。" +
+                "请让用户换更短或更低码率的片段（本地不做抽帧压缩）。");
+
+        return ToolExecution.OkVideo($"已读取视频：{path}", path);
+    }
+
+    // ---- view_video_frames（本地抽帧） ----
+
+    /// <summary>默认抽多少帧。</summary>
+    private const int DefaultFrameCount = 12;
+
+    /// <summary>一次最多抽多少帧。再多就是拿上下文换细节，模型反而看不过来。</summary>
+    private const int MaxFrameCount = 24;
+
+    /// <summary>抽出来的帧的长边上限（像素）。4K 原样送一张就能吃掉几千 token。</summary>
+    private const int FrameLongSide = 768;
+
+    /// <summary>ffmpeg / ffprobe 单次运行的上限。抽 24 帧通常几秒完成，两分钟是给慢盘和长视频的余量。</summary>
+    private const int FrameProcessTimeoutSeconds = 120;
+
+    /// <summary>
+    /// 抽帧：把「模型看不了整段视频」这件事在本地解决 —— 用 ffmpeg 按间隔解码出若干帧，
+    /// 压到长边 768 后作为图片交上去（与 view_image 走同一条图片通道，不碰视频通道）。
+    ///
+    /// 为什么要压：一帧 1080p 原图约 1.5 MB、编码后仍是几十万 token 量级；
+    /// 768 英寸长边的 JPEG 每帧约 200~400 token，12 帧才 3k~5k，才有资格和正文比。
+    /// </summary>
+    private static async Task<ToolExecution> ViewVideoFramesAsync(
+        ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
+    {
+        var path = BuiltinToolContext.ResolvePath(ctx, BuiltinToolContext.GetArg(call, "path"));
+        if (string.IsNullOrEmpty(path)) return ToolExecution.Fail("缺少 path 参数");
+
+        // 交出去的是图片而不是视频：要的是「视觉」能力，不是「视频输入」能力
+        if (!ctx.SupportsVision)
+            return ToolExecution.Fail("当前模型不支持视觉图像，抽出来的帧它也看不了。请基于文件名与用户描述继续，或请用户直接说明视频内容。");
+
+        if (!File.Exists(path)) return ToolExecution.Fail($"文件不存在：{path}");
+        if (AttachmentStore.IsImage(path))
+            return ToolExecution.Fail($"这是图片，请用 view_image 查看：{path}");
+        if (!AttachmentStore.IsVideo(path)) return ToolExecution.Fail($"不是可识别的视频格式：{path}");
+
+        var ffmpeg = RuntimeDetector.ResolveExecutable(ScriptRuntimeKind.Ffmpeg);
+        if (ffmpeg is null)
+            return ToolExecution.Fail(
+                "没找到 ffmpeg，无法抽帧。请让用户到「设置 → 环境配置」的 FFmpeg 卡片里点「重新检测」，" +
+                "装好之后还没找到就点「手动选择…」指定 ffmpeg.exe。");
+
+        // ffprobe 一般和 ffmpeg 同目录；先找兄弟文件，再退回 PATH
+        var ffprobe = FindSibling(ffmpeg, "ffprobe") ?? RuntimeDetector.FindInPath("ffprobe");
+        if (ffprobe is null)
+            return ToolExecution.Fail(
+                "没找到 ffprobe（读视频时长要用它）。它和 ffmpeg 在同一个目录里，" +
+                "请让用户在环境配置的 FFmpeg 卡片里指定那个目录下的 ffprobe.exe。");
+
+        // 时长决定抽帧范围与间隔，先问出来
+        var probe = await RunProcessAsync(NewPsi(ffprobe, new[]
+        {
+            "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", path,
+        }), FrameProcessTimeoutSeconds, ct);
+        if (!probe.Success)
+            return ToolExecution.Fail($"读取视频信息失败：{probe.Display}");
+        if (!double.TryParse(probe.Content.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var total) || total <= 0)
+            return ToolExecution.Fail($"读不出视频时长：{probe.Content.Trim()}");
+
+        var start = Math.Clamp(ReadDoubleArg(call, "start") ?? 0, 0, total);
+        var remaining = total - start;
+        if (remaining <= 0.05)
+            return ToolExecution.Fail($"起点 {start:0.#} 秒已经在视频末尾（总长 {total:0.#} 秒）。");
+
+        var span = ReadDoubleArg(call, "duration") is { } wanted and > 0
+            ? Math.Min(wanted, remaining)
+            : remaining;
+
+        var maxFrames = Math.Clamp(ReadIntArg(call, "max_frames") ?? DefaultFrameCount, 1, MaxFrameCount);
+
+        // 间隔：模型给了就按它；但帧数会超上限时自动放宽 —— 少看几帧还能答，直接报错就什么都没得看
+        var interval = ReadDoubleArg(call, "interval") is { } every and > 0 ? every : span / maxFrames;
+        if (span / interval > maxFrames) interval = span / maxFrames;
+        interval = Math.Max(interval, 0.05);
+
+        var dir = Path.Combine(
+            AppPaths.Attachments, "frames",
+            $"{SafeFileName(Path.GetFileNameWithoutExtension(path))}_{DateTime.Now:yyyyMMdd_HHmmss_fff}");
+        Directory.CreateDirectory(dir);
+
+        // fps 滤镜要的是有理数：写成 1000/毫秒数，别让 1/3.47 这种小数被解析成别的东西
+        var rate = $"1000/{Math.Max(1, (int)Math.Round(interval * 1000))}";
+        var run = await RunProcessAsync(NewPsi(ffmpeg, new[]
+        {
+            "-hide_banner", "-loglevel", "error",
+            // -nostdin：别让它去读继承来的 stdin（从管道启动的应用会把 stdin 传下去，ffmpeg 会一直等）
+            "-nostdin",
+            // -ss 放在 -i 前面：输入侧定位，长视频不用从头解；默认 accurate_seek 保证时间点准
+            "-ss", start.ToString("0.###", CultureInfo.InvariantCulture),
+            "-t", span.ToString("0.###", CultureInfo.InvariantCulture),
+            "-i", path,
+            // 长边压到 768（filter 里 min() 的逗号按 ffmpeg 语法反斜杠转义）
+            "-vf", $"fps={rate},scale=min({FrameLongSide}\\,iw):-2",
+            "-an", "-q:v", "3", "-y",
+            Path.Combine(dir, "frame_%04d.jpg"),
+        }), FrameProcessTimeoutSeconds, ct);
+        if (!run.Success) return ToolExecution.Fail($"ffmpeg 抽帧失败：{run.Display}");
+
+        var files = Directory.GetFiles(dir, "frame_*.jpg");
+        Array.Sort(files, StringComparer.Ordinal);
+        if (files.Length == 0)
+            return ToolExecution.Fail("ffmpeg 没有产出任何帧（片段太短，或整段没有可解码的画面）。");
+
+        // 序号换算回时间点写进文件名：模型读文件名就知道每帧在第几秒，不必再对照一份时间轴
+        var frames = new List<string>();
+        long bytes = 0;
+        var take = Math.Min(files.Length, maxFrames);
+        for (var n = 0; n < take; n++)
+        {
+            var at = start + (n + 0.5) * interval;
+            var target = Path.Combine(dir, $"frame_{n + 1:0000}_{FormatClock(at)}.jpg");
+            try
+            {
+                if (!string.Equals(files[n], target, StringComparison.Ordinal)) File.Move(files[n], target);
+            }
+            catch
+            {
+                target = files[n]; // 改名失败不影响内容，继续用原文件名
+            }
+
+            frames.Add(target);
+            try { bytes += new FileInfo(target).Length; } catch { /* 取不到大小就不统计 */ }
+        }
+
+        var sb = new StringBuilder();
+        sb.Append($"已抽取 {frames.Count} 帧（每 {interval:0.##} 秒一帧，覆盖第 {start:0.#}–{start + span:0.#} 秒；");
+        sb.Append($"原视频 {total:0.#} 秒，图像合计 {bytes / 1024.0 / 1024.0:0.##} MB）。这些帧随本条工具结果一起发出：");
+        for (var n = 0; n < frames.Count; n++)
+            sb.Append('\n').Append($"{n + 1}. 第 {start + (n + 0.5) * interval:0.#} 秒 → {frames[n]}");
+
+        return ToolExecution.OkImages(sb.ToString(), frames);
+    }
+
+    /// <summary>同目录下的兄弟可执行文件（ffprobe 就在 ffmpeg 旁边）。</summary>
+    private static string? FindSibling(string exe, string name)
+    {
+        var dir = Path.GetDirectoryName(exe);
+        if (string.IsNullOrEmpty(dir)) return null;
+
+        var sibling = Path.Combine(dir, OperatingSystem.IsWindows() ? name + ".exe" : name);
+        return File.Exists(sibling) ? sibling : null;
+    }
+
+    private static ProcessStartInfo NewPsi(string fileName, IEnumerable<string> arguments)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = fileName,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in arguments)
+            psi.ArgumentList.Add(arg);
+        return psi;
+    }
+
+    /// <summary>文件名里去掉各平台的非法字符：视频名要拿来当抽帧目录名。</summary>
+    private static string SafeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(name.Length);
+        foreach (var c in name)
+            sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+
+        var safe = sb.ToString().Trim();
+        return safe.Length == 0 ? "video" : (safe.Length > 60 ? safe[..60] : safe);
+    }
+
+    /// <summary>秒数写成 00m14s / 01h02m03s，只为了让文件名里的时间点一眼能读。</summary>
+    private static string FormatClock(double seconds)
+    {
+        var total = (int)Math.Round(seconds);
+        return total >= 3600
+            ? $"{total / 3600:00}h{total % 3600 / 60:00}m{total % 60:00}s"
+            : $"{total / 60:00}m{total % 60:00}s";
+    }
+
+    /// <summary>读一个小数参数；缺失或不是数字时返回 null（调用方自己决定默认值）。</summary>
+    private static double? ReadDoubleArg(ChatToolCall call, string name)
+    {
+        if (string.IsNullOrWhiteSpace(call.Arguments)) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(call.Arguments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (!doc.RootElement.TryGetProperty(name, out var value)) return null;
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.Number => value.GetDouble(),
+                JsonValueKind.String when double.TryParse(
+                    value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) => d,
+                _ => null,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     // ---- ask_user_question ----

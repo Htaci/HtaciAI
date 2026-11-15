@@ -331,8 +331,11 @@ public sealed class ChatGateway
                 // 占位行的第二次落库：结果、真实工具名（未解析工具会被改写成 invalid）、失败状态
                 toolMsg.Content = toolContent;
                 toolMsg.ToolName = toolName;
-                // view_image 的结果：只存路径，构造下一次请求时才读文件编码成图片 part
-                toolMsg.Metadata = exec.ImagePath is null ? null : ToolImageJson.Serialize(exec.ImagePath);
+                // view_image / view_video_frames / view_video 的结果：只存路径，
+                // 构造下一次请求时才读文件编码成媒体 part（抽帧可能是多张，存数组）
+                toolMsg.Metadata = exec.ImagePaths is { Count: > 0 } images ? ToolImageJson.Serialize(images)
+                    : exec.VideoPath is not null ? ToolVideoJson.Serialize(exec.VideoPath)
+                    : null;
                 toolMsg.Status = exec.Success ? "completed" : "failed";
                 await store.Update(toolMsg);
             }

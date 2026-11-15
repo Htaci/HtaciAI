@@ -167,7 +167,7 @@ public sealed class OpenAiChatClient : IChatClient
         ChatRoundSink sink,
         CancellationToken ct)
     {
-        var messages = BuildMessages(systemPrompt, history, options.SupportsVision);
+        var messages = BuildMessages(systemPrompt, history, options.SupportsVision, options.SupportsVideo);
         var body = BuildBody(messages, options);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint)
@@ -403,31 +403,66 @@ public sealed class OpenAiChatClient : IChatClient
     /// 落库的是路径，这里才读文件编码 —— 同一份字节每次编码结果一致，
     /// 上下文缓存因此仍然能命中。
     /// </summary>
-    private static object BuildToolContent(ChatMessage m, bool supportsVision)
+    private static object BuildToolContent(ChatMessage m, bool supportsVision, bool supportsVideo)
     {
         var text = m.Content ?? "";
+
+        // 视频：模型与协议都支持时原样内联成 video_url 块（各家兼容端点都是这个字段），
+        // 本地不解码、不抽帧 —— 时序与音轨交给服务端自己处理
+        if (supportsVideo)
+        {
+            var videoPath = ToolVideoJson.Deserialize(m.Metadata);
+            if (videoPath is not null && File.Exists(videoPath))
+            {
+                try
+                {
+                    var videoUri = $"data:{VideoMimeFor(videoPath)};base64," +
+                                   Convert.ToBase64String(File.ReadAllBytes(videoPath));
+                    return new List<object>
+                    {
+                        new Dictionary<string, object?> { ["type"] = "text", ["text"] = text },
+                        new Dictionary<string, object?>
+                        {
+                            ["type"] = "video_url",
+                            ["video_url"] = new Dictionary<string, object?> { ["url"] = videoUri },
+                        },
+                    };
+                }
+                catch
+                {
+                    return text;
+                }
+            }
+        }
+
         if (!supportsVision) return text;
 
-        var imagePath = ToolImageJson.Deserialize(m.Metadata);
-        if (imagePath is null || !File.Exists(imagePath)) return text;
-
-        try
+        var parts = new List<object>
         {
-            var uri = $"data:{MimeFor(imagePath)};base64,{Convert.ToBase64String(File.ReadAllBytes(imagePath))}";
-            return new List<object>
+            new Dictionary<string, object?> { ["type"] = "text", ["text"] = text },
+        };
+
+        // 一个结果可能带多张图（view_video_frames 抽出来的帧）：按抽帧顺序各成一个 image_url 块
+        foreach (var imagePath in ToolImageJson.DeserializeMany(m.Metadata))
+        {
+            if (!File.Exists(imagePath)) continue;
+            try
             {
-                new Dictionary<string, object?> { ["type"] = "text", ["text"] = text },
-                new Dictionary<string, object?>
+                var uri = $"data:{MimeFor(imagePath)};base64,{Convert.ToBase64String(File.ReadAllBytes(imagePath))}";
+                parts.Add(new Dictionary<string, object?>
                 {
                     ["type"] = "image_url",
                     ["image_url"] = new Dictionary<string, object?> { ["url"] = uri },
-                },
-            };
+                });
+            }
+            catch
+            {
+                // 这一张读不出来（被挪走 / 被占用）：跳过它，别让整轮请求发不出去
+            }
         }
-        catch
-        {
-            return text;
-        }
+
+        // 一张都没发出去就退回纯文本，模型至少还能看到工具写的那段说明
+        return parts.Count > 1 ? parts : text;
     }
 
     internal static string MimeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
@@ -442,8 +477,22 @@ public sealed class OpenAiChatClient : IChatClient
         _ => "image/jpeg",
     };
 
+    /// <summary>视频扩展名 → MIME，只用于内联编码（服务端按它决定用什么解码器）。</summary>
+    internal static string VideoMimeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".mov" => "video/quicktime",
+        ".webm" => "video/webm",
+        ".mkv" => "video/x-matroska",
+        ".avi" => "video/x-msvideo",
+        ".mpeg" or ".mpg" => "video/mpeg",
+        ".flv" => "video/x-flv",
+        ".wmv" => "video/x-ms-wmv",
+        ".3gp" => "video/3gpp",
+        _ => "video/mp4",
+    };
+
     /// <summary>从历史消息重建 OpenAI 格式消息数组（system 独立前置，不进 history）。</summary>
-    private static List<object> BuildMessages(string? systemPrompt, IReadOnlyList<ChatMessage> history, bool supportsVision)
+    private static List<object> BuildMessages(string? systemPrompt, IReadOnlyList<ChatMessage> history, bool supportsVision, bool supportsVideo)
     {
         var list = new List<object>();
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -489,7 +538,7 @@ public sealed class OpenAiChatClient : IChatClient
                     {
                         ["role"] = "tool",
                         ["tool_call_id"] = m.ToolCallId,
-                        ["content"] = BuildToolContent(m, supportsVision),
+                        ["content"] = BuildToolContent(m, supportsVision, supportsVideo),
                     });
                     break;
             }

@@ -465,6 +465,7 @@ public sealed class ConversationRuntime
         var system = await PromptComposer.ComposeAsync(
             Profile, Profile.State.Model, SessionId, CancellationToken.None);
         var vision = SupportsVision(request.Settings.Model);
+        var video = SupportsVideo(request.Settings.Model);
 
         // MCP 是惰性连接的：发消息前确保会话启用的服务都连上并发现了工具。
         // 连不上就跳过（内部已记日志），不打断这次对话。
@@ -477,11 +478,13 @@ public sealed class ConversationRuntime
             Thinking = request.Settings.Thinking,
             Tools = tools,
             SupportsVision = vision,
+            SupportsVideo = video,
         };
 
         // 工具执行与请求构造共用同一个开关：不支持视觉时 view_image 直接报错，
         // 历史里遗留的图片 tool 结果也降级成文本，避免整轮请求被 API 拒掉
         _toolExecutor.Context.SupportsVision = vision;
+        _toolExecutor.Context.SupportsVideo = video;
 
         // task 的继承项必须取「本轮真正发给模型的工具」而不是存档里的原始列表：
         // 用户在设置里关掉的自举工具、没连上的 MCP，本来就不该出现在子会话里。
@@ -1486,6 +1489,17 @@ public sealed class ConversationRuntime
     /// <summary>模型是否支持视觉。历史里可能留着 view_image 产生的图片结果。</summary>
     internal static bool SupportsVision(ModelDetails? model)
         => model?.Capabilities.Contains("vision") == true;
+
+    /// <summary>
+    /// 模型是否支持视频输入。要求两件事同时成立：
+    /// 模型表里标了 video 能力，且协议是 Chat Completions 形态 ——
+    /// video 内容块只有 OpenAI 兼容协议认（Anthropic 与 Responses 没有这个字段，
+    /// 标了 video 能力也没处放，发出去会被服务端拒掉整个请求）。
+    /// </summary>
+    internal static bool SupportsVideo(ModelDetails? model)
+        => model is not null
+           && model.Capabilities.Contains("video")
+           && model.Protocol is ModelProtocol.OpenAI or ModelProtocol.LMStudio;
 
     /// <summary>把用户请求压成一行短文案：取前 10 个字，超出部分用省略号（换行也折成空格）。</summary>
     private static string PreviewText(string? text)

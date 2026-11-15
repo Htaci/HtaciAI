@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace HtaciAI.Services.Tools;
 
 /// <summary>
@@ -11,8 +13,15 @@ public sealed record ToolExecution(
     string Content,
     string? Error = null,
     bool IsUnknownTool = false,
-    string? ImagePath = null)
+    IReadOnlyList<string>? ImagePaths = null,
+    string? VideoPath = null)
 {
+    /// <summary>
+    /// 携带的第一张图片。单图工具（view_image）取它即可；
+    /// 多图工具（view_video_frames）请用 <see cref="ImagePaths"/>，否则只会发出第一帧。
+    /// </summary>
+    public string? ImagePath => ImagePaths is { Count: > 0 } ? ImagePaths[0] : null;
+
     public static ToolExecution Ok(string content) => new(true, content, null);
 
     /// <summary>
@@ -20,7 +29,21 @@ public sealed record ToolExecution(
     /// 构造下一次请求时再读文件、编码成图片 part —— 落库的是路径，发出去的是字节。
     /// </summary>
     public static ToolExecution OkImage(string content, string imagePath)
-        => new(true, content, null, false, imagePath);
+        => new(true, content, null, false, new[] { imagePath });
+
+    /// <summary>
+    /// 成功且携带多张图片（view_video_frames 抽出来的帧）。同一轮里一次发完，
+    /// 比「每帧一次工具调用」省掉 N 轮往返；顺序即抽帧顺序，客户端按顺序拼成多个图片 part。
+    /// </summary>
+    public static ToolExecution OkImages(string content, IReadOnlyList<string> imagePaths)
+        => new(true, content, null, false, imagePaths);
+
+    /// <summary>
+    /// 成功且携带一段视频（view_video）。与 <see cref="OkImage"/> 同一条链：
+    /// metadata 里只落路径，客户端按模型是否支持视频决定展开成 video part 还是退回文本。
+    /// </summary>
+    public static ToolExecution OkVideo(string content, string videoPath)
+        => new(true, content, null, false, null, videoPath);
 
     public static ToolExecution Fail(string error) => new(false, "", error);
 

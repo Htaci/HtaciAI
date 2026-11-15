@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -76,7 +76,7 @@ public static class WorkspaceAgentPipeline
 
         sb.AppendLine("工具按用户权限模式执行，未自动允许的调用会请求用户批准或拒绝。\r\n" +
             "工具被拒后应调整，若不明白拒绝原因，用 ask_user_question 询问。\r\n" +
-            "用户消息里出现的文件路径是用户附加的文件：图片用 view_image 查看内容后再回答，其他文件用 read 读取。");
+            "用户消息里出现的文件路径是用户附加的文件：图片用 view_image 查看内容后再回答，视频用 view_video；看不了视频的模型用 view_video_frames 抽帧来查看，其他文件用 read 读取。");
 
         sb.AppendLine(FileCardDirective.Text);
 

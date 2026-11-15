@@ -110,7 +110,7 @@ public static class BuiltinSkills
         ## 四、命名与描述
 
         - `name`：小写字母开头，只含小写字母、数字、下划线。用「动词_宾语」：`fetch_weather`、`convert_image`。
-        - 不要与会话里已有的工具重名（read / write / edit / bash / grep / glob / webfetch / view_image / load_skill / unload_skill / ask_user_question / create_tool / create_skill）。
+        - 不要与会话里已有的工具重名（read / write / edit / bash / grep / glob / webfetch / view_image / view_video / view_video_frames / load_skill / unload_skill / ask_user_question / create_tool / create_skill）。
         - `description`：一句话说清「做什么 + 什么时候用」。这是模型判断要不要调用的唯一依据，别写成产品文案。
 
         ## 五、建完之后

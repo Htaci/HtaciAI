@@ -128,6 +128,12 @@ public sealed class ChatRequestOptions
     public bool SupportsVision { get; set; }
 
     /// <summary>
+    /// 当前模型是否支持视频输入。历史里可能留着 view_video 产生的视频 tool 结果，
+    /// 换到不支持视频的模型、或落在不收视频字段的协议上时，必须把它们降级成文本。
+    /// </summary>
+    public bool SupportsVideo { get; set; }
+
+    /// <summary>
     /// 本次请求的上下文（种类 / 会话 / 轮次 / 消息 / 第几次尝试）。空 = 统计页把它记成「其它」。
     ///
     /// 挂在 options 上而不是加进 <see cref="IChatClient.StreamAsync"/> 的签名：

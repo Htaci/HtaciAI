@@ -766,6 +766,66 @@ internal static class BuiltinModelTable
             Source = "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite",
             Note = "默认思考是关闭的。",
         },
+        // k3.1-pro
+        new()
+        {
+            Id = "k3.1-pro",
+            Vendor = "moonshot",
+            Name = "Kimi K3.1 Pro (Code)",
+            ContextWindow = 1048576,
+            Capabilities = new[] { "tools", "completion", "vision", "reasoning", "video" },
+            ArrayContent = TriState.Yes,
+            SupportsThinking = true,
+            ThinkingStrengths = new[] { "low", "high", "max" },
+            Temperature = TriState.No,
+            Source = "https://www.kimi.com/code/docs/kimi-code/models",
+            Note = "文档原文「最高 1048576（面向高档位会员）」，低档位包或超出档位的请求返回 403，故按最高值记录、由用户按套餐取舍。思考不可关闭，传 none/disabled 返回 400；默认档位是 high，与开放平台 kimi-k3 的默认 max 不同。最大输出文档未写，留 unknown。temperature 固定 1.0 取自开放平台 K3 系列参数表。视频只接受 ms://<file-id>（先用文件接口上传），不支持 base64 与公网 URL。",
+        },
+        // k3.1-pro-highspeed
+        new()
+        {
+            Id = "k3.1-pro-highspeed",
+            Vendor = "moonshot",
+            Name = "Kimi K3.1 Pro Highspeed (Code)",
+            ContextWindow = 1048576,
+            Capabilities = new[] { "tools", "completion", "vision", "reasoning", "video" },
+            ArrayContent = TriState.Yes,
+            SupportsThinking = true,
+            ThinkingStrengths = new[] { "low", "high", "max" },
+            Temperature = TriState.No,
+            Source = "https://www.kimi.com/code/docs/kimi-code/models",
+            Note = "与 k3.1-pro 同一模型的高速版：能力一致，输出约 2~3 倍速，消耗约为普速版两倍。其余约束（1M 需高档位、思考不可关闭、默认 effort=high）与 k3.1-pro 完全一致。模型 id 写错会兜底到 K2.8 Preview 无思考版，不会报错。",
+        },
+        // k3
+        new()
+        {
+            Id = "k3",
+            Vendor = "moonshot",
+            Name = "Kimi K3 (Code)",
+            ContextWindow = 1048576,
+            Capabilities = new[] { "tools", "completion", "vision", "reasoning", "video" },
+            ArrayContent = TriState.Yes,
+            SupportsThinking = true,
+            ThinkingStrengths = new[] { "low", "high", "max" },
+            Temperature = TriState.No,
+            Source = "https://www.kimi.com/code/docs/kimi-code/models",
+            Note = "Kimi Code 订阅端点的 1M 版 K3，与 k3-256k 是同一模型的两种上下文档（文档：k3 的消耗约为 k3-256k 的两倍）。默认 effort=high；关闭思考不报错，而是被路由到 K2.8 Preview 的无思考版，等于换了模型。1M 需 Pro/Allegretto 及以上档位。最大输出文档未写，留 unknown。",
+        },
+        // k3-256k
+        new()
+        {
+            Id = "k3-256k",
+            Vendor = "moonshot",
+            Name = "Kimi K3 256K (Code)",
+            ContextWindow = 262144,
+            Capabilities = new[] { "tools", "completion", "vision", "reasoning" },
+            ArrayContent = TriState.Yes,
+            SupportsThinking = true,
+            ThinkingStrengths = new[] { "low", "high", "max" },
+            Temperature = TriState.No,
+            Source = "https://www.kimi.com/code/docs/kimi-code/models",
+            Note = "k3 的 256K 上下文版，是这几条里唯一不接受视频输入的（只支持图片），历史里带视频时切过来会报错，需先 compact。默认 effort=high，关闭思考与 k3 一样被路由到 K2.8 Preview 无思考版。",
+        },
         // kimi-k3
         new()
         {

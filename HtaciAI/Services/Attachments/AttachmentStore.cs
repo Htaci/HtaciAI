@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -25,6 +25,15 @@ public static class AttachmentStore
     private static readonly HashSet<string> ImageExts = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".svg",
+    };
+
+    /// <summary>
+    /// 视频扩展名。与图片不同，视频没有本地解码，只是原样转 base64 交给支持 video_url 的端点
+    /// （见 view_video 工具），所以这里只管「它是不是视频」，不管能不能解。
+    /// </summary>
+    private static readonly HashSet<string> VideoExts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".mpeg", ".mpg", ".flv", ".wmv", ".3gp",
     };
 
     private static readonly HashSet<string> TextExts = new(StringComparer.OrdinalIgnoreCase)
@@ -187,17 +196,21 @@ public static class AttachmentStore
     public static bool IsImage(string path)
         => ImageExts.Contains(Path.GetExtension(path));
 
+    public static bool IsVideo(string path)
+        => VideoExts.Contains(Path.GetExtension(path));
+
     public static string KindFor(string path)
     {
         var ext = Path.GetExtension(path);
         if (ImageExts.Contains(ext)) return "image";
+        if (VideoExts.Contains(ext)) return "video";
         if (OfficeLabels.ContainsKey(ext)) return "office";
         if (TextExts.Contains(ext)) return "text";
         return "other";
     }
 
     /// <summary>
-    /// chip 文字：图片 / 文本文件 / Word·Excel·PPT / 未识别时直接显示后缀名（A.hello → hello）。
+    /// chip 文字：图片 / 视频 / 文本文件 / Word·Excel·PPT / 未识别时直接显示后缀名（A.hello → hello）。
     /// 无后缀统一叫「文件」。
     /// </summary>
     public static string LabelFor(string path)
@@ -205,6 +218,7 @@ public static class AttachmentStore
         var ext = Path.GetExtension(path);
         if (ext.Length == 0) return "文件";
         if (ImageExts.Contains(ext)) return "图片";
+        if (VideoExts.Contains(ext)) return "视频";
         if (OfficeLabels.TryGetValue(ext, out var office)) return office;
         if (TextExts.Contains(ext)) return "文本文件";
         return ext.TrimStart('.');

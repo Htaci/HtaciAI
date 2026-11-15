@@ -521,24 +521,32 @@ public sealed class AnthropicChatClient : IChatClient
     /// 工具结果的 content：支持视觉时把 view_image 的结果展开成 text + image 两个 block
     /// （路径落库、这里才读文件编码）；不支持视觉、文件被挪走、或格式不在 Anthropic
     /// 允许的四种之内时退回纯文本 —— 保证换模型 / 删文件之后历史仍然发得出去。
+    ///
+    /// Messages API 没有视频内容块，所以 view_video 的结果在这里只会是那段纯文本
+    /// （metadata 里的 video_path 没人读）。ConversationRuntime 也不会在有 video 能力
+    /// 的 Anthropic 模型上放行这个工具，见它那里的协议判断。
     /// </summary>
     private static object BuildToolResultContent(ChatMessage m, bool supportsVision)
     {
         var text = m.Content ?? "";
         if (!supportsVision) return text;
 
-        var imagePath = ToolImageJson.Deserialize(m.Metadata);
-        if (imagePath is null || !File.Exists(imagePath)) return text;
-
-        var mime = OpenAiChatClient.MimeFor(imagePath);
-        if (!AllowedImageMimes.Contains(mime, StringComparer.OrdinalIgnoreCase)) return text;
-
-        try
+        var parts = new List<object>
         {
-            return new List<object>
+            new Dictionary<string, object?> { ["type"] = "text", ["text"] = text },
+        };
+
+        // 一个结果可能带多张图（view_video_frames 抽出来的帧）：逐张校验格式后各成一个 image block
+        foreach (var imagePath in ToolImageJson.DeserializeMany(m.Metadata))
+        {
+            if (!File.Exists(imagePath)) continue;
+
+            var mime = OpenAiChatClient.MimeFor(imagePath);
+            if (!AllowedImageMimes.Contains(mime, StringComparer.OrdinalIgnoreCase)) continue;
+
+            try
             {
-                new Dictionary<string, object?> { ["type"] = "text", ["text"] = text },
-                new Dictionary<string, object?>
+                parts.Add(new Dictionary<string, object?>
                 {
                     ["type"] = "image",
                     ["source"] = new Dictionary<string, object?>
@@ -547,18 +555,18 @@ public sealed class AnthropicChatClient : IChatClient
                         ["media_type"] = mime,
                         ["data"] = Convert.ToBase64String(File.ReadAllBytes(imagePath)),
                     },
-                },
-            };
+                });
+            }
+            catch (IOException)
+            {
+                // 读文件失败（被占用 / 权限）：跳过这一张，别让历史发不出去
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
-        catch (IOException)
-        {
-            // 读文件失败（被占用 / 权限）：退回纯文本，不要让历史发不出去
-            return text;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return text;
-        }
+
+        return parts.Count > 1 ? parts : text;
     }
 
     private static string? GetString(JsonElement el, string name)
