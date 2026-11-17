@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using HtaciAI.Models;
@@ -141,6 +141,14 @@ public static class ApiRequestRepository
         /// <summary>失败率只算「失败 / 有效请求」—— 用户点停止的不算失败。</summary>
         public double FailureRate => Total <= 0 ? 0 : (double)FailedCount / Total;
 
+        /// <summary>
+        /// 缓存命中率 = 命中 token / 输入 token。
+        /// <b>分母是输入而不是「输入 + 命中」</b>：各家的 usage 里命中部分已经算在
+        /// input_tokens 之内（命中只是按更低的价计费），再拿命中加一次就会算出大于 100% 的数。
+        /// 没有输入 token 时返回 null，界面上显示「—」而不是 0% —— 0% 会被读成「一次都没命中」。
+        /// </summary>
+        public double? CacheHitRate => InputTokens <= 0 ? null : (double)CacheHitTokens / InputTokens;
+
         public string? Currency { get; init; }
     }
 
@@ -229,7 +237,11 @@ public static class ApiRequestRepository
     /// <summary>按模型聚合。</summary>
     public sealed record ModelBucket(
         string? ModelName, string? ProviderName, int Count, long InputTokens, long CacheHitTokens,
-        long OutputTokens, double Cost, double? AvgDurationMs, int Failed);
+        long OutputTokens, double Cost, double? AvgDurationMs, int Failed)
+    {
+        /// <summary>这个模型的缓存命中率（命中 token / 输入 token），口径与 <see cref="Summary.CacheHitRate"/> 一致。</summary>
+        public double? CacheHitRate => InputTokens <= 0 ? null : (double)CacheHitTokens / InputTokens;
+    }
 
     public static async Task<List<ModelBucket>> GetByModelAsync(long from, long? to)
     {

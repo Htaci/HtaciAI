@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -334,6 +334,15 @@ public partial class ApiStatsPage : UserControl
             "输入 token",
             summary.InputTokens.ToString("N0"),
             summary.CacheHitTokens > 0 ? $"缓存命中 {summary.CacheHitTokens:N0}" : "没有缓存命中"));
+        // 缓存命中率单独占一格：它是省钱的主要来源（命中部分按更低的价格计费），
+        // 混在「输入 token」的小字里没人会去读
+        tiles.Children.Add(MetricTile(
+            "缓存命中率",
+            summary.CacheHitRate is { } hitRate ? hitRate.ToString("P1") : "—",
+            summary.CacheHitRate is null
+                ? "没有输入 token"
+                : $"命中 {summary.CacheHitTokens:N0} / 输入 {summary.InputTokens:N0}",
+            summary.CacheHitRate is { } rate && rate >= 0.5 ? Ok : null));
         tiles.Children.Add(MetricTile("输出 token", summary.OutputTokens.ToString("N0"), null));
         tiles.Children.Add(MetricTile(
             "平均耗时",
@@ -474,8 +483,8 @@ public partial class ApiStatsPage : UserControl
         if (models.Count == 0)
             return Card("按模型", null, EmptyHint("这个范围里没有请求。"));
 
-        var table = new Table("*", "72", "92", "92", "92", "92", "56");
-        table.AddHeader("模型", "请求", "输入", "输出", "金额", "平均耗时", "失败");
+        var table = new Table("*", "72", "92", "72", "92", "92", "92", "56");
+        table.AddHeader("模型", "请求", "输入", "命中率", "输出", "金额", "平均耗时", "失败");
 
         var index = 0;
         foreach (var m in models)
@@ -501,6 +510,9 @@ public partial class ApiStatsPage : UserControl
                 nameCell,
                 RightCell(m.Count.ToString("N0")),
                 RightCell(m.InputTokens.ToString("N0")),
+                RightCell(
+                    m.CacheHitRate is { } rate ? rate.ToString("P1") : "—",
+                    m.CacheHitRate is { } r && r >= 0.5 ? Ok : TextFaint),
                 RightCell(m.OutputTokens.ToString("N0")),
                 RightCell(FormatCost(m.Cost, null)),
                 RightCell(FormatDuration(m.AvgDurationMs)),
