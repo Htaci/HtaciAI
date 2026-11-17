@@ -34,7 +34,7 @@
                 Background="#F8FAFC"
                 BorderBrush="#E5E7EB"
                 BorderThickness="1">
-            <TextBlock Text="当前支持：Python（.py）、Node.js（.js / .ts）、Git，以及 bash 工具的执行器（cmd / Windows PowerShell / PowerShell 7 / Git Bash / bash）。选中的 shell 会写进 bash 工具的介绍里，AI 据此决定命令怎么写。本页面可扩展更多环境。"
+            <TextBlock Text="当前支持：Python（.py）、Node.js（.js / .ts）、Git，bash 工具的执行器（cmd / Windows PowerShell / PowerShell 7 / Git Bash / bash），以及知识库用的本地嵌入模型。选中的 shell 会写进 bash 工具的介绍里，AI 据此决定命令怎么写。嵌入模型不进安装包，需要在这里单独下载（约 585 MB），装好之后向量库才能用；没有它知识库只剩下笔记与关键词检索。本页面可扩展更多环境。"
                        FontSize="12"
                        Foreground="#6B7280"
                        TextWrapping="Wrap"/>

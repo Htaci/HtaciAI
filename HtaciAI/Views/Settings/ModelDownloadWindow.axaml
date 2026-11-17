@@ -1,0 +1,107 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="330"
+        x:Class="HtaciAI.Views.Settings.ModelDownloadWindow"
+        Icon="/Assets/logo.ico"
+        Title="下载嵌入模型"
+        Width="520" MinWidth="520" MaxWidth="520"
+        Height="330" MinHeight="330"
+        Background="#F7F8FA"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <!-- 单独一个窗口而不是进度条塞进设置页：下载有半小时那么长的可能，
+         用户要能把它最小化、随手关掉，设置页也不该被一个进行中的任务锁住。 -->
+    <Window.Styles>
+        <Style Selector="Window">
+            <Setter Property="ExtendClientAreaToDecorationsHint" Value="True"/>
+            <Setter Property="ExtendClientAreaTitleBarHeightHint" Value="40"/>
+            <Setter Property="WindowDecorations" Value="BorderOnly"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <SolidColorBrush Color="Transparent" Opacity="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="24,20,24,18">
+        <TextBlock Grid.Row="0"
+                   Text="下载嵌入模型"
+                   FontSize="18"
+                   FontWeight="Bold"
+                   Foreground="#1A1A2E"/>
+
+        <!-- 目标目录写出来：用户要能自己确认文件落在哪、也方便手动搬走 -->
+        <TextBlock x:Name="TargetText"
+                   Grid.Row="1"
+                   FontSize="12"
+                   Foreground="#6B7280"
+                   TextWrapping="Wrap"
+                   Margin="0,6,0,0"/>
+
+        <!-- 进度条自己画：全项目没有用过 ProgressBar，自绘这两条 Border 和其余界面的手感一致 -->
+        <Grid Grid.Row="2" Margin="0,20,0,0" VerticalAlignment="Center">
+            <Border x:Name="Track"
+                    Height="8"
+                    CornerRadius="4"
+                    Background="#E5E7EB"
+                    ClipToBounds="True">
+                <Border x:Name="Fill"
+                        Height="8"
+                        CornerRadius="4"
+                        Background="#4A90D9"
+                        HorizontalAlignment="Left"
+                        Width="0"/>
+            </Border>
+        </Grid>
+
+        <StackPanel Grid.Row="3" Spacing="6" Margin="0,14,0,0">
+            <TextBlock x:Name="PercentText"
+                       Text="准备中…"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="#1A1A2E"/>
+            <TextBlock x:Name="DetailText"
+                       Text=""
+                       FontSize="12"
+                       Foreground="#6B7280"
+                       TextWrapping="Wrap"/>
+            <Border x:Name="ErrorBox"
+                    IsVisible="False"
+                    Margin="0,6,0,0"
+                    Padding="12,10"
+                    CornerRadius="8"
+                    Background="#FEF2F2"
+                    BorderBrush="#FCA5A5"
+                    BorderThickness="1">
+                <TextBlock x:Name="ErrorText"
+                           Text=""
+                           FontSize="12"
+                           Foreground="#B91C1C"
+                           TextWrapping="Wrap"/>
+            </Border>
+        </StackPanel>
+
+        <StackPanel Grid.Row="4"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    HorizontalAlignment="Right">
+            <Border x:Name="CancelBtn"
+                    Background="Transparent"
+                    CornerRadius="8"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    Padding="16,7"
+                    Cursor="Hand">
+                <TextBlock x:Name="CancelText"
+                           Text="取消"
+                           FontSize="12"
+                           Foreground="#4B5563"
+                           VerticalAlignment="Center"/>
+            </Border>
+        </StackPanel>
+    </Grid>
+</Window>

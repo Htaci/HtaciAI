@@ -144,6 +144,20 @@ public static class AppDefaults
         var id = AppSettingsStore.Current.EmbeddingModelId;
         if (string.IsNullOrWhiteSpace(id)) return null;
 
+        // 本地模型不在模型库（它在 models/ 目录里），伪造一份 ModelDetails 让下游统一处理：
+        // 端点与协议对它没有意义，EmbeddingClient 会先按 id 前缀分流到 ONNX
+        if (LocalEmbedder.IsLocal(id))
+        {
+            return new ModelDetails
+            {
+                ModelId = LocalEmbedder.OptionId,
+                ModelName = LocalEmbeddingModel.Id,
+                DisplayName = LocalEmbeddingModel.DisplayName,
+                ProviderName = "本地",
+                Capabilities = new[] { "embedding" },
+            };
+        }
+
         var model = await ModelCatalog.ResolveAsync(id);
         if (model is null) return null;
 

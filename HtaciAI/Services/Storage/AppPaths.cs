@@ -18,6 +18,8 @@ namespace HtaciAI.Services.Storage;
 ///   plugin-data/     插件私有数据（&lt;id&gt;/），与插件目录分开以免升级时被覆盖
 ///   logs/            插件日志与崩溃日志
 ///   doc/             插件开发文档（HTML，按需生成）
+///   kb/              知识库导入的文件（&lt;库 id&gt;/）
+///   models/          本地模型（&lt;模型 id&gt;/，按需下载，不进发布包）
 ///   settings.json    业务设置（默认配置页的项）
 /// </code>
 ///
@@ -53,6 +55,7 @@ public static class AppPaths
     private static string _logs = "";
     private static string _docs = "";
     private static string _knowledgeBases = "";
+    private static string _models = "";
     private static string _requestedRoot = "";
     private static StorageMode _mode = StorageMode.Default;
     private static string? _initError;
@@ -103,6 +106,21 @@ public static class AppPaths
     public static string KnowledgeBaseFiles(string libraryId)
     {
         var dir = Path.Combine(KnowledgeBases, libraryId);
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    /// <summary>
+    /// 本地模型目录（<c>&lt;数据根&gt;/models</c>）：每个模型一个子目录。
+    /// <b>不进仓库、不随发布包分发</b> —— 一个嵌入模型 500MB 以上，由用户在「环境配置」里按需下载，
+    /// 也因此必须放在数据根下：切换便携 / AppData 时它会跟着走，不会变成删不掉的残留。
+    /// </summary>
+    public static string Models { get { EnsureInitialized(); return _models; } }
+
+    /// <summary>某个模型的目录，不存在时创建。</summary>
+    public static string ModelDirectory(string modelId)
+    {
+        var dir = Path.Combine(Models, modelId);
         Directory.CreateDirectory(dir);
         return dir;
     }
@@ -227,6 +245,7 @@ public static class AppPaths
         _logs = Path.Combine(root, "logs");
         _docs = Path.Combine(root, "doc");
         _knowledgeBases = Path.Combine(root, "kb");
+        _models = Path.Combine(root, "models");
     }
 
     /// <summary>Windows 下路径大小写不敏感；末尾分隔符差异也不该算作不同目录。</summary>

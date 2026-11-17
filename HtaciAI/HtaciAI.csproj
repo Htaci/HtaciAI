@@ -29,6 +29,9 @@
     <PackageReference Include="Svg.Controls.Skia.Avalonia" />
     <!-- 会话输入框的文本外壳（见 Controls/ChatInputEditor.cs） -->
     <PackageReference Include="Avalonia.AvaloniaEdit" />
+    <!-- 本地嵌入模型的推理引擎（见 Services/KnowledgeBase/LocalEmbedder.cs）。
+         随包带各平台原生库，安装包会明显变大 —— 换来的是不花额度、不联网也能建索引。 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -12,6 +12,7 @@ using Avalonia.Media;
 using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services;
+using HtaciAI.Services.KnowledgeBase;
 using HtaciAI.Services.Skills;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Tools;
@@ -340,21 +341,37 @@ public partial class DefaultConfigPage : UserControl
 
     private async Task LoadAsync()
     {
-        List<ModelOption> modelOptions;
+        List<ModelDetails> enabled;
         try
         {
-            modelOptions = (await ModelCatalog.ListEnabledAsync())
-                .Select(m => new ModelOption($"{m.DisplayName}（{m.ProviderName}）", m.ModelId))
-                .ToList();
+            enabled = (await ModelCatalog.ListEnabledAsync()).ToList();
         }
         catch
         {
-            modelOptions = new List<ModelOption>();
+            enabled = new List<ModelDetails>();
         }
 
+        var modelOptions = enabled
+            .Select(m => new ModelOption($"{m.DisplayName}（{m.ProviderName}）", m.ModelId))
+            .ToList();
+
+        // 嵌入下拉只列标了 embedding 能力的模型。列全量的话，用户随手选一个聊天模型，
+        // 要等到建索引时才发现「这个端点没有 /embeddings」—— 那时文件已经导进来了。
+        var embeddingOptions = enabled
+            .Where(m => m.Capabilities.Contains("embedding", StringComparer.OrdinalIgnoreCase))
+            .Select(m => new ModelOption($"{m.DisplayName}（{m.ProviderName}）", m.ModelId))
+            .ToList();
+
+        // 本地模型不在模型库（那是服务商 + 模型两张表），单独补一项。
+        // 没装也列出来：否则用户装完模型回到这里发现还是找不到它。标签上直接写清状态。
+        embeddingOptions.Insert(0, new ModelOption(
+            LocalEmbedder.IsInstalled
+                ? $"{LocalEmbeddingModel.DisplayName}（本地）"
+                : $"{LocalEmbeddingModel.DisplayName}（本地 · 未下载）",
+            LocalEmbedder.OptionId));
         FillModelCombo(_topicModelCombo, modelOptions, "（不指定，用首条消息）", _data.TopicNamingModelId);
         FillModelCombo(_defaultModelCombo, modelOptions, "（上次使用的模型）", _data.DefaultModelId);
-        FillModelCombo(_embeddingCombo, modelOptions, "（未配置）", _data.EmbeddingModelId);
+        FillModelCombo(_embeddingCombo, embeddingOptions, "（未配置）", _data.EmbeddingModelId);
         RefreshEmbeddingHint();
 
         await LoadKnowledgeBasesAsync();

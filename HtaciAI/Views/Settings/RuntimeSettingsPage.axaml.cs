@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
@@ -8,6 +10,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using HtaciAI.Services.KnowledgeBase;
 using HtaciAI.Services.ScriptRuntimes;
 using HtaciAI.Services.Tools;
 
@@ -15,7 +18,7 @@ namespace HtaciAI.Views.Settings;
 
 /// <summary>
 /// 环境配置页：管理脚本工具依赖的运行时（Python / Node.js）、版本控制 Git、
-/// 视频抽帧用的 FFmpeg，以及 <c>bash</c> 工具背后执行命令的 shell。
+/// 视频抽帧用的 FFmpeg、bash 工具背后执行命令的 shell，以及知识库要用的本地嵌入模型。
 /// 自动检测系统 PATH，检测失败可手动指定解释器；数据驱动结构便于未来扩展其他运行时。
 /// </summary>
 public partial class RuntimeSettingsPage : UserControl
@@ -23,6 +26,11 @@ public partial class RuntimeSettingsPage : UserControl
     private readonly Dictionary<ScriptRuntimeKind, RuntimeCard> _cards = new();
     private readonly List<ShellRow> _shellRows = new();
     private TextBlock? _shellSummary;
+
+    private TextBlock? _modelStatus;
+    private TextBlock? _modelPath;
+    private Border? _modelDownloadBtn;
+    private TextBlock? _modelDownloadText;
 
     public RuntimeSettingsPage()
     {
@@ -33,6 +41,9 @@ public partial class RuntimeSettingsPage : UserControl
 
         foreach (var kind in new[] { ScriptRuntimeKind.Python, ScriptRuntimeKind.Node, ScriptRuntimeKind.Git, ScriptRuntimeKind.Ffmpeg })
             RuntimeList.Children.Add(CreateCard(kind));
+
+        // 模型放最后：它不是「系统里有没有装这个程序」，而是一份要自己下载的文件
+        RuntimeList.Children.Add(CreateModelCard());
 
         _ = RefreshAllAsync();
     }
@@ -255,6 +266,171 @@ public partial class RuntimeSettingsPage : UserControl
         _shellSummary.Foreground = new SolidColorBrush(Color.Parse("#4B5563"));
     }
 
+    // ---- 本地嵌入模型卡片 ----
+
+    /// <summary>
+    /// 向量化用的本地模型。与上面几张卡的区别在于判据：那些看的是「系统 PATH 里有没有这个程序」，
+    /// 这张看的是「数据目录里有没有那份文件」。缺了就给下载按钮，装好之后自动认；
+    /// 用户把整个目录手工拷进来也一样认（见 <see cref="LocalEmbeddingModel.Detect"/>）。
+    /// </summary>
+    private Border CreateModelCard()
+    {
+        var nameText = new TextBlock
+        {
+            Text = LocalEmbeddingModel.DisplayName,
+            FontSize = 16,
+            FontWeight = FontWeight.Bold,
+            Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var statusText = new TextBlock
+        {
+            Text = "检测中…",
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        header.Children.Add(nameText);
+        header.Children.Add(statusText);
+        Grid.SetColumn(statusText, 1);
+
+        var descText = new TextBlock
+        {
+            Text = LocalEmbeddingModel.Description,
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.Parse("#6B7280")),
+            Margin = new Thickness(0, 6, 0, 0),
+            TextWrapping = TextWrapping.Wrap
+        };
+        var pathText = new TextBlock
+        {
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.Parse("#4B5563")),
+            FontFamily = new FontFamily("Consolas"),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+
+        var downloadBtn = CreateActionButton("下载");
+        var openBtn = CreateActionButton("打开所在目录");
+        var detectBtn = CreateActionButton("重新检测");
+
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        actions.Children.Add(downloadBtn);
+        actions.Children.Add(openBtn);
+        actions.Children.Add(detectBtn);
+
+        downloadBtn.PointerPressed += (s, e) =>
+        {
+            StartModelDownload();
+            e.Handled = true;
+        };
+        openBtn.PointerPressed += (s, e) =>
+        {
+            OpenDirectory(LocalEmbeddingModel.RootDirectory);
+            e.Handled = true;
+        };
+        detectBtn.PointerPressed += (s, e) =>
+        {
+            RefreshModelCard();
+            e.Handled = true;
+        };
+
+        _modelStatus = statusText;
+        _modelPath = pathText;
+        _modelDownloadBtn = downloadBtn;
+        _modelDownloadText = (TextBlock)downloadBtn.Child!;
+
+        return new Border
+        {
+            Background = Brushes.White,
+            CornerRadius = new CornerRadius(12),
+            BorderBrush = new SolidColorBrush(Color.Parse("#E5E7EB")),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(18, 16),
+            Child = new StackPanel
+            {
+                Children = { header, descText, pathText, actions }
+            }
+        };
+    }
+
+    /// <summary>
+    /// 重画模型卡片。只查文件、不加载模型：检测必须在弹窗之前就是准的，
+    /// 否则「点了下载才发现其实已经装了」这种小事会让人以为界面没反应。
+    /// </summary>
+    private void RefreshModelCard()
+    {
+        if (_modelStatus is null || _modelPath is null || _modelDownloadText is null || _modelDownloadBtn is null)
+            return;
+
+        var status = LocalEmbeddingModel.Detect();
+
+        _modelPath.Text = status.Directory;
+
+        if (status.Installed)
+        {
+            _modelStatus.Text = $"✓ {status.SizeText}";
+            _modelStatus.Foreground = new SolidColorBrush(Color.Parse("#16A34A"));
+            _modelDownloadText.Text = "重新下载";
+        }
+        else
+        {
+            _modelStatus.Text = status.Message;
+            // 一个字节都没有是「还没装」，装了一半才是要提醒的状态
+            _modelStatus.Foreground = new SolidColorBrush(
+                Color.Parse(status.Bytes > 0 ? "#D97706" : "#9CA3AF"));
+            _modelDownloadText.Text = "下载";
+        }
+
+        // 下载窗口开着的时候再点一次会开第二个，把按钮先关掉
+        _modelDownloadBtn.IsEnabled = true;
+    }
+
+    /// <summary>
+    /// 打开非模态下载窗口。它自己管取消与清理，本页只关心「下完了没有」——
+    /// 结束（成功或失败）时刷新卡片，把结果显示出来。
+    /// </summary>
+    private void StartModelDownload()
+    {
+        var window = new ModelDownloadWindow();
+        window.Completed += () =>
+        {
+            RefreshModelCard();
+
+            // 装完顺手预热：第一次调用要读 585MB 的模型，不预热的话用户建第一次索引时
+            // 会先卡上几秒，看起来像卡死。失败不用管，真正调用时会给出带原因的错误。
+            if (LocalEmbeddingModel.Detect().Installed) _ = LocalEmbedder.WarmUpAsync();
+        };
+
+        if (_modelDownloadBtn is not null) _modelDownloadBtn.IsEnabled = false;
+
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        if (owner is not null)
+            window.Show(owner);
+        else
+            window.Show();
+    }
+
+    private static void OpenDirectory(string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(path);
+            Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+        }
+        catch
+        {
+            // 打不开就用不了，但不算错误
+        }
+    }
+
     // ---- 卡片构建（数据驱动，新增运行时只需在此枚举中加入） ----
 
     private Border CreateCard(ScriptRuntimeKind kind)
@@ -378,6 +554,9 @@ public partial class RuntimeSettingsPage : UserControl
         foreach (var kind in _cards.Keys)
             await RefreshAsync(kind);
         await shellTask;
+
+        // 模型只查文件系统，同步做完即可（放在最后，读文件的抖动不挡前面的卡片先画出来）
+        RefreshModelCard();
     }
 
     private async Task RefreshAsync(ScriptRuntimeKind kind)

@@ -27,5 +27,9 @@
              能把正文里的占位字符换成真控件（附件卡片），TextBox 做不到这件事。
              必须留在 12.x —— 11.x 依赖 Avalonia 11 的运行时。 -->
         <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
+
+        <!-- 本地嵌入模型的推理引擎（Qwen3-Embedding 0.6B 的 ONNX 权重）。
+             只由核心项目引用：移动端与 WASM 跑不动 0.6B，装了也是白占安装包体积。 -->
+        <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.32.0" />
     </ItemGroup>
 </Project>

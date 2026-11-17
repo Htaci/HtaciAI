@@ -35,6 +35,14 @@ public static class EmbeddingClient
     {
         if (model is null) return "还没有选嵌入模型。到「设置 → 默认配置」里选一个支持嵌入的模型。";
 
+        // 本地模型没有端点、没有协议，走的是 ONNX 那条路 —— 下面的检查对它全都不适用
+        if (LocalEmbedder.IsLocal(model.ModelId))
+        {
+            return LocalEmbedder.IsInstalled
+                ? null
+                : "本地模型还没下载完。到「设置 → 环境配置」里点下载。";
+        }
+
         if (model.Protocol is not (ModelProtocol.OpenAI or ModelProtocol.LMStudio))
             return $"「{model.DisplayName}」用的是 {model.Protocol} 协议，没有 embeddings 接口。请换一个 OpenAI 兼容的服务商。";
 
@@ -47,6 +55,11 @@ public static class EmbeddingClient
     /// <summary>把一段文本嵌成向量。</summary>
     public static async Task<float[]> EmbedAsync(ModelDetails model, string text, CancellationToken ct)
     {
+        if (CheckUsable(model) is { } reason) throw new EmbeddingException(reason);
+
+        if (LocalEmbedder.IsLocal(model.ModelId))
+            return await Task.Run(() => LocalEmbedder.EmbedQuery(text), ct);
+
         var result = await EmbedBatchAsync(model, new[] { text }, ct);
         return result[0];
     }
@@ -56,6 +69,10 @@ public static class EmbeddingClient
         ModelDetails model, IReadOnlyList<string> inputs, CancellationToken ct)
     {
         if (CheckUsable(model) is { } reason) throw new EmbeddingException(reason);
+
+        // 本地模型：文档侧不加指令，与查询侧（EmbedAsync）刻意不对称
+        if (LocalEmbedder.IsLocal(model.ModelId))
+            return await LocalEmbedder.EmbedBatchAsync(inputs, ct);
 
         var vectors = new List<float[]>(inputs.Count);
         for (var offset = 0; offset < inputs.Count; offset += BatchSize)
