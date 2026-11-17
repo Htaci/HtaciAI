@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using HtaciAI.Models;
+using Microsoft.Win32;
 
 namespace HtaciAI.Services.ScriptRuntimes;
 
@@ -33,7 +34,10 @@ public static class RuntimeDetector
         // 2) 自动探测系统 PATH
         foreach (var candidate in AutoCandidates(kind))
         {
-            var r = await TryRunVersionAsync(candidate, VersionArguments(kind));
+            // 先自己解析成完整路径再启动：进程的 PATH 是启动时的快照，
+            // 直接 Process.Start("ffmpeg") 会走那份旧快照，刚装好的工具就找不到
+            var command = FindInPath(candidate) ?? candidate;
+            var r = await TryRunVersionAsync(command, VersionArguments(kind));
             if (r != null)
                 return Ok(kind, r.Value.Command, r.Value.Version, isManual: false);
         }
@@ -63,6 +67,7 @@ public static class RuntimeDetector
     /// <summary>
     /// 把 PATH 里的命令名换成完整路径（找不到返回 null）。按 PATH 顺序逐个目录试，
     /// 无后缀的命令名再按 PATHEXT 补 <c>.exe</c> 之类 —— Windows 上 <c>ffmpeg</c> 实际是 <c>ffmpeg.exe</c>。
+    /// PATH 走 <see cref="PathDirectories"/>：应用运行中新装的东西（winget 之类）也能找到，不必重启。
     /// </summary>
     public static string? FindInPath(string fileName)
     {
@@ -76,17 +81,13 @@ public static class RuntimeDetector
             extensions.AddRange(pathext.Split(';', StringSplitOptions.RemoveEmptyEntries));
         }
 
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(path)) return null;
-
-        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var dir in PathDirectories())
         {
-            if (string.IsNullOrWhiteSpace(dir)) continue;
             foreach (var ext in extensions)
             {
                 try
                 {
-                    var candidate = Path.Combine(dir.Trim(), fileName + ext);
+                    var candidate = Path.Combine(dir, fileName + ext);
                     if (File.Exists(candidate)) return candidate;
                 }
                 catch
@@ -97,6 +98,62 @@ public static class RuntimeDetector
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 当前有效的 PATH 目录，按优先级排列：进程环境变量 → 用户 PATH → 系统 PATH。
+    ///
+    /// 必须读注册表：进程的 PATH 是<b>启动那一刻</b>的快照，应用跑起来之后装上的工具
+    /// （winget 把 <c>%LOCALAPPDATA%\Microsoft\WinGet\Links</c> 追加进用户 PATH）不会进这份快照，
+    /// 只查进程环境变量的话「重新检测」永远看不到它们，只能重启应用。
+    /// </summary>
+    private static List<string> PathDirectories()
+    {
+        var list = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            foreach (var part in value.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var dir = part.Trim().Trim('"');
+                if (dir.Length == 0) continue;
+                if (seen.Add(dir)) list.Add(dir);
+            }
+        }
+
+        Add(Environment.GetEnvironmentVariable("PATH"));
+        if (OperatingSystem.IsWindows())
+        {
+            Add(ReadWindowsPath(RegistryHive.CurrentUser, "Environment"));
+            Add(ReadWindowsPath(RegistryHive.LocalMachine,
+                @"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"));
+        }
+
+        // 注册表也读不到时的兜底：winget 的 shim 目录是它装命令行工具的唯一出口
+        var wingetLinks = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WinGet", "Links");
+        Add(wingetLinks);
+
+        return list;
+    }
+
+    /// <summary>读注册表里当前的 PATH（REG_EXPAND_SZ 要展开 <c>%USERPROFILE%</c> 这种）。失败返回 null。</summary>
+    private static string? ReadWindowsPath(RegistryHive hive, string subKey)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        try
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Default);
+            using var key = baseKey.OpenSubKey(subKey);
+            return key?.GetValue("Path") is string raw ? Environment.ExpandEnvironmentVariables(raw) : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

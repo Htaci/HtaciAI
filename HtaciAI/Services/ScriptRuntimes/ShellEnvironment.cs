@@ -448,41 +448,11 @@ public static class ShellEnvironment
         return list;
     }
 
-    /// <summary>把 PATH 里的命令名换成完整路径（探测结果要给用户看，光一个 <c>bash.exe</c> 说明不了是谁）。</summary>
-    private static string? TryResolveFullPath(string fileName)
-    {
-        if (Path.IsPathRooted(fileName))
-            return File.Exists(fileName) ? fileName : null;
-
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        var extensions = new List<string> { "" };
-        var pathext = Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT";
-        if (Path.GetExtension(fileName).Length == 0)
-            extensions.AddRange(pathext.Split(';', StringSplitOptions.RemoveEmptyEntries));
-
-        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (string.IsNullOrWhiteSpace(dir))
-                continue;
-            foreach (var ext in extensions)
-            {
-                try
-                {
-                    var candidate = Path.Combine(dir.Trim(), fileName + ext);
-                    if (File.Exists(candidate))
-                        return candidate;
-                }
-                catch
-                {
-                    // 非法路径片段（含通配符之类）直接跳过
-                }
-            }
-        }
-
-        return null;
-    }
+    /// <summary>
+    /// 把 PATH 里的命令名换成完整路径（探测结果要给用户看，光一个 <c>bash.exe</c> 说明不了是谁）。
+    /// 交给 <see cref="RuntimeDetector.FindInPath"/>：它读的是当前注册表里的 PATH，
+    /// 不会像进程环境变量那样停在启动时的快照上。
+    /// </summary>
+    private static string? TryResolveFullPath(string fileName) => RuntimeDetector.FindInPath(fileName);
 }
 
