@@ -22,5 +22,10 @@
         <PackageVersion Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />
 
         <PackageVersion Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.11" />
+
+        <!-- 会话输入框的文本外壳。要的只是它的 VisualLineElementGenerator 扩展点：
+             能把正文里的占位字符换成真控件（附件卡片），TextBox 做不到这件事。
+             必须留在 12.x —— 11.x 依赖 Avalonia 11 的运行时。 -->
+        <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
     </ItemGroup>
 </Project>

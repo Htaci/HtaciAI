@@ -16,26 +16,48 @@ namespace HtaciAI.Services.Attachments;
 public readonly record struct TextEdit(string Text, int Caret);
 
 /// <summary>
-/// 待发送附件的草稿：正文里放的是 <c>@图片1</c> 这样的<b>占位符</b>，
+/// 待发送附件的草稿：正文里放的是 <see cref="Token"/>（U+FFFC 占位字符），
 /// 真正的绝对路径存在这里，发送时才展开。
 ///
-/// 为什么要占位符而不是直接把路径写进正文：路径往往是 <c>C:\Users\...\一组很长的东西.png</c>，
-/// 写进输入框会把句子冲散，用户也没法自然地调整它的位置。占位符短、可读，
-/// 而且「图片在句子的哪一段」这个信息得以保留（模型拿到的是路径，位置不变）。
+/// 为什么是占位字符而不是 <c>@图片1</c> 这样的文字：输入框是富文本的（AvaloniaEdit），
+/// 正文里的占位字符会被渲染成一张真卡片（见 <c>Controls/ChatInputEditor.cs</c>），
+/// 长得和消息气泡里的附件卡片一样。占位字符本身只有 1 个字符宽，
+/// 卡片却参与文本布局 —— 用户能像改字一样把附件挪到句子的任何位置。
 ///
 /// 本类刻意<b>不依赖任何 Avalonia 类型</b>：它只做「给定正文和光标，算出新正文和新光标」。
-/// 这样它可以被单元测试直接覆盖 —— 这层逻辑（token 碰撞、光标处整体删除、孤儿清理）
+/// 这样它可以被单元测试直接覆盖 —— 这层逻辑（去重、光标处整体删除、孤儿清理）
 /// 是输入框里最容易出细微错误的部分，而通过界面点出来极难复现。
 /// </summary>
 public sealed class AttachmentDraft
 {
-    /// <summary>一条待发送附件：正文里的占位符 token ↔ 真实文件。</summary>
-    public sealed record Item(string Token, ChatAttachment Info);
+    /// <summary>
+    /// 正文里代表一个附件的占位字符（Unicode Object Replacement Character）。
+    ///
+    /// 选它是因为它不可能是用户敲出来的字符，且 AvaloniaEdit 的
+    /// <c>VisualLineElementGenerator</c> 正好可以把任意位置的这个字符换成一个控件。
+    /// </summary>
+    public const char Token = '\uFFFC';
+
+    /// <summary>一条待发送附件。正文里的第 n 个占位字符就是第 n 条。</summary>
+    public sealed record Item(ChatAttachment Info);
 
     private readonly List<Item> _items = new();
 
-    /// <summary>token 序号，只增不减。保证同一份草稿里不会出现两个同名 token。</summary>
-    private int _seq;
+    /// <summary>
+    /// 已经从草稿里删掉、但还可能被撤销（Ctrl+Z / Ctrl+Y）找回来的附件，最近删的在末尾。
+    ///
+    /// 正文的撤销栈在编辑器手里，附件登记表在我们手里：用户按 Ctrl+Z 把占位字符放回来时，
+    /// 登记表里那条已经没了，于是正文里出现一个「谁也不是」的占位字符 ——
+    /// 编辑器只能把它画成 <c>[OBJ]</c> 这样的字面量。留一份删除记录，
+    /// 占位字符变多时按相反顺序接回去，撤销/重做才是完整的一次往返。
+    /// </summary>
+    private readonly List<Item> _detached = new();
+
+    /// <summary>
+    /// 删除记录的保留上限。撤到很久以前时那条附件接不回来（卡片位置会显示成失效卡片），
+    /// 但正文与登记表依旧一致，不会错位到别的附件上。
+    /// </summary>
+    private const int MaxDetached = 64;
 
     public IReadOnlyList<Item> Items => _items;
 
@@ -48,7 +70,7 @@ public sealed class AttachmentDraft
         => _items.Any(i => string.Equals(i.Info.Path, path, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// 追加一个附件：正文里插入占位符，并登记映射。
+    /// 追加一个附件：正文里插入占位字符，并登记映射。
     ///
     /// 一次调用同时完成「改正文」和「登记」，是为了消除一个顺序陷阱：
     /// 早先的实现先赋文本、再登记，而赋文本会同步触发 TextChanged 里的孤儿清理，
@@ -61,21 +83,20 @@ public sealed class AttachmentDraft
         edit = new TextEdit(text, caret);
         if (HasPath(info.Path)) return false;
 
-        var token = NextToken(info.Label, text);
-        edit = InsertToken(token, text, caret);
-        _items.Add(new Item(token, info));
+        edit = InsertToken(text, caret);
+        _items.Add(new Item(info));
         return true;
     }
 
     /// <summary>
-    /// 采纳正文里已有的附件标记：把每个标记换成占位符并登记为附件
+    /// 采纳正文里已有的附件标记：把每个标记换成占位字符并登记为附件
     /// （用于「把一段带标记的文本粘进输入框」这条路径）。
     ///
-    /// 同一个路径出现多次时复用同一个占位符 —— 语义上它们本来就是同一个附件。
+    /// 同一个路径出现多次时复用同一条附件 —— 语义上它们本来就是同一个附件。
     /// 路径无法解析（如粘贴来的相对路径）的标记<b>原样留在正文里</b>，
     /// 不猜、也不删掉用户的文字。
     /// </summary>
-    /// <returns>true = 至少有一个标记被换成了占位符。</returns>
+    /// <returns>true = 至少有一个标记被换成了占位字符。</returns>
     public bool TryAdoptMarkers(string text, out TextEdit edit)
     {
         var spans = AttachmentMarker.Scan(text);
@@ -94,22 +115,14 @@ public sealed class AttachmentDraft
             // 标记之前的原文（上一次替换之后到这个标记开头）
             sb.Append(text, cursor, span.Start - cursor);
 
-            var token = TokenFor(span.Path, text);
-
-            if (token is null)
+            if (TokenFor(span.Path) is null)
             {
                 sb.Append(text, span.Start, span.Length);   // 认不出的路径：原样保留
             }
             else
             {
-                // 占位符前后各要一个空白分隔，已有则不重复补。
-                // 标记本身是紧凑的（`]` 收尾），换成 `@图片1` 后紧贴文字会读成一坨。
-                if (sb.Length > 0 && !char.IsWhiteSpace(sb[^1])) sb.Append(' ');
-
-                sb.Append(token);
+                sb.Append(Token);
                 adopted = true;
-
-                if (span.End < text.Length && !char.IsWhiteSpace(text[span.End])) sb.Append(' ');
             }
 
             cursor = span.End;
@@ -123,57 +136,91 @@ public sealed class AttachmentDraft
     }
 
     /// <summary>
-    /// 取该路径对应的占位符：已登记过就复用，否则新建一个（并登记）。
+    /// 取该路径对应的占位字符：已登记过就直接返回（正文里会再多一个占位字符，
+    /// 但它指向同一条附件），否则新建一条并登记。
     /// 路径非法时返回 null，表示「这个标记不该被采纳」。
     /// </summary>
-    private string? TokenFor(string path, string text)
+    private char? TokenFor(string path)
     {
         var existing = _items.FirstOrDefault(
             i => string.Equals(i.Info.Path, path, StringComparison.OrdinalIgnoreCase));
 
-        if (existing is not null) return existing.Token;
+        if (existing is not null) return Token;
 
         if (AttachmentMarker.ToAttachment(path) is not { } info) return null;
 
-        // 查重基准用「原文本」，因为它包含所有还没被替换的标记文本，
-        // 能保证新占位符不会和正文里已有的字符串撞车。
-        var token = NextToken(info.Label, text);
-        _items.Add(new Item(token, info));
-        return token;
+        _items.Add(new Item(info));
+        return Token;
     }
 
-    /// <summary>移除一条附件：正文里的占位符与登记一起消失。token 不在正文里时只清登记。</summary>
-    /// <param name="caret">当前光标，token 删除位置在光标之后时用它把光标往回带。</param>
+    /// <summary>
+    /// 移除一条附件：正文里<b>它那一个</b>占位字符与登记一起消失。
+    ///
+    /// 位置靠「这条在列表里是第几条」算 —— 正文里的第 n 个占位字符就是第 n 条，
+    /// 所以删中间那一条时后面的条目会整体前移，各自仍对着自己的占位字符。
+    /// </summary>
+    /// <param name="caret">当前光标，占位字符删除位置在光标之前时用它把光标往回带。</param>
     public TextEdit Remove(Item item, string text, int caret)
     {
-        _items.Remove(item);
+        var index = _items.IndexOf(item);
+        if (index < 0) return new TextEdit(text, Math.Clamp(caret, 0, text.Length));
 
-        var idx = text.IndexOf(item.Token, StringComparison.Ordinal);
-        if (idx < 0) return new TextEdit(text, Math.Clamp(caret, 0, text.Length));
+        var offset = OffsetOf(text, index);
 
-        var len = item.Token.Length;
-        if (idx + len < text.Length && text[idx + len] == ' ') len++;
+        // 正文里已经找不到它那一个占位字符（不该发生）：登记表也不动，
+        // 更不能记进删除记录 —— 否则下一次 Prune 会按「占位字符变多了」把它加回来。
+        if (offset < 0) return new TextEdit(text, Math.Clamp(caret, 0, text.Length));
 
-        var newText = text.Remove(idx, len);
+        Remember(item);
+        _items.RemoveAt(index);
 
-        // 删的是光标前面的内容时，光标要跟着往前挪同样多的字符；否则停在原地。
-        var newCaret = caret > idx ? Math.Max(idx, caret - len) : Math.Clamp(caret, 0, newText.Length);
+        var newText = text.Remove(offset, 1);
+
+        // 删的是光标前面的内容时，光标要跟着往前挪；否则停在原地。
+        var newCaret = caret > offset ? Math.Clamp(caret - 1, 0, newText.Length)
+                                      : Math.Clamp(caret, 0, newText.Length);
         return new TextEdit(newText, newCaret);
     }
 
     /// <summary>
-    /// 用户在输入框里手工改了正文（选中一段删掉、Ctrl+Z 等）之后，
-    /// 把正文里已经不存在的 token 从草稿里清掉，保证 chip 栏与正文一致。
+    /// 用户在输入框里手工改了正文（选中一段占位字符删掉、Ctrl+Z / Ctrl+Y 等）之后，
+    /// 让登记表重新对上正文：正文里没有对应占位字符的条目清掉，
+    /// 正文里重新出现的占位字符（撤销/重做放回来的）从删除记录里接回对应的条目。
+    ///
+    /// 对不上时<b>按末尾对齐</b>：正文里的第 n 个占位字符永远对应第 n 条，
+    /// 少了的就是最后那几条凭空消失的。
     /// </summary>
-    /// <returns>true = 有附件被清掉，调用方需要刷新 chip 栏。</returns>
+    /// <returns>true = 有附件被清掉或接回，调用方需要刷新。</returns>
     public bool Prune(string text)
     {
-        var removed = _items.RemoveAll(i => !text.Contains(i.Token, StringComparison.Ordinal));
-        return removed > 0;
+        var live = text.Count(c => c == Token);
+
+        // 占位字符比登记表多：撤销/重做把它们放了回来。按相反顺序接回，
+        // 第 n 个占位字符仍然对第 n 条 —— 转一圈回到原样。
+        if (live > _items.Count && _detached.Count > 0)
+        {
+            var restore = Math.Min(live - _items.Count, _detached.Count);
+            for (var i = 0; i < restore; i++)
+            {
+                _items.Add(_detached[^1]);
+                _detached.RemoveAt(_detached.Count - 1);
+            }
+
+            return true;
+        }
+
+        if (live >= _items.Count) return false;
+
+        // 末尾那几条正文里已经没有了：先记进删除记录（撤销时还接得回来），再裁掉
+        for (var i = live; i < _items.Count; i++)
+            Remember(_items[i]);
+
+        _items.RemoveRange(live, _items.Count - live);
+        return true;
     }
 
     /// <summary>
-    /// 把正文里的占位符全部换成<b>附件标记</b>（见 <see cref="AttachmentMarker"/>）——
+    /// 把正文里的占位字符全部换成<b>附件标记</b>（见 <see cref="AttachmentMarker"/>）——
     /// 这一步之后的内容才是落库、发给模型、并被气泡渲染的那一份。
     ///
     /// 之所以不再换成裸路径：带标记的正文是自解释的，渲染、复制、粘贴三件事读同一份文本。
@@ -182,82 +229,88 @@ public sealed class AttachmentDraft
     /// </summary>
     public string Expand(string text)
     {
-        foreach (var item in _items)
-            text = text.Replace(item.Token, AttachmentMarker.Format(item.Info.Path), StringComparison.Ordinal);
+        if (_items.Count == 0) return text;
 
-        return text;
+        var sb = new StringBuilder(text.Length + 32);
+        var index = 0;
+
+        foreach (var ch in text)
+        {
+            if (ch != Token)
+            {
+                sb.Append(ch);
+                continue;
+            }
+
+            if (index < _items.Count) sb.Append(AttachmentMarker.Format(_items[index].Info.Path));
+            index++;
+        }
+
+        return sb.ToString();
     }
 
     public void Clear()
     {
         _items.Clear();
-        _seq = 0;
+        _detached.Clear();
     }
 
     // ---- 光标处的整体删除 ----
     //
-    // 占位符是一个不可分割的单元：光标紧邻它时按 Backspace/Delete 应当整个删掉，
+    // 占位字符是一个不可分割的单元：光标紧邻它时按 Backspace/Delete 应当整个删掉，
     // 而不是删掉一个字符留下 `@图` 这种残渣（残渣会让附件变成永远清不掉的孤儿）。
+    // 现在占位符只有 1 个字符，这两件事和「删掉一个普通字符」等价，
+    // 但删除的同时必须把草稿里对应的那一条也移除，否则卡片会留在栏里。
 
-    /// <summary>
-    /// 光标前紧邻一个 token 时整体删掉它。有选区时返回 false，交给默认删除。
-    ///
-    /// 注意与 <see cref="TryDeleteAfter"/> 的不对称：这里只删 token 本身，
-    /// 不吞掉它前面那个由 <c>InsertToken</c> 补出来的空格（结果是可能留下一个尾随空格），
-    /// 而向后删会连尾随空格一起吞掉。这是<b>照搬既有行为</b>，不是新引入的 ——
-    /// 重构期间刻意不改动可观察行为，免得把「重构」和「顺手改手感」混在一起难以定位。
-    /// </summary>
+    /// <summary>光标前紧邻一个占位字符时删掉它（连同它的登记）。有选区时返回 false。</summary>
     public bool TryDeleteBefore(string text, int caret, int selectionStart, int selectionEnd, out TextEdit edit)
     {
         edit = new TextEdit(text, caret);
         if (selectionStart != selectionEnd) return false;   // 有选区时交给默认删除
 
         caret = Math.Clamp(caret, 0, text.Length);
-        if (caret <= 0) return false;
+        if (caret <= 0 || text[caret - 1] != Token) return false;
 
-        foreach (var item in _items)
+        var index = text.Take(caret - 1).Count(c => c == Token);
+        if (index < _items.Count)
         {
-            var idx = text.LastIndexOf(item.Token, caret - 1, StringComparison.Ordinal);
-            if (idx < 0 || idx + item.Token.Length != caret) continue;
-
-            _items.Remove(item);
-            var newText = text.Remove(idx, item.Token.Length);
-            edit = new TextEdit(newText, idx);
-            return true;
+            Remember(_items[index]);
+            _items.RemoveAt(index);
         }
 
-        return false;
+        edit = new TextEdit(text.Remove(caret - 1, 1), caret - 1);
+        return true;
     }
 
-    /// <summary>光标后紧邻一个 token 时整体删掉它（连同尾随的那个空格）。</summary>
+    /// <summary>光标后紧邻一个占位字符时删掉它（连同它的登记）。</summary>
     public bool TryDeleteAfter(string text, int caret, int selectionStart, int selectionEnd, out TextEdit edit)
     {
         edit = new TextEdit(text, caret);
         if (selectionStart != selectionEnd) return false;
 
         caret = Math.Clamp(caret, 0, text.Length);
-        if (caret >= text.Length) return false;
+        if (caret >= text.Length || text[caret] != Token) return false;
 
-        foreach (var item in _items)
+        var index = text.Take(caret).Count(c => c == Token);
+        if (index < _items.Count)
         {
-            if (text.IndexOf(item.Token, caret, StringComparison.Ordinal) != caret) continue;
-
-            var len = item.Token.Length;
-            if (caret + len < text.Length && text[caret + len] == ' ') len++;
-
-            _items.Remove(item);
-            edit = new TextEdit(text.Remove(caret, len), caret);
-            return true;
+            Remember(_items[index]);
+            _items.RemoveAt(index);
         }
 
-        return false;
+        edit = new TextEdit(text.Remove(caret, 1), caret);
+        return true;
     }
 
     // ---- 草稿序列化 ----
 
     private sealed record Payload(string Text, List<PayloadItem> Attachments);
 
-    private sealed record PayloadItem(string Token, string Path);
+    /// <summary>
+    /// 一条存档附件。<see cref="Token"/> 是旧版（<c>@图片1</c> 文字占位符）留下的字段，
+    /// 只为读得懂旧草稿，新写入时恒为 null。
+    /// </summary>
+    private sealed record PayloadItem(string Path, string? Token);
 
     /// <summary>
     /// 序列化草稿。没有附件时就是纯文本本身 —— 不带附件是绝大多数情况，
@@ -269,7 +322,7 @@ public sealed class AttachmentDraft
 
         return JsonSerializer.Serialize(new Payload(
             text,
-            _items.Select(i => new PayloadItem(i.Token, i.Info.Path)).ToList()));
+            _items.Select(i => new PayloadItem(i.Info.Path, null)).ToList()));
     }
 
     /// <summary>
@@ -282,7 +335,7 @@ public sealed class AttachmentDraft
     public TextEdit Restore(string? raw)
     {
         _items.Clear();
-        _seq = 0;
+        _detached.Clear();   // 换了一份草稿，上一条草稿的删除记录没有意义了
 
         if (string.IsNullOrEmpty(raw))
             return new TextEdit("", 0);
@@ -295,17 +348,27 @@ public sealed class AttachmentDraft
             var payload = JsonSerializer.Deserialize<Payload>(raw);
             if (payload is null) return new TextEdit(raw, raw.Length);
 
+            var text = payload.Text ?? "";
+
             foreach (var dto in payload.Attachments)
             {
-                if (string.IsNullOrEmpty(dto.Token)) continue;
                 if (AttachmentStore.FromPath(dto.Path) is not { } info) continue;
-                _items.Add(new Item(dto.Token, info));
+
+                // 旧草稿：正文里是 `@图片1` 这种文字占位符，就地换成占位字符。
+                // 找不到的话（用户手工改过）就退化成「贴在末尾」，附件不能因此丢掉。
+                if (dto.Token is { Length: > 0 } old && text.Contains(old, StringComparison.Ordinal))
+                {
+                    var at = text.IndexOf(old, StringComparison.Ordinal);
+                    text = text.Remove(at, old.Length).Insert(at, Token.ToString());
+                }
+                else if (text.Count(c => c == Token) < _items.Count + 1)
+                {
+                    text += Token;
+                }
+
+                _items.Add(new Item(info));
             }
 
-            // 序号从已有条数起算，够用即可 —— NextToken 本身还会查重。
-            _seq = _items.Count;
-
-            var text = payload.Text ?? "";
             Prune(text);   // 库里存的和正文对不上时以正文为准
             return new TextEdit(text, text.Length);
         }
@@ -319,30 +382,37 @@ public sealed class AttachmentDraft
 
     // ---- 内部 ----
 
-    /// <summary>生成 <c>@图片1</c> 这样的占位符，与正文或已有 token 重名时往后顺延。</summary>
-    private string NextToken(string label, string text)
+    /// <summary>把一条刚被删掉的附件记进删除记录（撤销时接回来用）。</summary>
+    private void Remember(Item item)
     {
-        while (true)
+        _detached.Add(item);
+        if (_detached.Count > MaxDetached) _detached.RemoveAt(0);
+    }
+
+    /// <summary>正文里第 <paramref name="index"/> 个占位字符的偏移，没有则 -1。</summary>
+    private static int OffsetOf(string text, int index)
+    {
+        var seen = 0;
+        for (var i = 0; i < text.Length; i++)
         {
-            _seq++;
-            var token = $"@{label}{_seq}";
-            if (!text.Contains(token, StringComparison.Ordinal) &&
-                _items.All(i => i.Token != token))
-                return token;
+            if (text[i] != Token) continue;
+            if (seen == index) return i;
+            seen++;
         }
+
+        return -1;
     }
 
     /// <summary>
-    /// 把 token 插到光标处。前面紧跟非空白时补一个空格，
-    /// 免得出现「这是一张@图片1」这种粘在一起的读法。
+    /// 把占位字符插到光标处。
+    ///
+    /// 不补空格：卡片是控件，自身带外边距，视觉上已经隔开；
+    /// 补出来的空格会在导出成纯文本时变成一串难看的空洞。
     /// </summary>
-    private static TextEdit InsertToken(string token, string text, int caret)
+    private static TextEdit InsertToken(string text, int caret)
     {
         caret = Math.Clamp(caret, 0, text.Length);
-        var lead = caret > 0 && !char.IsWhiteSpace(text[caret - 1]) ? " " : "";
-        var insertion = lead + token + " ";
-
-        var newText = text.Insert(caret, insertion);
-        return new TextEdit(newText, caret + insertion.Length);
+        var newText = text.Insert(caret, Token.ToString());
+        return new TextEdit(newText, caret + 1);
     }
 }

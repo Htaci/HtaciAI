@@ -20,6 +20,15 @@
     <Application.Styles>
         <FluentTheme />
 
+        <!-- ===== AvaloniaEdit（会话输入框的文本外壳）=====
+             必须显式 include：TextEditor 的模板用 StaticResource 引用它自己那份资源键
+             （FontSizeNormal、TextAreaBackground 之类），不挂这个 StyleInclude 启动就直接
+             KeyNotFoundException。路径只有这一个写法是对的，别的都会 XamlLoadException。
+
+             放在 FluentTheme 之后、上面那一堆自定义 Style 之前：下面没有一条规则选择
+             TextEditor 内部的部件，所以顺序只影响主题自身的层次，不影响本应用的覆盖。 -->
+        <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+
         <!-- 下面这些放在 FluentTheme 之后：同一个 Styles 集合里，后写的优先级更高。 -->
 
         <!-- ===== 菜单（MenuFlyout / ContextMenu）=====

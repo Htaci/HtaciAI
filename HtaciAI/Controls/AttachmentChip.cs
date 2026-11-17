@@ -1,11 +1,10 @@
-﻿using System;
-using System.IO;
+using System;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using HtaciAI.Models;
 using HtaciAI.Services.Attachments;
 
@@ -18,7 +17,8 @@ namespace HtaciAI.Controls;
 ///
 /// 三种用法共用这一个控件：
 /// <list type="bullet">
-///   <item>输入框上方：<c>onRemove</c> 非空（右侧 × 移除待发送项），点击定位文件；</item>
+///   <item>输入框正文内联：<c>compact</c> 且 <c>onRemove</c> 非空（右侧 × 移除待发送项），
+///         点击定位文件 —— 由 <see cref="ChatInputEditor"/> 当内联控件挂在正文里；</item>
 ///   <item>用户气泡内联：<c>compact</c> 且 <c>onRemove</c> 为 null，点击定位文件；</item>
 ///   <item>助手回复里的可点击卡片：<c>compact</c>、无 ×，<c>openOnClick</c> 让点击直接打开
 ///         文件 / 文件夹（见 <see cref="AttachmentStore.OpenOrReveal"/>）。</item>
@@ -29,6 +29,9 @@ public sealed class AttachmentChip : Border
     private static readonly IBrush IdleBg = new SolidColorBrush(Color.Parse("#F1F3F6"));
     private static readonly IBrush HoverBg = new SolidColorBrush(Color.Parse("#E7EBF0"));
 
+    /// <summary>这张卡片描述的那一份文件。悬停预览要用它，所以留着。</summary>
+    private readonly ChatAttachment _item;
+
     /// <summary>
     /// <paramref name="compact"/> 用于消息气泡里的内联卡片：尺寸压到能塞进一行文字而不撑高行距。
     /// <paramref name="openOnClick"/> 为 true 时点击<b>直接打开</b>该文件 / 文件夹
@@ -36,6 +39,8 @@ public sealed class AttachmentChip : Border
     /// </summary>
     public AttachmentChip(ChatAttachment item, Action? onRemove, bool compact = false, bool openOnClick = false)
     {
+        _item = item;
+
         Height = compact ? 19 : 26;
         CornerRadius = new CornerRadius(compact ? 5 : 6);
         Padding = new Thickness(compact ? 6 : 8, 0, compact ? 5 : 6, 0);
@@ -74,25 +79,37 @@ public sealed class AttachmentChip : Border
 
         Child = row;
 
-        // 界面上不显示路径，但需要时悬停能看到是哪一份文件
-        ToolTip.SetTip(this, openOnClick ? ClickHint(item) + Environment.NewLine + item.Path : item.Path);
-        ToolTip.SetPlacement(this, PlacementMode.Bottom);
-
+        // 界面上不显示路径，悬停时弹一张预览（图片给缩略图 + 路径，其余只给路径）
         PointerEntered += (_, _) =>
         {
             Background = HoverBg;
-
-            // 文件是否存在在悬停时才查，不在构造时查：卡片是随历史消息成批建出来的，
-            // 每条都做一次 File.Exists 是白白的系统调用（长会话里成百上千次），
-            // 而这个信息只有真正悬停看提示的那一刻才有用。
-            var state = BuildTooltip(item.Path);
-            ToolTip.SetTip(this, openOnClick ? ClickHint(item) + Environment.NewLine + state : state);
+            _previewTimer.Start();
         };
 
-        PointerExited += (_, _) => Background = IdleBg;
+        PointerExited += (_, _) =>
+        {
+            Background = IdleBg;
+            HidePreview();
+        };
+
+        // 悬停着滚列表时预览会跟着卡片一路飘，滚一下就先收掉（停住不动再弹）。
+        // 不标记 Handled：滚轮该照常滚列表。
+        PointerWheelChanged += (_, _) => HidePreview();
+
+        // 鼠标扫过一排卡片时不该一路弹个不停：停够一小会儿才弹（时长见 _previewTimer）
+        _previewTimer.Tick += (_, _) =>
+        {
+            _previewTimer.Stop();
+            _preview ??= new AttachmentPreviewPopup();
+            _preview.Show(this, _item);
+        };
+
         PointerPressed += (_, e) =>
         {
             if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+            // 点下去要么开文件、要么点 ×：预览这时该消失了，不然它会飘在资源管理器旁边
+            HidePreview();
 
             if (openOnClick) AttachmentStore.OpenOrReveal(item.Path);
             else AttachmentStore.RevealInExplorer(item.Path);
@@ -101,32 +118,23 @@ public sealed class AttachmentChip : Border
         };
     }
 
-    /// <summary>悬停提示的第一行：点下去会发生什么。</summary>
-    private static string ClickHint(ChatAttachment item) => item.Kind == "folder"
-        ? "点击打开文件夹"
-        : AttachmentStore.IsExecutable(item.Path)
-            ? "点击在资源管理器中定位"
-            : "点击打开文件";
+    /// <summary>悬停延迟：比系统 ToolTip 短，但足够滤掉「一路扫过去」。</summary>
+    private readonly DispatcherTimer _previewTimer = new() { Interval = TimeSpan.FromMilliseconds(160) };
 
-    /// <summary>
-    /// 悬停提示。文件已被删除或挪走时在路径前加一行说明。
-    ///
-    /// <b>刻意不改卡片本身的外观</b>：路径仍然是一个合法的附件（路径在那儿，只是文件此刻不在），
-    /// 常见情形是文件被临时挪走或换机之后路径失效，把它画成警告色会让人以为配置错了、
-    /// 要去做点什么。放在提示里说清楚，够用且不打扰。
-    /// </summary>
-    internal static string BuildTooltip(string path)
+    /// <summary>悬停预览。第一次真正悬停时才建 —— 绝大多数卡片一辈子不会被悬停。</summary>
+    private AttachmentPreviewPopup? _preview;
+
+    private void HidePreview()
     {
-        try
-        {
-            if (File.Exists(path)) return path;
-        }
-        catch
-        {
-            // 路径本身非法（如含非法字符）或无权访问，一律按「找不到」提示 —— 结果一样
-        }
+        _previewTimer.Stop();
+        _preview?.Hide();
+    }
 
-        return $"文件缺失（已被删除或移走）{Environment.NewLine}{path}";
+    /// <summary>卡片被移除（点 × 、清空输入框）时把预览一并收掉。</summary>
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        HidePreview();
+        base.OnDetachedFromVisualTree(e);
     }
 
     private static TextBlock BuildRemoveButton(Action onRemove)
