@@ -308,7 +308,7 @@ public partial class ToolsPage : UserControl
             {
                 new TextBlock
                 {
-                    Text = tool.Name,
+                    Text = tool.Display,
                     FontSize = 14.5,
                     FontWeight = FontWeight.SemiBold,
                     Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
@@ -357,7 +357,7 @@ public partial class ToolsPage : UserControl
         };
         var icon = new TextBlock
         {
-            Text = "\uF35C", // Fluent System Icons：扳手（工具）
+            Text = BuiltinTools.IconOf(tool.Name), // 按工具取图标，查不到是默认扳手
             FontFamily = AppFonts.Icons,
             FontSize = 18,
             Foreground = new SolidColorBrush(Color.Parse("#3A7BC8")),

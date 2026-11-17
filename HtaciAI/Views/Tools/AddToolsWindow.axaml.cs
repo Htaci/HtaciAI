@@ -43,7 +43,7 @@ public partial class AddToolsWindow : Window
             var id = tool.Id;
             var cb = new CheckBox
             {
-                Content = $"{tool.Name} · {SourceLabel(tool)}",
+                Content = $"{tool.Display} · {SourceLabel(tool)}",
                 Tag = id,
             };
             ToolTip.SetTip(cb, string.IsNullOrWhiteSpace(tool.Description) ? tool.Name : tool.Description);

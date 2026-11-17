@@ -45,6 +45,30 @@ public sealed class ToolDefinition
     /// <summary>发给 LLM 的调用名（建议 snake_case）。</summary>
     public string Name { get; init; } = "";
 
+    /// <summary>
+    /// 给用户看的名字（如 <c>task</c> → 「子代理」）。为空表示没有别名，界面回退到 <see cref="Name"/>。
+    ///
+    /// 只影响显示：发给模型的、入库的、路由用的始终是 <see cref="Name"/>，两者不能互换 ——
+    /// 用户看到的是一句人话，模型看到的仍是一个稳定的 snake_case 调用名。
+    /// 目前只有内置工具填了它（脚本 / MCP / 插件工具的名字由各自的作者决定，回退到原名即可）。
+    /// </summary>
+    public string DisplayName { get; init; } = "";
+
+    /// <summary>
+    /// 界面图标（Fluent System Icons 的码位，形如 <c>"\uF8C1"</c>）。
+    /// 为空表示没单独指定，界面回退到 <see cref="DefaultIcon"/>。只用于显示，与工具语义无关。
+    /// </summary>
+    public string Icon { get; init; } = "";
+
+    /// <summary>没有单独指定图标时的默认图标：扳手（工具）。</summary>
+    public const string DefaultIcon = "\uF8C1";
+
+    /// <summary>用户可见名称：有别名用别名，否则用调用名。</summary>
+    public string Display => string.IsNullOrWhiteSpace(DisplayName) ? Name : DisplayName;
+
+    /// <summary>用户可见图标：有就用，否则用默认扳手。</summary>
+    public string ResolvedIcon => string.IsNullOrWhiteSpace(Icon) ? DefaultIcon : Icon;
+
     public string Description { get; init; } = "";
 
     /// <summary>入参 JSON Schema 的原始 JSON（根为 type=object）。</summary>

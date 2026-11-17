@@ -225,7 +225,7 @@ public partial class ToolSelectorControl : UserControl
         {
             var mi = new MenuItem
             {
-                Header = tool.Name,
+                Header = tool.Display,
                 ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = _selected.Contains(tool.Id),
                 Tag = tool.Id,

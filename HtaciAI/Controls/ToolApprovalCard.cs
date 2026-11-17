@@ -55,7 +55,7 @@ public sealed class ToolApprovalCard : UserControl
 
         var name = new TextBlock
         {
-            Text = tool.Name,
+            Text = tool.Display,
             FontSize = 15,
             FontWeight = FontWeight.SemiBold,
             Foreground = new SolidColorBrush(Color.Parse(TitleHex)),
@@ -77,8 +77,38 @@ public sealed class ToolApprovalCard : UserControl
                 Foreground = Brushes.White,
             },
         });
-        Grid.SetColumn(name, 1);
-        head.Children.Add(name);
+
+        // 有别名时把原始调用名跟在后面：审批是「谁在动你的文件」的最后一关，
+        // 用户需要能对上模型实际调用的那个名字（对日志、搜索工具都靠它）。
+        if (tool.DisplayName.Length == 0)
+        {
+            Grid.SetColumn(name, 1);
+            head.Children.Add(name);
+        }
+        else
+        {
+            name.Margin = new Thickness(8, 0, 0, 0);
+            name.TextWrapping = TextWrapping.NoWrap;
+            var nameRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    name,
+                    new TextBlock
+                    {
+                        Text = $"（{tool.Name}）",
+                        FontSize = 11.5,
+                        Foreground = new SolidColorBrush(Color.Parse("#9CA3AF")),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(4, 2, 0, 0),
+                    },
+                },
+            };
+            Grid.SetColumn(nameRow, 1);
+            head.Children.Add(nameRow);
+        }
 
         // 自定义块 + 原生选择：入参是多行 JSON，交给框架自己选区（拖选/复制开箱可用），
         // 卡片内部独立选择，不与轮内的渲染态选区互相干扰。
