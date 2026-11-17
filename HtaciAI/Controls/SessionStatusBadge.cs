@@ -9,6 +9,9 @@ namespace HtaciAI.Controls;
 /// <summary>
 /// 会话列表项右侧的状态标记（占时间那一格的位置）：
 /// 请求进行中转圈、等作答 / 授权时黄胶囊、本轮结束未看时绿点、空闲不显示。
+///
+/// 工作空间节点上也用同一个控件（见 <c>ConversationPage.WorkspaceNode</c>），
+/// 那种时候黄胶囊里写的是整组的汇总说法，因此文案与提示语都可以换。
 /// </summary>
 public sealed class SessionStatusBadge : UserControl
 {
@@ -20,7 +23,10 @@ public sealed class SessionStatusBadge : UserControl
     private readonly Border _waiting;
     private readonly Border _done;
 
-    public SessionStatusBadge()
+    /// <param name="waitingText">等用户处理时胶囊里的字，默认是单个会话的说法。</param>
+    /// <param name="waitingTip">那枚胶囊的提示语。</param>
+    public SessionStatusBadge(string waitingText = "等待确认",
+        string waitingTip = "有提问或工具授权等待你处理")
     {
         _waiting = new Border
         {
@@ -31,12 +37,12 @@ public sealed class SessionStatusBadge : UserControl
             HorizontalAlignment = HorizontalAlignment.Right,
             Child = new TextBlock
             {
-                Text = "等待确认",
+                Text = waitingText,
                 FontSize = 10.5,
                 Foreground = new SolidColorBrush(Color.Parse(WaitingFg)),
             },
         };
-        ToolTip.SetTip(_waiting, "有提问或工具授权等待你处理");
+        ToolTip.SetTip(_waiting, waitingTip);
 
         _done = new Border
         {

@@ -93,6 +93,15 @@ public sealed class SessionViewCache
         return index < 0 ? key : key[(index + 1)..];
     }
 
+    /// <summary>从缓存键里取回所属工作空间 id；不是工作空间会话的键返回 null。</summary>
+    public static string? WorkspaceIdOf(string key)
+    {
+        if (!key.StartsWith("w:", StringComparison.Ordinal)) return null;
+
+        var index = key.IndexOf(':', 2);
+        return index < 0 ? null : key[2..index];
+    }
+
     /// <summary>命中就直接返回；未命中则用 <paramref name="factory"/> 建一个并记下来。</summary>
     public ConversationView GetOrAdd(string key, Func<ConversationView> factory, DateTime utcNow)
     {

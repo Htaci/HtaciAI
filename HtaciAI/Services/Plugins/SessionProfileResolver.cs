@@ -44,6 +44,10 @@ internal static class SessionProfileResolver
         if (await WorkspaceRepository.GetAsync(session.WorkspaceId) is not { } workspace)
             return null;
 
+        // 顺手登记归属：工作空间节点要按它汇总「我下面还有没有会话在跑 / 在等用户」。
+        // 放在这个唯一的解析点上，插件借走会话视图、从系统提醒跳进来这些路径都不会漏。
+        SessionActivityStore.Bind(session.Id, workspace.Id);
+
         return (SessionViewCache.KeyForWorkspaceSession(workspace.Id, session.Id), new WorkspaceProfile(workspace, session));
     }
 }
