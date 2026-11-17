@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -49,6 +49,8 @@ public static class WorkspaceAgentPipeline
             EnabledSkills = skills.Select(CloneSkill).ToList(),
             McpServers = mcp.ToList(),
             ToolPermissionMode = ws.ToolPermissionMode,
+            // 工作空间默认知识库；没配就留空，由创建方再按全局默认/上次使用回落
+            KnowledgeBaseId = ws.DefaultKnowledgeBaseId,
             // Model / Thinking 由会话创建方后续按需设置
         };
     }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -485,6 +485,9 @@ public sealed class ConversationRuntime
         // 历史里遗留的图片 tool 结果也降级成文本，避免整轮请求被 API 拒掉
         _toolExecutor.Context.SupportsVision = vision;
         _toolExecutor.Context.SupportsVideo = video;
+
+        // 知识库每次发送前现读：用户在输入框里换了库，下一条消息就该按新库检索
+        _toolExecutor.Context.KnowledgeBaseId = Profile.State.KnowledgeBaseId ?? "";
 
         // task 的继承项必须取「本轮真正发给模型的工具」而不是存档里的原始列表：
         // 用户在设置里关掉的自举工具、没连上的 MCP，本来就不该出现在子会话里。

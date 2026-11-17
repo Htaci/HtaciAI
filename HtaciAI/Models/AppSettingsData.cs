@@ -27,6 +27,27 @@ public sealed class AppSettingsData
     /// <summary>新建会话的默认模型 id。空 = 用「上次使用的模型」。</summary>
     public string? DefaultModelId { get; set; }
 
+    /// <summary>
+    /// 新建会话的默认知识库 id。空 = 用「上次使用过的知识库」；
+    /// 那个也没有时，会话就是「不指定知识库」。
+    /// </summary>
+    public string? DefaultKnowledgeBaseId { get; set; }
+
+    /// <summary>
+    /// 向量库使用的嵌入模型 id。空 = 未配置，向量库不可用（笔记不受影响）。
+    ///
+    /// <b>用字符串不用枚举/引用</b>：模型会被删掉或停用，存 id 时字段仍然合法，
+    /// 解析不出来按「未配置」处理即可 —— 与 <see cref="DefaultModelId"/> 同一套规矩。
+    /// </summary>
+    public string? EmbeddingModelId { get; set; }
+
+    /// <summary>
+    /// 新建会话默认的工具权限档位（<see cref="Services.Tools.PermissionMode"/> 的整型值）。
+    /// <b>用 int 不用枚举</b>：JsonFileStore 遇到无法识别的枚举字符串会让整份 settings.json
+    /// 静默回退默认值，int 没有这个风险（与 <see cref="AutoCompressThresholdPercent"/> 同理）。
+    /// </summary>
+    public int DefaultPermissionMode { get; set; } = (int)HtaciAI.Services.Tools.PermissionMode.Normal;
+
     /// <summary>默认开启的工具 id。null = 全部可见内置工具。</summary>
     public List<string>? DefaultToolIds { get; set; }
 

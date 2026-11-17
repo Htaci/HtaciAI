@@ -44,4 +44,9 @@ public class ChatSession
 
     /// <summary>会话独立的工具权限审批档位（严格/普通/宽松/自由），重开会话时恢复。</summary>
     public PermissionMode ToolPermissionMode { get; set; } = PermissionMode.Normal;
+
+    /// <summary>
+    /// 这个会话查询的知识库 id。空 = 没单独指定，按「工作空间默认 → 全局默认 → 上次使用」的顺序回落。
+    /// </summary>
+    public string? KnowledgeBaseId { get; set; }
 }

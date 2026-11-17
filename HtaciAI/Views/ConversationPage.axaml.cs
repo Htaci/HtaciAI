@@ -62,6 +62,13 @@ public partial class ConversationPage : UserControl
     /// </summary>
     private readonly Dictionary<string, Action<SessionActivity>> _statusRows = new();
 
+    /// <summary>
+    /// 已渲染工作空间节点的状态汇总：工作空间 id → 刷新动作。
+    /// 与会话行那一份（<see cref="_statusRows"/>）分开存：会话状态一变，它所属的那一行要跟着重算，
+    /// 而这个工作空间下的会话行可能压根没渲染（节点收起时连会话行都不存在）。
+    /// </summary>
+    private readonly Dictionary<string, Action> _workspaceStatusRows = new();
+
     /// <summary>两个分组是否各自收起（分组标题上的箭头点击切换）。</summary>
     private bool _workspacesCollapsed;
     private bool _plainSessionsCollapsed;
@@ -387,6 +394,12 @@ public partial class ConversationPage : UserControl
         Func<IConversationProfile> createProfile,
         Action<ConversationView>? configure = null)
     {
+        // 登记会话归哪个工作空间：工作空间节点要按它汇总「我下面还有没有在跑的会话」。
+        // 放在这里而不是各个打开点，是因为「只要有窗口，就一定走这条路径」——
+        // 包括从系统提醒跳进来、从缓存挂回来这些不经过列表的情况。
+        if (SessionViewCache.WorkspaceIdOf(key) is { } ownerWorkspaceId)
+            SessionActivityStore.Bind(SessionViewCache.SessionIdOf(key), ownerWorkspaceId);
+
         var isNew = !_viewCache.TryGet(key, out var view);
 
         if (isNew)
@@ -759,7 +772,7 @@ public partial class ConversationPage : UserControl
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
             Cursor = new Cursor(StandardCursorType.Hand),
-            Opacity = 0,
+            // 显隐由外面那一层 actions 统一控制：逐个设 Opacity 会和父级相乘，永远露不出来
         };
         moreBtn.PointerEntered += (_, _) => moreBtn.Background = HoverBg;
         moreBtn.PointerExited += (_, _) => moreBtn.Background = Brushes.Transparent;
@@ -781,16 +794,31 @@ public partial class ConversationPage : UserControl
 
         var newSessionBtn = GlyphButton("\uF10A", "在此工作空间新建会话");
         newSessionBtn.Click += (_, _) => _ = CreateWorkspaceSessionAsync(ws);
-        newSessionBtn.Opacity = 0;   // 与「···」一样，悬停该行才出现
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
+        // 右侧一格：状态标记与两个操作按钮互换可见性。
+        // 汇总口径见 SessionActivityStore.AggregateOf：里面有会话在等用户 / 在跑 / 有回复没看，
+        // 都算这个工作空间的状态 —— 收起之后光看会话行是看不出来的，这正是它存在的理由。
+        var status = new SessionStatusBadge("需要处理", "这个工作空间里有会话在等你回答或授权");
+        status.HorizontalAlignment = HorizontalAlignment.Right;
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Opacity = 0,   // 悬停才出现；透明度由 ApplyStatus 统一管
+            Children = { moreBtn, newSessionBtn },
+        };
+        // 两种内容叠在同一格里（等价于会话行右侧那一格）：整行高度写死 24，
+        // 换内容时不发生重排，鼠标扫过不会让这一列上下跳。
+        var rightHost = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto"), Height = 24 };
+        rightHost.Children.Add(status);
+        rightHost.Children.Add(actions);
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
         grid.Children.Add(icon);
         Grid.SetColumn(nameBlock, 1);
         grid.Children.Add(nameBlock);
-        Grid.SetColumn(moreBtn, 2);
-        grid.Children.Add(moreBtn);
-        Grid.SetColumn(newSessionBtn, 3);
-        grid.Children.Add(newSessionBtn);
+        Grid.SetColumn(rightHost, 2);
+        grid.Children.Add(rightHost);
 
         // 与会话项完全同高同边距；「N工具 · N技能」那行已去掉，改为单行
         var header = new Border
@@ -806,25 +834,43 @@ public partial class ConversationPage : UserControl
         header.PointerEntered += (_, _) =>
         {
             if (!isActive) header.Background = HoverBg;
-            moreBtn.Opacity = 1;
-            newSessionBtn.Opacity = 1;
+            ApplyStatus();
         };
         header.PointerExited += (_, _) =>
         {
             // 菜单开着时不收起悬停态：指针是移向菜单，这一行同样会收到 PointerExited
             if (menu?.IsOpen == true) return;
             if (!isActive) header.Background = Brushes.Transparent;
-            moreBtn.Opacity = 0;
-            newSessionBtn.Opacity = 0;
+            ApplyStatus();
         };
         menu.Closed += (_, _) =>
         {
-            if (header.IsPointerOver) return;
             if (!isActive) header.Background = Brushes.Transparent;
-            moreBtn.Opacity = 0;
-            newSessionBtn.Opacity = 0;
+            ApplyStatus();
         };
         header.PointerPressed += (_, e) => { _ = ToggleWorkspaceAsync(ws); e.Handled = true; };
+
+        // 悬停归按钮、移开归状态：两者叠在同一格里互换。
+        // 顺手把「悬停中状态变了」也算进来 —— 后台那一轮跑完时不该把按钮顶掉。
+        void ApplyStatus()
+        {
+            var activity = SessionActivityStore.AggregateOf(ws.Id);
+            var showActions = header.IsPointerOver || menu?.IsOpen == true;
+
+            // 隐藏时按 Idle 落地：转圈只在自己可见时才转，藏起来没必要继续烧 CPU
+            status.Set(showActions ? SessionActivity.Idle : activity);
+            actions.Opacity = showActions ? 1 : 0;
+
+            ToolTip.SetTip(status, activity switch
+            {
+                SessionActivity.WaitingConfirm => "这个工作空间里有会话在等你回答或授权",
+                SessionActivity.Running => "这个工作空间里有会话正在处理",
+                SessionActivity.Done => "这个工作空间里有会话已回复",
+                _ => null,
+            });
+        }
+        _workspaceStatusRows[ws.Id] = ApplyStatus;
+        ApplyStatus();   // 建行时就定好：是转圈、是要处理，还是让位给按钮
 
         if (!expanded) return header;
 
@@ -836,7 +882,8 @@ public partial class ConversationPage : UserControl
         // 条数只按「级别 × 5」算：期间新增的会话把队尾挤掉，不会让当前级别多出一条。
         var level = _workspaceSessionLevels.TryGetValue(ws.Id, out var lv) && lv > 0 ? lv : 1;
 
-        if (!_workspaceSessions.TryGetValue(ws.Id, out var sessions) || sessions.Count == 0)
+
+        if (!_workspaceSessions.TryGetValue(ws.Id, out var sessions) || sessions.Count == 0)
             group.Children.Add(EmptyHint("暂无会话，点击「+」新建", indent: 34));
         else
             foreach (var s in sessions.Take(Math.Min(sessions.Count, level * SessionsPerLevel)))
@@ -1140,12 +1187,22 @@ public partial class ConversationPage : UserControl
         if (SessionActivityStore.Get(sessionId) is not (SessionActivity.Running or SessionActivity.WaitingConfirm))
             _viewCache.TouchSession(sessionId, DateTime.UtcNow);
 
+        // 工作空间节点上的汇总标记跟着变 —— 哪怕这一页压根没渲染这个会话的行
+        // （节点收起 / 会话在别的标签页里跑），工作空间那一行也得刷新。
+        if (SessionActivityStore.WorkspaceOf(sessionId) is { } workspaceId &&
+            _workspaceStatusRows.TryGetValue(workspaceId, out var applyWorkspace))
+            applyWorkspace();
+
         if (!_statusRows.TryGetValue(sessionId, out var apply)) return;
         apply(SessionActivityStore.Get(sessionId));
     }
 
     /// <summary>导航重建：旧的更新动作随控件一起作废。</summary>
-    private void ResetStatusRows() => _statusRows.Clear();
+    private void ResetStatusRows()
+    {
+        _statusRows.Clear();
+        _workspaceStatusRows.Clear();
+    }
 
     /// <summary>
     /// 自绘的菜单行。内边距与 hover 底色与 Fluent 的 MenuItem 对齐
@@ -1306,6 +1363,8 @@ public partial class ConversationPage : UserControl
             EnabledSkills = nv.SelectedSkills.ToList(),
             McpServers = nv.SelectedMcpServerIds.ToList(),
             ToolPermissionMode = nv.SelectedPermissionMode,
+            KnowledgeBaseId = nv.SelectedKnowledgeBaseId
+                              ?? await AppDefaults.ResolveDefaultKnowledgeBaseIdAsync(null),
         };
         await ChatRepository.CreateAsync(session);
 
@@ -1326,6 +1385,19 @@ public partial class ConversationPage : UserControl
     }
 
     /// <summary>
+    /// 「设置 → 默认配置」里配的权限档位。滑到不认识的值（旧配置文件里没有这一项时为 0，
+    /// 而 0 恰好是 Strict）时按普通处理 —— 不能让一次配置缺失把所有人的工具全变成要确认。
+    /// </summary>
+    private static PermissionMode DefaultPermissionMode()
+    {
+        var configured = (PermissionMode)AppSettingsStore.Current.DefaultPermissionMode;
+        return configured is PermissionMode.Strict or PermissionMode.Normal
+            or PermissionMode.Loose or PermissionMode.Free
+            ? configured
+            : PermissionMode.Normal;
+    }
+
+    /// <summary>
     /// 直接创建一个空白普通会话并立刻打开：会话马上落库，用户随后在会话窗口里发第一条消息。
     /// 与「创建新会话」按钮那条路（先在 NewChatView 配置、首条消息才建库）并存。
     /// </summary>
@@ -1338,7 +1410,8 @@ public partial class ConversationPage : UserControl
             EnabledToolIds = AppDefaults.ResolveToolIds(),
             EnabledSkills = AppDefaults.ResolveSkills(),
             McpServers = AppDefaults.ResolveMcpServerIds(),
-            ToolPermissionMode = PermissionMode.Normal,
+            ToolPermissionMode = DefaultPermissionMode(),
+            KnowledgeBaseId = await AppDefaults.ResolveDefaultKnowledgeBaseIdAsync(null),
         };
         await ChatRepository.CreateAsync(session);
 
@@ -1454,6 +1527,9 @@ public partial class ConversationPage : UserControl
         // 工作空间指定了默认模型就用它，否则用「上次使用的模型」；都不成立时留空，
         // 会话窗口会停在「未配置模型」并拦住发送，不再默默落到列表里的第一个模型
         session.Model = (await AppDefaults.ResolveDefaultModelAsync(ws.DefaultModelId))?.ModelName ?? "";
+        // 工作空间没指定默认知识库时，回落到全局默认 / 上次使用的那个
+        if (string.IsNullOrWhiteSpace(session.KnowledgeBaseId))
+            session.KnowledgeBaseId = await AppDefaults.ResolveDefaultKnowledgeBaseIdAsync(null);
         await WorkspaceSessionRepository.CreateAsync(session);
 
         _expandedWorkspaceId = ws.Id;
@@ -1468,6 +1544,7 @@ public partial class ConversationPage : UserControl
 
         try { await ChatRepository.SoftDeleteSessionAsync(session.Id); } catch { /* 忽略 */ }
         _viewCache.EvictBySessionId(session.Id);   // 否则删掉之后还能从缓存切回这个窗口
+        SessionActivityStore.Set(session.Id, SessionActivity.Idle);   // 删掉的行不该再给工作空间报状态
 
         if (_activeSessionId == session.Id)
         {
@@ -1483,6 +1560,7 @@ public partial class ConversationPage : UserControl
 
         try { await WorkspaceSessionRepository.SoftDeleteAsync(session.Id); } catch { /* 忽略 */ }
         _viewCache.EvictBySessionId(session.Id);   // 否则删掉之后还能从缓存切回这个窗口
+        SessionActivityStore.Set(session.Id, SessionActivity.Idle);   // 删掉的行不该再给工作空间报状态
 
         if (_activeSessionId == session.Id)
         {

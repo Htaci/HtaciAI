@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -75,6 +75,9 @@ public sealed class StandaloneProfile : IConversationProfile
 
         sb.AppendLine(FileCardDirective.Text);
 
+        // 普通对话没有工作目录，不说明的话模型会把相对路径落到程序目录里去
+        sb.AppendLine(TempWorkspaceDirective.Build());
+
         sb.AppendLine($"当前系统环境：{Environment.OSVersion}，模型id为： {modelId}");
 
         // 只有用户真的给这个会话设了提示词才插入包裹标记：绝大多数会话是空的，
@@ -122,6 +125,7 @@ public sealed class StandaloneProfile : IConversationProfile
         State.EnabledToolIds = _session.EnabledToolIds;
         State.McpServers = _session.McpServers;
         State.PermissionMode = _session.ToolPermissionMode;
+        State.KnowledgeBaseId = _session.KnowledgeBaseId;
         State.LastMessageAt = _session.LastMessageAt;
     }
 
@@ -135,6 +139,7 @@ public sealed class StandaloneProfile : IConversationProfile
         _session.EnabledToolIds = State.EnabledToolIds;
         _session.McpServers = State.McpServers;
         _session.ToolPermissionMode = State.PermissionMode;
+        _session.KnowledgeBaseId = State.KnowledgeBaseId;
         _session.LastMessageAt = State.LastMessageAt;
     }
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services.Attachments;
+using HtaciAI.Services.KnowledgeBase;
 using HtaciAI.Services.Network;
 using HtaciAI.Services.ScriptRuntimes;
 using HtaciAI.Services.Skills;
@@ -53,6 +54,13 @@ public sealed class BuiltinToolContext
     /// 为 null 时 ask_user_continue 工具不可用。
     /// </summary>
     public Func<string, string, CancellationToken, Task<bool?>>? WaitForUser { get; set; }
+
+    /// <summary>
+    /// 当前会话选定的知识库 id。空 = 没选，<c>kb_search</c> 直接返回提示。
+    /// 由 <c>ConversationRuntime</c> 在每次发送前从会话状态里刷进来 ——
+    /// 与工具上下文里其它「每轮现刷」的字段同一套做法。
+    /// </summary>
+    public string KnowledgeBaseId { get; set; } = "";
 
     /// <summary>
     /// 当前模型是否支持视觉。由会话视图在每次发送前按所选模型刷新；
@@ -177,6 +185,7 @@ public sealed class BuiltinToolExecutor
                 "ask_user_question" => await AskUserQuestionAsync(call, ctx, ct),
         "ask_user_continue" => await AskUserContinueAsync(call, ctx, ct),
                 "view_image" => ViewImage(call, ctx),
+                BuiltinTools.KbSearchName => await KbSearchAsync(call, ctx, ct),
                 "view_video" => ViewVideo(call, ctx),
                 "view_video_frames" => await ViewVideoFramesAsync(call, ctx, ct),
                 BuiltinTools.TaskToolName => await RunTaskAsync(call, ctx, ct),
@@ -1341,6 +1350,76 @@ public sealed class BuiltinToolExecutor
     }
 
     // ---- invalid ----
+
+    // ---- kb_search ----
+
+    /// <summary>
+    /// 查知识库。会话没选库时直接说清楚 —— 不偷偷去查某个默认库，
+    /// 否则「答得头头是道但引用的是别的项目」比答不出来更糟。
+    /// </summary>
+    private static async Task<ToolExecution> KbSearchAsync(
+        ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
+    {
+        var query = BuiltinToolContext.GetArg(call, "query") ?? "";
+        if (string.IsNullOrWhiteSpace(query))
+            return ToolExecution.Fail("缺少 query 参数");
+
+        if (string.IsNullOrWhiteSpace(ctx.KnowledgeBaseId))
+            return ToolExecution.Fail(
+                "这个会话没有选定知识库。请让用户在输入框左侧的知识库选择器里选一个，"
+                + "或者告诉用户「当前没有可用知识库」。");
+
+        var topK = 6;
+        if (int.TryParse(BuiltinToolContext.GetArg(call, "top_k"), out var parsed) && parsed > 0)
+            topK = Math.Min(parsed, 20);
+
+        var library = await KnowledgeBaseRepository.GetAsync(ctx.KnowledgeBaseId);
+        if (library is null)
+            return ToolExecution.Fail("这个会话选定的知识库已经不存在了，请让用户重新选一个。");
+
+        var embedModel = await AppDefaults.ResolveEmbeddingModelAsync();
+
+        List<Models.KbSearchHit> hits;
+        try
+        {
+            hits = await KnowledgeBaseIndexer.SearchAsync(
+                library.Id, query, topK, embedModel, ct);
+        }
+        catch (Exception ex)
+        {
+            return ToolExecution.Fail($"知识库检索失败：{ex.Message}");
+        }
+
+        if (hits.Count == 0)
+        {
+            var reason = embedModel is null
+                ? "（向量检索未启用：没有配置嵌入模型，这次只用了关键词匹配）"
+                : "";
+            return ToolExecution.Ok($"「{library.Name}」里没有找到相关内容。{reason}");
+        }
+
+        var sb = new StringBuilder();
+        sb.Append("知识库「").Append(library.Name).Append("」里找到 ").Append(hits.Count).AppendLine(" 条：");
+        if (embedModel is null)
+            sb.AppendLine("（向量检索未启用：没有配置嵌入模型，结果来自关键词匹配）");
+        sb.AppendLine();
+
+        var index = 1;
+        foreach (var hit in hits)
+        {
+            var where = hit.IsNote
+                ? $"笔记「{hit.Title}」"
+                : hit.Heading.Length > 0
+                    ? $"{hit.Title} › {hit.Heading}"
+                    : hit.Title;
+
+            sb.Append('[').Append(index++).Append("] ").AppendLine(where);
+            sb.AppendLine(hit.Text.Trim());
+            sb.AppendLine();
+        }
+
+        return ToolExecution.Ok(sb.ToString().TrimEnd());
+    }
 
     private static ToolExecution Invalid(ChatToolCall call)
         => ToolExecution.Ok(FormatInvalidError(call));

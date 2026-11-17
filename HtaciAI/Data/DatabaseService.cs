@@ -271,6 +271,104 @@ public static class DatabaseService
             version = 30;
             SetVersion(conn, version);
         }
+
+        if (version < 31)
+        {
+            RunMigrationV31(conn);
+            version = 31;
+            SetVersion(conn, version);
+        }
+    }
+
+    /// <summary>
+    /// 知识库：四个新表 + 三处外挂列。
+    ///
+    /// <b>为什么笔记与向量分表</b>：笔记是用户手写、随手改的短文本，读它不需要嵌入模型；
+    /// 向量那部分是「文件 → 切块 → 向量」。两者唯一的共同点是挂在同一个库里，
+    /// 硬塞进一张表会让「没配嵌入模型也照样用笔记」这件事变成到处加过滤条件。
+    ///
+    /// <b>kb_chunks 存的是切块后的正文，不是文件路径</b>：原文件被删掉之后，已经索引的内容
+    /// 仍然可检索 —— 索引一旦建好就是知识库里的一份数据，不该被外部文件的状态牵制。
+    /// 向量用 float32 小端原始字节存 blob，<c>dim</c> 一并记下：
+    /// 反序列化时按维度自己算，不依赖 sqlite-vec 这类需要分发的原生扩展。
+    ///
+    /// <b>会话与工作空间各加一列 kb_id / default_kb_id</b>：与 permission_mode 同一个思路 ——
+    /// 会话上的是「这个会话用哪个库」，工作空间上的是「在这里新建会话时默认用哪个」。
+    /// </summary>
+    private static void RunMigrationV31(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS kb_libraries (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                description TEXT,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS kb_notes (
+                id         TEXT PRIMARY KEY,
+                library_id TEXT NOT NULL,
+                title      TEXT NOT NULL,
+                content    TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_kb_notes_lib ON kb_notes(library_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS kb_documents (
+                id          TEXT PRIMARY KEY,
+                library_id  TEXT NOT NULL,
+                path        TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                hash        TEXT,
+                size        INTEGER NOT NULL DEFAULT 0,
+                modified_at INTEGER NOT NULL DEFAULT 0,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                indexed_at  INTEGER NOT NULL DEFAULT 0,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                error       TEXT,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_docs_path ON kb_documents(library_id, path);
+
+            CREATE TABLE IF NOT EXISTS kb_chunks (
+                id          TEXT PRIMARY KEY,
+                library_id  TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                ord         INTEGER NOT NULL,
+                heading     TEXT,
+                text        TEXT NOT NULL,
+                embedding   BLOB,
+                dim         INTEGER NOT NULL DEFAULT 0,
+                model_id    TEXT,
+                created_at  INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_kb_chunks_doc ON kb_chunks(document_id, ord);
+            CREATE INDEX IF NOT EXISTS idx_kb_chunks_lib ON kb_chunks(library_id);
+            """;
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = schema;
+            cmd.ExecuteNonQuery();
+        }
+
+        foreach (var sql in new[]
+                 {
+                     "ALTER TABLE chat_sessions ADD COLUMN kb_id TEXT;",
+                     "ALTER TABLE workspace_sessions ADD COLUMN kb_id TEXT;",
+                     "ALTER TABLE workspaces ADD COLUMN default_kb_id TEXT;",
+                 })
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
     }
 
     /// <summary>

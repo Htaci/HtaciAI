@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using HtaciAI.Data;
@@ -74,6 +74,7 @@ public sealed class WorkspaceProfile : IConversationProfile
         State.EnabledToolIds = _session.EnabledToolIds;
         State.McpServers = _session.McpServers;
         State.PermissionMode = _session.ToolPermissionMode;
+        State.KnowledgeBaseId = _session.KnowledgeBaseId;
         State.LastMessageAt = _session.LastMessageAt;
     }
 
@@ -88,6 +89,7 @@ public sealed class WorkspaceProfile : IConversationProfile
         _session.EnabledToolIds = State.EnabledToolIds;
         _session.McpServers = State.McpServers;
         _session.ToolPermissionMode = State.PermissionMode;
+        _session.KnowledgeBaseId = State.KnowledgeBaseId;
         _session.LastMessageAt = State.LastMessageAt;
     }
 

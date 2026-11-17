@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -23,7 +23,7 @@ public static class WorkspaceRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, description, path, agent_id, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, default_model_id, permission_mode, created_at, updated_at
+            SELECT id, name, description, path, agent_id, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, default_model_id, permission_mode, created_at, updated_at, default_kb_id
             FROM workspaces ORDER BY created_at ASC;
             """;
         await using var r = await cmd.ExecuteReaderAsync();
@@ -38,7 +38,7 @@ public static class WorkspaceRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, description, path, agent_id, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, default_model_id, permission_mode, created_at, updated_at
+            SELECT id, name, description, path, agent_id, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, default_model_id, permission_mode, created_at, updated_at, default_kb_id
             FROM workspaces WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -56,8 +56,8 @@ public static class WorkspaceRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO workspaces (id, name, description, path, agent_id, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, default_model_id, permission_mode, created_at, updated_at)
-            VALUES ($id, $name, $description, $path, $agent_id, $system_prompt, $enabled_tool_ids, $enabled_skills, $mcp_servers, $default_model_id, $permission_mode, $created_at, $updated_at);
+            INSERT INTO workspaces (id, name, description, path, agent_id, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, default_model_id, permission_mode, created_at, updated_at, default_kb_id)
+            VALUES ($id, $name, $description, $path, $agent_id, $system_prompt, $enabled_tool_ids, $enabled_skills, $mcp_servers, $default_model_id, $permission_mode, $created_at, $updated_at, $default_kb_id);
             """;
         cmd.Parameters.AddWithValue("$id", w.Id);
         cmd.Parameters.AddWithValue("$name", w.Name);
@@ -69,6 +69,7 @@ public static class WorkspaceRepository
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)Serialize(w.EnabledSkills) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$mcp_servers", (object?)Serialize(w.McpServers) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$default_model_id", (object?)w.DefaultModelId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$default_kb_id", (object?)w.DefaultKnowledgeBaseId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$permission_mode", (int)w.ToolPermissionMode);
         cmd.Parameters.AddWithValue("$created_at", w.CreatedAt);
         cmd.Parameters.AddWithValue("$updated_at", w.UpdatedAt);
@@ -86,7 +87,7 @@ public static class WorkspaceRepository
             SET name = $name, description = $description, path = $path, agent_id = $agent_id,
                 system_prompt = $system_prompt, enabled_tool_ids = $enabled_tool_ids,
                 enabled_skills = $enabled_skills, mcp_servers = $mcp_servers,
-                default_model_id = $default_model_id, permission_mode = $permission_mode, updated_at = $updated_at
+                default_model_id = $default_model_id, permission_mode = $permission_mode, default_kb_id = $default_kb_id, updated_at = $updated_at
             WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", w.Id);
@@ -99,6 +100,7 @@ public static class WorkspaceRepository
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)Serialize(w.EnabledSkills) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$mcp_servers", (object?)Serialize(w.McpServers) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$default_model_id", (object?)w.DefaultModelId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$default_kb_id", (object?)w.DefaultKnowledgeBaseId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$permission_mode", (int)w.ToolPermissionMode);
         cmd.Parameters.AddWithValue("$updated_at", w.UpdatedAt);
         await cmd.ExecuteNonQueryAsync();
@@ -134,6 +136,7 @@ public static class WorkspaceRepository
         McpServers = r.IsDBNull(8) ? new() : ParseMcp(r.GetString(8)),
         DefaultModelId = r.IsDBNull(9) ? null : r.GetString(9),
         ToolPermissionMode = (PermissionMode)r.GetInt32(10),
+        DefaultKnowledgeBaseId = r.IsDBNull(13) ? null : r.GetString(13),
         CreatedAt = r.GetInt64(11),
         UpdatedAt = r.GetInt64(12),
     };

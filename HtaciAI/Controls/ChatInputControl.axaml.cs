@@ -8,6 +8,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -23,7 +24,7 @@ using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Controls;
 
-/// <summary>一次提交：正文（占位符已展开成真实路径）+ 附件列表。</summary>
+/// <summary>一次提交：正文（占位字符已展开成真实路径） + 附件列表。</summary>
 /// <param name="Text">发给模型的正文。附件位置上是绝对路径。</param>
 /// <param name="Attachments">随正文一起发出的附件。</param>
 public sealed record InputSubmit(string Text, IReadOnlyList<ChatAttachment> Attachments);
@@ -37,7 +38,7 @@ public enum InputHintKind
 }
 
 /// <summary>
-/// 会话输入区：附件栏 + 输入框 + 工具栏 + 提示行。新建页与对话页共用同一份。
+/// 会话输入区：输入框 + 工具栏 + 提示行。新建页与对话页共用同一份。
 ///
 /// <b>本控件不认识自己在哪个页面</b>，会话相关的差异全部由宿主的可选输入表达：
 /// <list type="bullet">
@@ -48,9 +49,11 @@ public enum InputHintKind
 ///   <item><see cref="MoreItems"/> 由宿主注入 —— 「压缩上下文」需要历史，新建页不注入。</item>
 /// </list>
 ///
-/// 附件这块刻意沿用「正文里放占位符、路径另存」的做法：路径往往是
+/// 附件这块是「正文里放占位字符、路径另存」：路径往往是
 /// <c>C:\Users\...\很长的一串.png</c>，直接写进输入框会把句子冲散，用户也没法调整它的位置。
-/// 具体逻辑在 <see cref="AttachmentDraft"/>（纯逻辑、有单元测试覆盖），
+/// 占位字符由 <see cref="ChatInputEditor"/> 画成一张真卡片，长得和消息气泡里的附件一样，
+/// 所以框里看到的顺序就是发出去的顺序。
+/// 「第几个占位字符对应哪个文件」由 <see cref="AttachmentDraft"/> 负责（纯逻辑、可单测），
 /// 本类只负责把它接到 Avalonia 的文本与剪贴板事件上。
 /// </summary>
 public partial class ChatInputControl : UserControl
@@ -85,12 +88,14 @@ public partial class ChatInputControl : UserControl
     {
         InitializeComponent();
 
-        // 全部按键处理都走隧道阶段：必须早于 TextBox 自己的类处理器。
+        // 全部按键处理都走隧道阶段：必须早于编辑器自己的类处理器。
         // 两件事都依赖这个顺序，见 OnInputKeyDownTunnel 的说明。
         InputBox.AddHandler(KeyDownEvent, (EventHandler<KeyEventArgs>)OnInputKeyDownTunnel, RoutingStrategies.Tunnel);
 
+        // 拖放同样走隧道：AvaloniaEdit 自己也处理拖放（拖文本），
+        // 文件拖进来时若被它先吃掉，就只会插入一串路径文字而不会变成附件。
         DragDrop.SetAllowDrop(InputBox, true);
-        InputBox.AddHandler(DragDrop.DropEvent, (EventHandler<DragEventArgs>)OnInputDrop);
+        InputBox.AddHandler(DragDrop.DropEvent, (EventHandler<DragEventArgs>)OnInputDrop, RoutingStrategies.Tunnel);
 
         InputBox.TextChanged += (_, _) =>
         {
@@ -98,19 +103,19 @@ public partial class ChatInputControl : UserControl
             if (_adoptingMarkers) return;
 
             // 粘贴进来的文本可能带着附件标记（如从别的消息里复制的一段）。
-            // 这一步把标记换成占位符并登记成附件，于是粘贴之后 chip 栏就直接有东西了。
+            // 这一步把标记换成占位字符并登记成附件，于是正文里直接出现卡片。
             AdoptPastedMarkers();
 
-            // 用户手工改了正文（删掉一段、撤销）之后，正文里已经不存在的占位符要从草稿里清掉，
-            // 否则 chip 栏会显示一个正文里根本没有的附件。
-            if (_draft.Prune(InputBox.Text ?? "")) RefreshAttachmentBar();
+            // 用户手工改了正文（删掉一段、撤销）之后，正文里已经没有对应占位字符的附件
+            // 要从草稿里清掉，否则卡片栏会显示一个正文里根本没有的附件。
+            if (_draft.Prune(InputBox.Text)) RefreshAttachmentBar();
             _ = SaveDraftAsync();
         };
 
         MenuTheme.Apply(PermModeBtn.Flyout as MenuFlyout);
         MenuTheme.Apply(MoreMenu);
 
-        // 点输入区外面 = 输入框失焦。TextBox 不会因为点了别处就自动掉焦点，
+        // 点输入区外面 = 输入框失焦。编辑器不会因为点了别处就自动掉焦点，
         // 于是它的蓝色聚焦描边会一直亮着，看起来像还在编辑。
         AttachedToVisualTree += (_, _) =>
         {
@@ -133,6 +138,7 @@ public partial class ChatInputControl : UserControl
         ToolSelector.RefreshRequested += (_, _) => LoadTools();
         SkillSelector.RefreshRequested += (_, _) => LoadSkills();
         McpSelector.RefreshRequested += (_, _) => _ = LoadMcpServersAsync();
+        KbSelector.RefreshRequested += (_, _) => _ = LoadKnowledgeBasesAsync();
     }
 
     // ============================================================
@@ -167,7 +173,7 @@ public partial class ChatInputControl : UserControl
         // 延后一拍：焦点是隧道阶段由 FocusManager 分配的，当场清会被随后那次赋值盖掉
         Dispatcher.UIThread.Post(() =>
         {
-            if (InputBox.IsFocused) TopLevel.GetTopLevel(this)?.FocusManager?.Focus(null);
+            if (InputBox.IsInputFocused) TopLevel.GetTopLevel(this)?.FocusManager?.Focus(null);
         }, DispatcherPriority.Background);
     }
 
@@ -257,24 +263,25 @@ public partial class ChatInputControl : UserControl
     public ToolSelectorControl ToolSelector => ToolPicker;
     public SkillSelectorControl SkillSelector => SkillPicker;
     public McpSelectorControl McpSelector => McpPicker;
+    public KnowledgeBaseSelectorControl KbSelector => KbPicker;
 
     // ============================================================
     // 输入框
     // ============================================================
 
-    /// <summary>当前正文（含占位符）。</summary>
+    /// <summary>当前正文（含占位字符）。</summary>
     public string Text
     {
-        get => InputBox.Text ?? "";
+        get => InputBox.Text;
         set
         {
-            InputBox.Text = value;
+            InputBox.Text = value ?? "";
             InputBox.CaretIndex = (value ?? "").Length;
         }
     }
 
     /// <summary>把焦点交给输入框（切到某个会话时用）。</summary>
-    public void FocusInput() => InputBox.Focus();
+    public void FocusInput() => InputBox.FocusInput();
 
     /// <summary>清空正文与附件。发送之后调用。</summary>
     public void Clear()
@@ -454,6 +461,16 @@ public partial class ChatInputControl : UserControl
             _ => "#9CA3AF",
         }));
 
+        // 档位名直接写在按钮上：只给一个图标时，用户要先点开才知道现在是哪一档
+        PermModeLabel.Text = _permissionMode switch
+        {
+            PermissionMode.Strict => "严格",
+            PermissionMode.Normal => "普通",
+            PermissionMode.Loose => "宽松",
+            PermissionMode.Free => "自由",
+            _ => "普通",
+        };
+
         ToolTip.SetTip(PermModeBtn, _permissionMode switch
         {
             PermissionMode.Strict => "权限模式：严格（所有工具需确认）",
@@ -487,6 +504,25 @@ public partial class ChatInputControl : UserControl
 
     /// <summary>把已启用的技能注入技能选择器。</summary>
     public void LoadSkills() => SkillSelector.Skills = SkillRegistry.Instance.GetEnabled();
+
+    /// <summary>
+    /// 把知识库列表注入选择器。当前选中值由宿主通过 <see cref="SetKnowledgeBaseId"/> 设，
+    /// 这里只负责清单本身。
+    /// </summary>
+    public async Task LoadKnowledgeBasesAsync()
+    {
+        try
+        {
+            KbSelector.Libraries = await KnowledgeBaseRepository.GetAllAsync();
+        }
+        catch
+        {
+            // 数据库未就绪时保持空列表，选择器显示「知识库」
+        }
+    }
+
+    /// <summary>设置当前会话用的知识库（不触发会话落库，用于回显）。</summary>
+    public void SetKnowledgeBaseId(string? libraryId) => KbSelector.SetSelected(libraryId);
 
     /// <summary>把 MCP 服务注入选择器（含未启动的：勾选后发送时自动启动）。</summary>
     public async Task LoadMcpServersAsync()
@@ -534,16 +570,15 @@ public partial class ChatInputControl : UserControl
     /// </summary>
     public void Submit()
     {
-        // 首尾空白在这里去掉。两件事依赖它：
-        //   - 用户粘贴进来的文本可能自带尾部换行；
-        //   - 附件占位符插入时会补一个尾随空格（见 AttachmentDraft.InsertToken）。
+        // 首尾空白在这里去掉。用户粘贴进来的文本可能自带尾部换行。
         // 只规范化本地这份「要发出去的文本」，<b>不动输入框里的内容</b> ——
-        // 发送失败时输入框要原样保留，而草稿（占位符 ↔ 路径）必须继续与框内文本对得上。
-        var raw = (InputBox.Text ?? "").Trim();
+        // 发送失败时输入框要原样保留，而草稿（占位字符 ↔ 路径）必须继续与框内文本对得上。
+        // 占位字符不是空白字符，Trim 不会把它去掉。
+        var raw = InputBox.Text.Trim();
 
         if (raw.Length == 0 && _draft.IsEmpty) return;
 
-        // 发给模型的是真实路径，不是 @图片1
+        // 发给模型的是真实路径，不是占位字符
         var text = _draft.Expand(raw);
         var attachments = _draft.Items.Select(i => i.Info).ToList();
 
@@ -580,7 +615,7 @@ public partial class ChatInputControl : UserControl
     private bool _adoptingMarkers;
 
     /// <summary>
-    /// 把正文里的附件标记（<c>[agent-file:///…]</c>）换成占位符并登记为附件。
+    /// 把正文里的附件标记（<c>[agent-file:///…]</c>）换成占位字符并登记为附件。
     ///
     /// 放在 TextChanged 里而不是只挂在粘贴事件上：这样手打的标记、拖进来的文本、
     /// 以及撤销恢复出来的标记都能被同一段逻辑处理，不必为每个入口各写一遍
@@ -588,7 +623,7 @@ public partial class ChatInputControl : UserControl
     /// </summary>
     private void AdoptPastedMarkers()
     {
-        var text = InputBox.Text ?? "";
+        var text = InputBox.Text;
         if (!AttachmentMarker.Contains(text)) return;
 
         if (!_draft.TryAdoptMarkers(text, out var edit)) return;
@@ -596,8 +631,7 @@ public partial class ChatInputControl : UserControl
         _adoptingMarkers = true;
         try
         {
-            InputBox.Text = edit.Text;
-            InputBox.CaretIndex = edit.Caret;
+            InputBox.ReplaceText(edit.Text, edit.Caret);
         }
         finally
         {
@@ -618,42 +652,157 @@ public partial class ChatInputControl : UserControl
 
             // TryAdd 内部会去重并同时给出新正文与新光标；顺序由它保证，
             // 调用方拿到结果后只赋一次文本，不会出现「登记后被自己的清理逻辑当孤儿删掉」。
-            if (!_draft.TryAdd(item, InputBox.Text ?? "", InputBox.CaretIndex, out var edit)) continue;
+            if (!_draft.TryAdd(item, InputBox.Text, InputBox.CaretIndex, out var edit)) continue;
 
-            InputBox.Text = edit.Text;
-            InputBox.CaretIndex = edit.Caret;
+            InputBox.ReplaceText(edit.Text, edit.Caret);
             added = true;
         }
 
         if (added) RefreshAttachmentBar();
     }
 
+    /// <summary>
+    /// 卡片控件缓存：<see cref="AttachmentDraft.Item"/> → 那张卡片。
+    ///
+    /// 必须缓存实例而不能每次重建：内联控件滚出视口会被摘出视觉树、滚回来再挂回去，
+    /// 每次 new 一个的话，卡片里的悬停态与按钮状态每次滚动都要丢一次。
+    /// </summary>
+    private readonly Dictionary<AttachmentDraft.Item, AttachmentChip> _chips = new();
+
+    /// <summary>兜底卡片（见 <see cref="OrphanChip"/>）：序号 → 控件。</summary>
+    private readonly Dictionary<int, Control> _orphans = new();
+
+    /// <summary>
+    /// 输入框里附件的行内高度。取 18 而不是 <see cref="AttachmentChip"/> 的 19：
+    /// 14px 正文的行高约 21.6，卡片比行高只高一点点时，靠下面的基线把它压回行内。
+    /// </summary>
+    private const double InlineChipHeight = 18;
+
+    /// <summary>
+    /// 卡片的行内基线：卡片底边在基线上方多少像素（即 <c>TextBlock.BaselineOffset</c>）。
+    ///
+    /// 这一项决定带卡片的那一行有多高。AvaloniaEdit 的 <c>InlineObjectRun.Baseline</c> 取
+    /// <c>TextBlock.GetBaselineOffset(Element)</c>，取不到时才用控件高度；而 Avalonia 12 里
+    /// 这个附加属性在没设置时返回 0 而不是 NaN —— 于是卡片整个落在基线以下，
+    /// 行高变成「文字高 15.1 + 卡片高 18」= 33，比普通文字行高出半行。
+    ///
+    /// 对齐到文字基线（14px 正文约 15）后，行高回到 21.6，卡片顶和文字顶齐平，
+    /// 底边探进下缘的内边距里，看起来就是同一行里的一个标签。
+    /// </summary>
+    private const double InlineChipBaseline = 15;
+
+    /// <summary>
+    /// 把草稿里的附件接到正文的占位字符上：正文里第 n 个占位字符显示第 n 张卡片。
+    ///
+    /// 卡片本身直接复用消息气泡里那个 <see cref="AttachmentChip"/>（compact 形态），
+    /// 于是输入框预览与发出去之后的样子是同一个控件，不会出现「框里长这样、发出去变那样」。
+    /// </summary>
     private void RefreshAttachmentBar()
     {
-        AttachmentBar.Children.Clear();
+        // 已经不在草稿里的卡片从缓存里清掉，否则反复增删附件会让缓存无限长
+        foreach (var stale in _chips.Keys.Where(k => !_draft.Items.Contains(k)).ToList())
+            _chips.Remove(stale);
 
-        foreach (var item in _draft.Items)
+        // 兜底卡片按「第几个占位字符」缓存，删掉一个之后所有序号都会变，只能整批丢掉重建
+        _orphans.Clear();
+
+        InputBox.SetWidgetProvider(index =>
+            index >= 0 && index < _draft.Count ? ChipFor(_draft.Items[index]) : OrphanChip(index));
+
+        InputBox.Redraw();
+    }
+
+    /// <summary>
+    /// 正文里有占位字符、草稿里却已经没有对应附件时显示的兜底卡片。
+    ///
+    /// 正常情况下走不到这里：<see cref="AttachmentDraft"/> 的删除记录会把撤销/重做放回来的
+    /// 占位字符接回原附件。只有删除记录也丢了（撤得很远、或正文被外部改过）才会命中。
+    /// 与其让编辑器把占位字符画成 <c>[OBJ]</c> 这种字面量，不如给一张点得掉的灰卡片。
+    /// </summary>
+    private Control OrphanChip(int index)
+    {
+        if (_orphans.TryGetValue(index, out var cached)) return cached;
+
+        var chip = new Border
         {
-            var captured = item;
-            AttachmentBar.Children.Add(new AttachmentChip(
-                captured.Info,
-                () => RemoveAttachment(captured)));
-        }
+            Height = InlineChipHeight,
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(6, 0, 6, 0),
+            Margin = new Thickness(1, 0, 1, 0),
+            Background = new SolidColorBrush(Color.Parse("#F7F8FA")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#E1E5EA")),
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = new TextBlock
+            {
+                Text = "附件已失效",
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.Parse("#9AA3AF")),
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
 
-        AttachmentBar.IsVisible = _draft.Count > 0;
+        ToolTip.SetTip(chip, "这条卡片对应的附件已经不在草稿里，点一下把它删掉");
+        TextBlock.SetBaselineOffset(chip, InlineChipBaseline);
+        chip.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(chip).Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+            DropOrphan(index);
+        };
+
+        _orphans[index] = chip;
+        return chip;
+    }
+
+    /// <summary>删掉正文里第 <paramref name="index"/> 个占位字符（兜底卡片点一下时用）。</summary>
+    private void DropOrphan(int index)
+    {
+        var text = InputBox.Text;
+        var seen = 0;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] != AttachmentDraft.Token) continue;
+            if (seen++ != index) continue;
+
+            InputBox.ReplaceText(text.Remove(i, 1), i);
+            RefreshAttachmentBar();
+            return;
+        }
+    }
+
+    private AttachmentChip ChipFor(AttachmentDraft.Item item)
+    {
+        if (_chips.TryGetValue(item, out var chip)) return chip;
+
+        chip = new AttachmentChip(item.Info, () => RemoveAttachment(item), compact: true)
+        {
+            // 卡片是内联对象，两侧没有文本间隔；留 1px 免得和相邻文字贴死
+            Margin = new Thickness(1, 0, 1, 0),
+
+            // 气泡里 19 刚好，输入框里得跟着正文行高走，否则这一行会被撑高
+            Height = InlineChipHeight,
+        };
+
+        // 对齐文字基线，行高才不会因为卡片多出半行（见 InlineChipBaseline）
+        TextBlock.SetBaselineOffset(chip, InlineChipBaseline);
+
+        _chips[item] = chip;
+        return chip;
     }
 
     private void RemoveAttachment(AttachmentDraft.Item item)
     {
-        var edit = _draft.Remove(item, InputBox.Text ?? "", InputBox.CaretIndex);
-        InputBox.Text = edit.Text;
-        InputBox.CaretIndex = edit.Caret;
+        var edit = _draft.Remove(item, InputBox.Text, InputBox.CaretIndex);
+        InputBox.ReplaceText(edit.Text, edit.Caret);
         RefreshAttachmentBar();
     }
 
     /// <summary>
     /// 粘贴：剪贴板里是文件（含截图工具直接放进去的位图）就转成附件，
-    /// 否则交回 TextBox 走它自己的文本粘贴。
+    /// 否则交回编辑器走它自己的文本粘贴。
     /// </summary>
     private async Task PasteFromClipboardAsync()
     {
@@ -697,25 +846,26 @@ public partial class ChatInputControl : UserControl
     }
 
     /// <summary>
-    /// 输入框的隧道阶段按键。三件事都必须在 TextBox 自己的类处理器之前截下来：
+    /// 输入框的隧道阶段按键。三件事都必须在编辑器自己的类处理器之前截下来：
     ///
     /// <list type="bullet">
-    ///   <item><b>回车发送</b> —— <c>AcceptsReturn=True</c> 的 TextBox 会在自己的 OnKeyDown 里
-    ///     先把换行插进正文。若把「回车就发送」注册在冒泡阶段（更靠后），读到的文本末尾
+    ///   <item><b>回车发送</b> —— 编辑器会在自己的 OnKeyDown 里先把换行插进正文。
+    ///     若把「回车就发送」注册在冒泡阶段（更靠后），读到的文本末尾
     ///     已经多了个换行，发出去的消息气泡里就会多一个空行。
     ///     注意 Avalonia 里<b>类处理器先于同元素的实例处理器</b>执行，所以哪怕加
     ///     <c>handledEventsToo: true</c> 也拦不住它 —— 只有隧道阶段够早。</item>
     ///   <item><b>粘贴（Cmd+V / Ctrl+V）</b> —— 否则剪贴板里的文件/位图已经被当成文本
     ///     处理掉了（表现就是粘贴图片没反应）。修饰键随平台，见 <see cref="IsPasteGesture"/>。</item>
-    ///   <item><b>Backspace / Delete</b> —— 光标紧邻附件占位符时整体删掉它，而不是留个残渣。</item>
+    ///   <item><b>Backspace / Delete</b> —— 光标紧邻一张卡片时删掉它，并把草稿里对应的那条
+    ///     一起移除（编辑器自己删也能删掉字符，但草稿会留着一条没有正文的附件）。</item>
     /// </list>
     /// </summary>
     private void OnInputKeyDownTunnel(object? sender, KeyEventArgs e)
     {
-        // 回车：发送。Shift+Enter 故意不接管，让它落到 TextBox 默认行为上（换行）。
+        // 回车：发送。Shift+Enter 故意不接管，让它落到编辑器默认行为上（换行）。
         if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
         {
-            // 置 Handled 就阻止了 TextBox 插入换行 —— 这正是本分支存在的意义。
+            // 置 Handled 就阻止了编辑器插入换行 —— 这正是本分支存在的意义。
             e.Handled = true;
 
             // 运行中回车不当作「停止」：那颗按钮的语义切换只对鼠标点击成立，
@@ -735,7 +885,7 @@ public partial class ChatInputControl : UserControl
 
         if (e.Key == Key.Back)
         {
-            if (_draft.TryDeleteBefore(InputBox.Text ?? "", InputBox.CaretIndex,
+            if (_draft.TryDeleteBefore(InputBox.Text, InputBox.CaretIndex,
                     InputBox.SelectionStart, InputBox.SelectionEnd, out var edit))
             {
                 ApplyTokenDelete(edit);
@@ -744,7 +894,7 @@ public partial class ChatInputControl : UserControl
         }
         else if (e.Key == Key.Delete)
         {
-            if (_draft.TryDeleteAfter(InputBox.Text ?? "", InputBox.CaretIndex,
+            if (_draft.TryDeleteAfter(InputBox.Text, InputBox.CaretIndex,
                     InputBox.SelectionStart, InputBox.SelectionEnd, out var edit))
             {
                 ApplyTokenDelete(edit);
@@ -755,8 +905,7 @@ public partial class ChatInputControl : UserControl
 
     private void ApplyTokenDelete(TextEdit edit)
     {
-        InputBox.Text = edit.Text;
-        InputBox.CaretIndex = edit.Caret;
+        InputBox.ReplaceText(edit.Text, edit.Caret);
         RefreshAttachmentBar();
     }
 
@@ -787,29 +936,27 @@ public partial class ChatInputControl : UserControl
         var raw = DraftStore?.Load();
 
         // 必须在碰 InputBox.Text 之前记下「库里现在存的是什么」：下面所有分支都会给输入框赋值，
-        // 而 Avalonia 的 TextBox.Text 默认值是 null，连赋空串都是一次真实变化并触发 TextChanged。
+        // 而整段替换正文一定触发一次 TextChanged。
         // 先记下来，SaveDraftAsync 才有依据判断「这次触发只是恢复、没有真的改动」。
         _lastSavedDraft = raw ?? "";
 
         var edit = _draft.Restore(raw);
-        InputBox.Text = edit.Text;
-        InputBox.CaretIndex = edit.Caret;
+        InputBox.ReplaceText(edit.Text, edit.Caret);
         RefreshAttachmentBar();
     }
 
     /// <summary>
-    /// 保存草稿。正文与附件一起存 —— 只存正文的话，重开会话后 <c>@图片1</c> 还在，
-    /// 但「图片1 是哪个文件」已经丢了。
+    /// 保存草稿。正文与附件一起存 —— 只存正文的话，重开会话后正文里那个占位字符还在，
+    /// 但「它是哪个文件」已经丢了。
     /// </summary>
     public async Task SaveDraftAsync()
     {
         if (DraftStore is not { } store) return;
 
         // 内容与库里一致就什么都不做。这不是优化，是修 bug：
-        // 打开会话时 RestoreDraft 会给输入框赋一次值（草稿为空就是空串），而 Avalonia 的
-        // TextBox.Text 默认值是 null，这次 null→"" 同样算「变化」并触发 TextChanged。
+        // 打开会话时 RestoreDraft 会整体替换一次正文，那次替换同样触发 TextChanged。
         // 少了这道闸门，光是点开一个会话就会往数据库写一次草稿。
-        if (_draft.Serialize(InputBox.Text ?? "") == _lastSavedDraft) return;
+        if (_draft.Serialize(InputBox.Text) == _lastSavedDraft) return;
 
         // 串行化：上一次写还没回来时只做个标记，等它回来后用最新内容再写一遍。
         // 不去重不行 —— 并发写同一条记录时，先发的未必先落，旧草稿会盖掉新的。
@@ -827,7 +974,7 @@ public partial class ChatInputControl : UserControl
                 _draftPending = false;
 
                 // 排队期间内容可能又变回原样（或变回已落盘的值），再判一次
-                var text = _draft.Serialize(InputBox.Text ?? "");
+                var text = _draft.Serialize(InputBox.Text);
                 if (text == _lastSavedDraft) break;
 
                 await store.SaveAsync(text);
@@ -845,3 +992,4 @@ public partial class ChatInputControl : UserControl
         }
     }
 }
+

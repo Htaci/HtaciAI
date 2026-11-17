@@ -9,23 +9,23 @@ using Microsoft.Data.Sqlite;
 namespace HtaciAI.Data;
 
 /// <summary>
-/// 智能对话仓储：会话与消息的读写。
+/// 鏅鸿兘瀵硅瘽浠撳偍锛氫細璇濅笌娑堟伅鐨勮鍐欍€?
 /// </summary>
 public static class ChatRepository
 {
     private static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    // ---- 会话 ----
+    // ---- 浼氳瘽 ----
 
     /// <summary>
-    /// 全部未删除会话，按<b>真实对话时间</b>倒序（最近发过消息的在前）。
+    /// 鍏ㄩ儴鏈垹闄や細璇濓紝鎸?b>鐪熷疄瀵硅瘽鏃堕棿</b>鍊掑簭锛堟渶杩戝彂杩囨秷鎭殑鍦ㄥ墠锛夈€?
     ///
-    /// ⚠️ 排序刻意用 <c>COALESCE(last_message_at, created_at)</c> 而<b>不是</b> <c>updated_at</c>：
-    /// <c>updated_at</c> 会被任何一次写库抬高——改模型/技能/工具/MCP/权限、改名，甚至只是
-    /// <b>打开会话</b>（打开会恢复草稿，草稿列一变就会写一次库）。用它排序的结果是「点开看一眼
-    /// 就会跳到列表最前面」，而用户要的是「只有发了新请求才算最近用过」。
-    /// <c>last_message_at</c> 全仓只在真正发请求时写，正是这个语义；没有消息的会话退回创建时间，
-    /// 于是刚建出来的空会话仍然排在最前（这是对的，它确实是新的）。
+    /// 鈿狅笍 鎺掑簭鍒绘剰鐢?<c>COALESCE(last_message_at, created_at)</c> 鑰?b>涓嶆槸</b> <c>updated_at</c>锛?
+    /// <c>updated_at</c> 浼氳浠讳綍涓€娆″啓搴撴姮楂樷€斺€旀敼妯″瀷/鎶€鑳?宸ュ叿/MCP/鏉冮檺銆佹敼鍚嶏紝鐢氳嚦鍙槸
+    /// <b>鎵撳紑浼氳瘽</b>锛堟墦寮€浼氭仮澶嶈崏绋匡紝鑽夌鍒椾竴鍙樺氨浼氬啓涓€娆″簱锛夈€傜敤瀹冩帓搴忕殑缁撴灉鏄€岀偣寮€鐪嬩竴鐪?
+    /// 灏变細璺冲埌鍒楄〃鏈€鍓嶉潰銆嶏紝鑰岀敤鎴疯鐨勬槸銆屽彧鏈夊彂浜嗘柊璇锋眰鎵嶇畻鏈€杩戠敤杩囥€嶃€?
+    /// <c>last_message_at</c> 鍏ㄤ粨鍙湪鐪熸鍙戣姹傛椂鍐欙紝姝ｆ槸杩欎釜璇箟锛涙病鏈夋秷鎭殑浼氳瘽閫€鍥炲垱寤烘椂闂达紝
+    /// 浜庢槸鍒氬缓鍑烘潵鐨勭┖浼氳瘽浠嶇劧鎺掑湪鏈€鍓嶏紙杩欐槸瀵圭殑锛屽畠纭疄鏄柊鐨勶級銆?
     /// </summary>
     public static async Task<List<ChatSession>> GetAllAsync()
     {
@@ -34,7 +34,7 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, draft, mcp_servers
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, draft, mcp_servers, kb_id
             FROM chat_sessions WHERE is_deleted = 0
             ORDER BY COALESCE(last_message_at, created_at) DESC;
             """;
@@ -50,7 +50,7 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, draft, mcp_servers
+            SELECT id, title, model, system_prompt, thinking, is_deleted, deleted_at, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, draft, mcp_servers, kb_id
             FROM chat_sessions WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -59,10 +59,10 @@ public static class ChatRepository
     }
 
     /// <summary>
-    /// 最近一次用过的模型名与使用时间，供「新会话默认模型 = 上次使用的模型」使用。
-    /// 排序口径与 <see cref="GetAllAsync"/> 一致（只看真实对话时间），否则
-    /// 「上次使用的模型」会被「随手点开某个会话」这种动作污染。
-    /// 没有可用会话时返回 null。
+    /// 鏈€杩戜竴娆＄敤杩囩殑妯″瀷鍚嶄笌浣跨敤鏃堕棿锛屼緵銆屾柊浼氳瘽榛樿妯″瀷 = 涓婃浣跨敤鐨勬ā鍨嬨€嶄娇鐢ㄣ€?
+    /// 鎺掑簭鍙ｅ緞涓?<see cref="GetAllAsync"/> 涓€鑷达紙鍙湅鐪熷疄瀵硅瘽鏃堕棿锛夛紝鍚﹀垯
+    /// 銆屼笂娆′娇鐢ㄧ殑妯″瀷銆嶄細琚€岄殢鎵嬬偣寮€鏌愪釜浼氳瘽銆嶈繖绉嶅姩浣滄薄鏌撱€?
+    /// 娌℃湁鍙敤浼氳瘽鏃惰繑鍥?null銆?
     /// </summary>
     public static async Task<(string Model, long At)?> GetLastUsedModelAsync()
     {
@@ -89,8 +89,8 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO chat_sessions (id, title, model, system_prompt, thinking, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, mcp_servers)
-            VALUES ($id, $title, $model, $system_prompt, $thinking, $created_at, $updated_at, $enabled_skills, $enabled_tool_ids, $last_message_at, $permission_mode, $mcp_servers);
+            INSERT INTO chat_sessions (id, title, model, system_prompt, thinking, created_at, updated_at, enabled_skills, enabled_tool_ids, last_message_at, permission_mode, mcp_servers, kb_id)
+            VALUES ($id, $title, $model, $system_prompt, $thinking, $created_at, $updated_at, $enabled_skills, $enabled_tool_ids, $last_message_at, $permission_mode, $mcp_servers, $kb_id);
             """;
         cmd.Parameters.AddWithValue("$id", s.Id);
         cmd.Parameters.AddWithValue("$title", s.Title);
@@ -104,6 +104,7 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$permission_mode", (int)s.ToolPermissionMode);
         cmd.Parameters.AddWithValue("$mcp_servers", (object?)SerializeStringList(s.McpServers) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$kb_id", (object?)s.KnowledgeBaseId ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -118,7 +119,7 @@ public static class ChatRepository
             SET title = $title, model = $model, system_prompt = $system_prompt,
                 thinking = $thinking, enabled_skills = $enabled_skills,
                 enabled_tool_ids = $enabled_tool_ids, last_message_at = $last_message_at,
-                permission_mode = $permission_mode, mcp_servers = $mcp_servers,
+                permission_mode = $permission_mode, mcp_servers = $mcp_servers, kb_id = $kb_id,
                 updated_at = $updated_at
             WHERE id = $id;
             """;
@@ -132,19 +133,20 @@ public static class ChatRepository
         cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$permission_mode", (int)s.ToolPermissionMode);
         cmd.Parameters.AddWithValue("$mcp_servers", (object?)SerializeStringList(s.McpServers) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$kb_id", (object?)s.KnowledgeBaseId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$updated_at", s.UpdatedAt);
         await cmd.ExecuteNonQueryAsync();
     }
 
     /// <summary>
-    /// 只更新草稿列，不碰其余字段（<b>尤其不碰 updated_at</b>）。
-    /// 与 <see cref="UpdateAsync"/> 分开是刻意的：整表更新会把会话对象上的旧 draft 写回去，
-    /// 冲掉「刚敲进去、还没来得及同步到会话对象」的内容。
+    /// 鍙洿鏂拌崏绋垮垪锛屼笉纰板叾浣欏瓧娈碉紙<b>灏ゅ叾涓嶇 updated_at</b>锛夈€?
+    /// 涓?<see cref="UpdateAsync"/> 鍒嗗紑鏄埢鎰忕殑锛氭暣琛ㄦ洿鏂颁細鎶婁細璇濆璞′笂鐨勬棫 draft 鍐欏洖鍘伙紝
+    /// 鍐叉帀銆屽垰鏁茶繘鍘汇€佽繕娌℃潵寰楀強鍚屾鍒颁細璇濆璞°€嶇殑鍐呭銆?
     ///
-    /// 为什么不动 updated_at：草稿是「打字过程」而不是「会话活动」。它会随着每次输入落库，
-    /// 而且在<b>打开会话恢复草稿</b>时也会被触发一次——早期版本顺带写了 updated_at，
-    /// 于是「点开看一眼」就改写了会话记录。排序列已经不依赖 updated_at 了（见 <see cref="GetAllAsync"/>），
-    /// 这里再断开一次，免得将来又有人拿 updated_at 当「最近使用」用。
+    /// 涓轰粈涔堜笉鍔?updated_at锛氳崏绋挎槸銆屾墦瀛楄繃绋嬨€嶈€屼笉鏄€屼細璇濇椿鍔ㄣ€嶃€傚畠浼氶殢鐫€姣忔杈撳叆钀藉簱锛?
+    /// 鑰屼笖鍦?b>鎵撳紑浼氳瘽鎭㈠鑽夌</b>鏃朵篃浼氳瑙﹀彂涓€娆♀€斺€旀棭鏈熺増鏈『甯﹀啓浜?updated_at锛?
+    /// 浜庢槸銆岀偣寮€鐪嬩竴鐪笺€嶅氨鏀瑰啓浜嗕細璇濊褰曘€傛帓搴忓垪宸茬粡涓嶄緷璧?updated_at 浜嗭紙瑙?<see cref="GetAllAsync"/>锛夛紝
+    /// 杩欓噷鍐嶆柇寮€涓€娆★紝鍏嶅緱灏嗘潵鍙堟湁浜烘嬁 updated_at 褰撱€屾渶杩戜娇鐢ㄣ€嶇敤銆?
     /// </summary>
     public static async Task SaveDraftAsync(string id, string draft)
     {
@@ -157,7 +159,7 @@ public static class ChatRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
-    /// <summary>软删除会话：标记 is_deleted=1 并记录删除时间（消息保留，便于删除会话管理页恢复）。</summary>
+    /// <summary>杞垹闄や細璇濓細鏍囪 is_deleted=1 骞惰褰曞垹闄ゆ椂闂达紙娑堟伅淇濈暀锛屼究浜庡垹闄や細璇濈鐞嗛〉鎭㈠锛夈€?/summary>
     public static async Task SoftDeleteSessionAsync(string id)
     {
         await using var conn = DatabaseService.CreateConnection();
@@ -169,9 +171,9 @@ public static class ChatRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
-    // ---- 消息 ----
+    // ---- 娑堟伅 ----
 
-    /// <summary>软删除一轮（AI 回复）：标记该 turn_id 下所有消息为已删除。</summary>
+    /// <summary>杞垹闄や竴杞紙AI 鍥炲锛夛細鏍囪璇?turn_id 涓嬫墍鏈夋秷鎭负宸插垹闄ゃ€?/summary>
     public static async Task SoftDeleteTurnAsync(string sessionId, string turnId)
     {
         await using var conn = DatabaseService.CreateConnection();
@@ -184,7 +186,7 @@ public static class ChatRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
-    /// <summary>软删除单条消息（用户消息）。</summary>
+    /// <summary>杞垹闄ゅ崟鏉℃秷鎭紙鐢ㄦ埛娑堟伅锛夈€?/summary>
     public static async Task SoftDeleteMessageAsync(string sessionId, string messageId)
     {
         await using var conn = DatabaseService.CreateConnection();
@@ -198,9 +200,9 @@ public static class ChatRepository
     }
 
     /// <summary>
-    /// 只改用户消息的正文（编辑用户消息用）。
-    /// 单独开一个方法而不是复用 <see cref="UpdateMessageAsync"/>：后者会连 thinking / 用量 / 状态
-    /// 一起写，那些字段对一条已完成的用户消息没有意义，写回去只会扩大出错面。
+    /// 鍙敼鐢ㄦ埛娑堟伅鐨勬鏂囷紙缂栬緫鐢ㄦ埛娑堟伅鐢級銆?
+    /// 鍗曠嫭寮€涓€涓柟娉曡€屼笉鏄鐢?<see cref="UpdateMessageAsync"/>锛氬悗鑰呬細杩?thinking / 鐢ㄩ噺 / 鐘舵€?
+    /// 涓€璧峰啓锛岄偅浜涘瓧娈靛涓€鏉″凡瀹屾垚鐨勭敤鎴锋秷鎭病鏈夋剰涔夛紝鍐欏洖鍘诲彧浼氭墿澶у嚭閿欓潰銆?
     /// </summary>
     public static async Task UpdateMessageContentAsync(string messageId, string content)
     {
@@ -236,14 +238,14 @@ public static class ChatRepository
     }
 
     /// <summary>
-    /// 只取「带 usage 的消息」，按会话分组、<b>每组从新到旧</b>。
+    /// 鍙彇銆屽甫 usage 鐨勬秷鎭€嶏紝鎸変細璇濆垎缁勩€?b>姣忕粍浠庢柊鍒版棫</b>銆?
     ///
-    /// <b>为什么不复用 <see cref="GetBySessionAsync"/></b>：那个方法读全量历史（含每条正文），
-    /// 而用量汇总只需要 usage_json。插件一次问十个会话的用量时要读十份长会话，
-    /// 就为了加几个数字 —— 这里只捞必要的列。
+    /// <b>涓轰粈涔堜笉澶嶇敤 <see cref="GetBySessionAsync"/></b>锛氶偅涓柟娉曡鍏ㄩ噺鍘嗗彶锛堝惈姣忔潯姝ｆ枃锛夛紝
+    /// 鑰岀敤閲忔眹鎬诲彧闇€瑕?usage_json銆傛彃浠朵竴娆￠棶鍗佷釜浼氳瘽鐨勭敤閲忔椂瑕佽鍗佷唤闀夸細璇濓紝
+    /// 灏变负浜嗗姞鍑犱釜鏁板瓧 鈥斺€?杩欓噷鍙崬蹇呰鐨勫垪銆?
     ///
-    /// 调用方按 <see cref="ContextUsage"/> 的口径扫每组的头部（最新优先），
-    /// 取到的就是「当前上下文占用」，与界面上的用量环是同一个数。
+    /// 璋冪敤鏂规寜 <see cref="ContextUsage"/> 鐨勫彛寰勬壂姣忕粍鐨勫ご閮紙鏈€鏂颁紭鍏堬級锛?
+    /// 鍙栧埌鐨勫氨鏄€屽綋鍓嶄笂涓嬫枃鍗犵敤銆嶏紝涓庣晫闈笂鐨勭敤閲忕幆鏄悓涓€涓暟銆?
     /// </summary>
     public static async Task<Dictionary<string, List<ChatMessage>>> GetUsageMessagesAsync(
         IReadOnlyList<string> sessionIds)
@@ -255,7 +257,7 @@ public static class ChatRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
 
-        // 参数逐个绑：SQLite 的 IN 列表没有可展开的参数语法
+        // 鍙傛暟閫愪釜缁戯細SQLite 鐨?IN 鍒楄〃娌℃湁鍙睍寮€鐨勫弬鏁拌娉?
         var names = new List<string>(sessionIds.Count);
         for (var i = 0; i < sessionIds.Count; i++)
         {
@@ -311,8 +313,8 @@ public static class ChatRepository
     }
 
     /// <summary>
-    /// 下一个 turn_id（会话内递增整数 1、2、3…）。用户与 AI 各占一个新 turn，
-    /// 因此每次 ChatAsync 会被调用两次（先用户后 AI）。历史数据为 GUID 时 CAST 为 0，忽略不计。
+    /// 涓嬩竴涓?turn_id锛堜細璇濆唴閫掑鏁存暟 1銆?銆?鈥︼級銆傜敤鎴蜂笌 AI 鍚勫崰涓€涓柊 turn锛?
+    /// 鍥犳姣忔 ChatAsync 浼氳璋冪敤涓ゆ锛堝厛鐢ㄦ埛鍚?AI锛夈€傚巻鍙叉暟鎹负 GUID 鏃?CAST 涓?0锛屽拷鐣ヤ笉璁°€?
     /// </summary>
     public static async Task<string> GetNextTurnIdAsync(string sessionId)
     {
@@ -329,16 +331,16 @@ public static class ChatRepository
     }
 
     /// <summary>
-    /// 把 <paramref name="orderedIds"/> 按给定顺序插到第 <paramref name="afterExclusive"/> 条之后
-    /// （即 sequence_number &gt; afterExclusive 的最前面），其余消息整体后移，相对顺序不变。
+    /// 鎶?<paramref name="orderedIds"/> 鎸夌粰瀹氶『搴忔彃鍒扮 <paramref name="afterExclusive"/> 鏉′箣鍚?
+    /// 锛堝嵆 sequence_number &gt; afterExclusive 鐨勬渶鍓嶉潰锛夛紝鍏朵綑娑堟伅鏁翠綋鍚庣Щ锛岀浉瀵归『搴忎笉鍙樸€?
     ///
-    /// 重新生成中间某一轮时必须用它：新回复是边流式边落库的，落库时只能拿到「当前最大值 + 1」，
-    /// 也就是会话末尾；不挪回来的话，重生成的回复会跑到最后一轮后面去。
+    /// 閲嶆柊鐢熸垚涓棿鏌愪竴杞椂蹇呴』鐢ㄥ畠锛氭柊鍥炲鏄竟娴佸紡杈硅惤搴撶殑锛岃惤搴撴椂鍙兘鎷垮埌銆屽綋鍓嶆渶澶у€?+ 1銆嶏紝
+    /// 涔熷氨鏄細璇濇湯灏撅紱涓嶆尓鍥炴潵鐨勮瘽锛岄噸鐢熸垚鐨勫洖澶嶄細璺戝埌鏈€鍚庝竴杞悗闈㈠幓銆?
     ///
-    /// 腾位置分三步，先把这一段整体挪进<b>负数区间</b>：直接原地 +N 会撞上
-    /// <c>UNIQUE(session_id, sequence_number)</c> —— SQLite 按 rowid 顺序逐行更新，
-    /// 前一行加完就压到还没移动的行上，立刻冲突（UPDATE 也不支持 ORDER BY 来倒着走）。
-    /// 挪到负数区与此前状态（全部为正）不重叠，最后再统一移回。整个过程在一个事务里。
+    /// 鑵句綅缃垎涓夋锛屽厛鎶婅繖涓€娈垫暣浣撴尓杩?b>璐熸暟鍖洪棿</b>锛氱洿鎺ュ師鍦?+N 浼氭挒涓?
+    /// <c>UNIQUE(session_id, sequence_number)</c> 鈥斺€?SQLite 鎸?rowid 椤哄簭閫愯鏇存柊锛?
+    /// 鍓嶄竴琛屽姞瀹屽氨鍘嬪埌杩樻病绉诲姩鐨勮涓婏紝绔嬪埢鍐茬獊锛圲PDATE 涔熶笉鏀寔 ORDER BY 鏉ュ€掔潃璧帮級銆?
+    /// 鎸埌璐熸暟鍖轰笌姝ゅ墠鐘舵€侊紙鍏ㄩ儴涓烘锛変笉閲嶅彔锛屾渶鍚庡啀缁熶竴绉诲洖銆傛暣涓繃绋嬪湪涓€涓簨鍔￠噷銆?
     /// </summary>
     public static async Task InsertMessagesAtAsync(string sessionId, int afterExclusive, IReadOnlyList<string> orderedIds)
     {
@@ -427,7 +429,7 @@ public static class ChatRepository
     }
 
     /// <summary>
-    /// 流式结束后回写：正文、推理内容、状态、用量。
+    /// 娴佸紡缁撴潫鍚庡洖鍐欙細姝ｆ枃銆佹帹鐞嗗唴瀹广€佺姸鎬併€佺敤閲忋€?
     /// </summary>
     public static async Task UpdateMessageAsync(ChatMessage m)
     {
@@ -457,7 +459,7 @@ public static class ChatRepository
         await cmd.ExecuteNonQueryAsync();
     }
 
-    // ---- 映射 ----
+    // ---- 鏄犲皠 ----
 
     private static ChatSession MapSession(SqliteDataReader r) => new()
     {
@@ -476,16 +478,17 @@ public static class ChatRepository
         ToolPermissionMode = (PermissionMode)r.GetInt32(12),
         Draft = r.IsDBNull(13) ? null : r.GetString(13),
         McpServers = r.IsDBNull(14) ? new() : ParseStringList(r.GetString(14)),
+        KnowledgeBaseId = r.IsDBNull(15) ? null : r.GetString(15),
     };
 
-    /// <summary>把会话启用技能序列化为 JSON 数组文本（供 enabled_skills 列存储）。</summary>
+    /// <summary>鎶婁細璇濆惎鐢ㄦ妧鑳藉簭鍒楀寲涓?JSON 鏁扮粍鏂囨湰锛堜緵 enabled_skills 鍒楀瓨鍌級銆?/summary>
     private static string SerializeSkills(List<SessionSkill> skills)
     {
         try { return JsonSerializer.Serialize(skills ?? new()); }
         catch { return "[]"; }
     }
 
-    /// <summary>从 JSON 数组文本解析会话启用技能；空/损坏时返回空列表。</summary>
+    /// <summary>浠?JSON 鏁扮粍鏂囨湰瑙ｆ瀽浼氳瘽鍚敤鎶€鑳斤紱绌?鎹熷潖鏃惰繑鍥炵┖鍒楄〃銆?/summary>
     private static List<SessionSkill> ParseSkills(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return new();
@@ -493,14 +496,14 @@ public static class ChatRepository
         catch { return new(); }
     }
 
-    /// <summary>把字符串列表序列化为 JSON 数组文本（enabled_tool_ids / mcp_servers 共用）。</summary>
+    /// <summary>鎶婂瓧绗︿覆鍒楄〃搴忓垪鍖栦负 JSON 鏁扮粍鏂囨湰锛坋nabled_tool_ids / mcp_servers 鍏辩敤锛夈€?/summary>
     private static string SerializeStringList(List<string> values)
     {
         try { return JsonSerializer.Serialize(values ?? new()); }
         catch { return "[]"; }
     }
 
-    /// <summary>从 JSON 数组文本解析字符串列表；空/损坏时返回空列表。</summary>
+    /// <summary>浠?JSON 鏁扮粍鏂囨湰瑙ｆ瀽瀛楃涓插垪琛紱绌?鎹熷潖鏃惰繑鍥炵┖鍒楄〃銆?/summary>
     private static List<string> ParseStringList(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return new();

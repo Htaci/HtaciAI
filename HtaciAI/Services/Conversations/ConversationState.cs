@@ -36,5 +36,12 @@ public sealed class ConversationState
 
     public PermissionMode PermissionMode { get; set; } = PermissionMode.Normal;
 
+    /// <summary>
+    /// 这个会话查询的知识库 id。空 = 不指定（界面上显示「知识库：不指定」）。
+    /// 解析顺序由 <see cref="Services.AppDefaults.ResolveDefaultKnowledgeBaseIdAsync"/> 负责，
+    /// 这里只存最终结果。
+    /// </summary>
+    public string? KnowledgeBaseId { get; set; }
+
     public long? LastMessageAt { get; set; }
 }

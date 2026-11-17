@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -11,6 +11,7 @@ using HtaciAI.Controls;
 using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services;
+using HtaciAI.Services.Storage;
 using HtaciAI.Services.Tools;
 
 namespace HtaciAI.Views;
@@ -93,6 +94,16 @@ public partial class NewChatView : UserControl
 
     /// <summary>当前权限审批档位。菜单在输入控件里，这里读它的当前值。</summary>
     public PermissionMode SelectedPermissionMode => Input.PermissionMode;
+
+    /// <summary>新建页里选的知识库；空 = 不指定（发首条消息时会再按默认值回填）。</summary>
+    public string? SelectedKnowledgeBaseId
+    {
+        get
+        {
+            var id = Input.KbSelector.SelectedLibraryId;
+            return string.IsNullOrWhiteSpace(id) ? null : id;
+        }
+    }
 
     /// <summary>true = 目标为工作空间：发起后在所选工作空间里新建会话并直接请求。</summary>
     public bool IsWorkspaceMode => _workspaceMode;
@@ -194,7 +205,15 @@ public partial class NewChatView : UserControl
     // 菜单、图标配色、四种档位的文案都在 ChatInputControl 里（两页完全一样）。
     // 本页没有会话可落库，所以只要把「默认配置」里的档位装进去即可。
 
-    private void InitPermissionMode() => Input.PermissionMode = PermissionMode.Normal;
+    private void InitPermissionMode()
+    {
+        // 默认档位在「设置 → 默认配置」里配；滑到不认识的值（比如旧配置里没有这一项）按普通处理
+        var configured = (PermissionMode)AppSettingsStore.Current.DefaultPermissionMode;
+        Input.PermissionMode = configured is PermissionMode.Strict or PermissionMode.Normal
+            or PermissionMode.Loose or PermissionMode.Free
+            ? configured
+            : PermissionMode.Normal;
+    }
 
     /// <summary>
     /// 加载已启用的模型列表到选择器。一个都没有时选择器没有选中项，
@@ -225,6 +244,28 @@ public partial class NewChatView : UserControl
         // 工作空间模式下，工作空间的默认模型优先于「上次使用的模型」
         ApplyWorkspaceDefaultModel();
         RefreshSendAvailability();
+
+        await ApplyDefaultKnowledgeBaseAsync();
+    }
+
+    /// <summary>
+    /// 回填默认知识库：工作空间模式用工作空间的默认库，否则用全局默认 / 上次用过的。
+    /// 这里只改选择器显示，落库发生在会话真正创建时。
+    /// </summary>
+    private async Task ApplyDefaultKnowledgeBaseAsync()
+    {
+        await Input.LoadKnowledgeBasesAsync();
+
+        try
+        {
+            var workspaceDefault = _workspaceMode ? WorkspacePicker.SelectedWorkspace?.DefaultKnowledgeBaseId : null;
+            var resolved = await AppDefaults.ResolveDefaultKnowledgeBaseIdAsync(null, workspaceDefault);
+            Input.SetKnowledgeBaseId(resolved);
+        }
+        catch
+        {
+            // 数据库未就绪时保持「不指定」
+        }
     }
 
     /// <summary>

@@ -39,6 +39,9 @@ public sealed class WorkspaceChatSession
 
     public PermissionMode ToolPermissionMode { get; set; } = PermissionMode.Normal;
 
+    /// <summary>这个会话查询的知识库 id。空 = 跟随工作空间的默认知识库。</summary>
+    public string? KnowledgeBaseId { get; set; }
+
     /// <summary>输入框草稿（防意外丢失）。</summary>
     public string? Draft { get; set; }
 

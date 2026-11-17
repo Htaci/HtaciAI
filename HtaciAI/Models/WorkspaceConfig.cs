@@ -44,6 +44,12 @@ public sealed class WorkspaceConfig
     /// </summary>
     public string? DefaultModelId { get; set; }
 
+    /// <summary>
+    /// 工作空间默认知识库 id。空 = 不指定，新建会话时回落到全局默认 / 上次使用
+    /// （见 <see cref="HtaciAI.Services.AppDefaults.ResolveDefaultKnowledgeBaseIdAsync(string?)"/>）。
+    /// </summary>
+    public string? DefaultKnowledgeBaseId { get; set; }
+
     public long CreatedAt { get; set; }
 
     public long UpdatedAt { get; set; }

@@ -1,3 +1,4 @@
+﻿using System;
 using System.Collections.Generic;
 using HtaciAI.Services.ScriptRuntimes;
 
@@ -26,6 +27,9 @@ public static class BuiltinTools
     /// </summary>
     public const string TaskToolName = "task";
 
+    /// <summary>查知识库的工具名。名字直接说明它在查什么，模型不需要额外解释。</summary>
+    public const string KbSearchName = "kb_search";
+
     private const string IdBash = "builtin-bash";
     private const string IdRead = "builtin-read";
     private const string IdEdit = "builtin-edit";
@@ -43,6 +47,7 @@ public static class BuiltinTools
     private const string IdCreateTool = "builtin-create-tool";
     private const string IdCreateSkill = "builtin-create-skill";
     private const string IdTask = "builtin-task";
+    private const string IdKbSearch = "builtin-kb-search";
 
     /// <summary>自举工具名。<see cref="ToolDefinition.IsSelfExtension"/> 按它判定，界面与网关也认这两个常量。</summary>
     public const string CreateToolName = "create_tool";
@@ -54,6 +59,8 @@ public static class BuiltinTools
         {
             Id = IdBash,
             Name = "bash",
+            DisplayName = "执行命令",
+            Icon = "\uEE6F",
             Description = ShellEnvironment.BashToolDescription(),
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Danger,
@@ -64,6 +71,8 @@ public static class BuiltinTools
         {
             Id = IdRead,
             Name = "read",
+            DisplayName = "读取文件",
+            Icon = "\uF379",
             Description = "读取文件内容或目录列表。安全：只读。编辑/覆盖写入前必须先读取过该文件。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -74,6 +83,8 @@ public static class BuiltinTools
         {
             Id = IdEdit,
             Name = "edit",
+            DisplayName = "编辑文件",
+            Icon = "\uF3DE",
             Description = "精确字符串替换编辑文件。风险：会改动内容，执行前必须先读取过目标文件。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Risk,
@@ -84,6 +95,8 @@ public static class BuiltinTools
         {
             Id = IdWrite,
             Name = "write",
+            DisplayName = "写入文件",
+            Icon = "\uF680",
             Description = "写文件（创建或覆盖）。风险：覆盖已存在文件前必须先读取过。新建文件则无需读取。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Risk,
@@ -94,6 +107,8 @@ public static class BuiltinTools
         {
             Id = IdGlob,
             Name = "glob",
+            DisplayName = "查找文件",
+            Icon = "\uF419",
             Description = "文件模式匹配搜索（如 **/*.cs）。安全：只读。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -104,6 +119,8 @@ public static class BuiltinTools
         {
             Id = IdGrep,
             Name = "grep",
+            DisplayName = "搜索内容",
+            Icon = "\uF690",
             Description = "正则搜索文件内容，输出 文件:行号。支持按文件名或相对路径过滤（如 *.cs、src/**/*.cs）。安全：只读。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -114,6 +131,8 @@ public static class BuiltinTools
         {
             Id = IdWebfetch,
             Name = "webfetch",
+            DisplayName = "抓取网页",
+            Icon = "\uF45B",
             Description = "抓取指定 URL 的网页内容（非搜索，只能取已知网址）。HTML 会按 format 转成纯文本或 Markdown。安全：只读。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -124,6 +143,8 @@ public static class BuiltinTools
         {
             Id = IdLoadSkill,
             Name = "load_skill",
+            DisplayName = "加载技能",
+            Icon = "\uF8FE",
             Description = "加载技能：把该技能的 SKILL.md 全文注入当前会话 system，始终可用。安全：只读。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -134,6 +155,8 @@ public static class BuiltinTools
         {
             Id = IdUnloadSkill,
             Name = "unload_skill",
+            DisplayName = "卸载技能",
+            Icon = "\uE179",
             Description = "卸载已加载技能：从当前会话移除该技能的全文注入。安全：只读。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -144,6 +167,8 @@ public static class BuiltinTools
         {
             Id = IdCreateTool,
             Name = CreateToolName,
+            DisplayName = "创建工具",
+            Icon = "\uF8C1",
             Description = """
                 创建一个新的脚本工具并登记到工具库（Python / Node.js）。危险：会写入可执行代码。
                 建好之后<b>不会自动启用</b>，需要用户到「工具」页勾选后才能在本会话调用。
@@ -161,6 +186,8 @@ public static class BuiltinTools
         {
             Id = IdCreateSkill,
             Name = CreateSkillName,
+            DisplayName = "创建技能",
+            Icon = "\uE161",
             Description = """
                 创建一个新技能（SKILL.md 知识包），写入技能目录。风险：会写盘。
                 建好之后不会自动加载，需要用户启用或你自己调用 load_skill。
@@ -176,6 +203,8 @@ public static class BuiltinTools
         {
             Id = IdViewImage,
             Name = "view_image",
+            DisplayName = "查看图片",
+            Icon = "\uF489",
             Description = "查看本地图片文件的内容。用户消息里给出的图片路径就是让你用这个工具去看的，看完再回答。安全：只读。需要当前模型支持视觉。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -186,6 +215,8 @@ public static class BuiltinTools
         {
             Id = IdViewVideo,
             Name = "view_video",
+            DisplayName = "查看视频",
+            Icon = "\uF84D",
             Description = "查看本地视频文件的内容（原样交给支持视频输入的模型，本地不做解码或抽帧）。用户消息里给出的视频路径就是让你用这个工具去看的，看完再回答。安全：只读。需要当前模型支持视频。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -196,6 +227,8 @@ public static class BuiltinTools
         {
             Id = IdViewVideoFrames,
             Name = "view_video_frames",
+            DisplayName = "视频抽帧",
+            Icon = "\uEEFC",
             Description = """
                 查看本地视频文件的内容：用本机的 ffmpeg 把视频按固定间隔抽成若干张图片，随工具结果一起交给你。
                 需要当前模型支持视觉（不需要支持视频输入）——支持视频输入的模型可以直接用 view_video，看不了视频时用这个。
@@ -212,6 +245,8 @@ public static class BuiltinTools
         {
             Id = IdAskUser,
             Name = AskUserName,
+            DisplayName = "询问用户",
+            Icon = "\uF63E",
             Description = "向用户提问并等待回答：可一次问多个问题，每题可单选或多选，用户也能用自定义文本作答。意图含糊、信息不足或需要用户在多个方案间拍板时使用。安全：只读，无副作用。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Safe,
@@ -226,6 +261,8 @@ public static class BuiltinTools
         {
             Id = IdAskContinue,
             Name = AskContinueName,
+            DisplayName = "请用户操作",
+            Icon = "\uF5BE",
             Description =
                 "请用户去做一件你做不了的事（扫码、输验证码、在手机上确认、手动登录等），" +
                 "并在会话里显示一张卡片说明要做什么；用户点「我已做完，继续」后你才继续。" +
@@ -243,6 +280,8 @@ public static class BuiltinTools
         {
             Id = IdTask,
             Name = TaskToolName,
+            DisplayName = "子代理",
+            Icon = "\uF5B9",
             Description = """
                 派发一个子 Agent 去做一件完整的活，你只收到它最后的报告。
                 子 Agent 有自己的会话（独立上下文、可继续追问），继承本会话的权限档位、工具、技能与 MCP。
@@ -261,8 +300,30 @@ public static class BuiltinTools
         },
         new ToolDefinition
         {
+            Id = IdKbSearch,
+            Name = KbSearchName,
+            DisplayName = "查知识库",
+            Icon = "\uF690",
+            Description = """
+                在当前会话选定的知识库里检索：向量相似度 + 关键词两条路合并。
+                返回命中的片段（含来源标题与标题链），命中之后按需再读全文。
+                用途：查项目里已有的约定、规范、旧决策，或者用户导入过的资料。
+                不适合：查这个项目的代码（那用 glob / grep / read，知识库不索引代码）。
+                没有选定知识库时直接返回提示，不要把查询改写成别的工具去猜。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Safe,
+            // 一次向量检索要现调一次嵌入接口，比纯本地工具慢，但远没到要让人等的地步
+            TimeoutSeconds = 120,
+            InputSchemaJson = """
+                {"type":"object","properties":{"query":{"type":"string","description":"要查的内容。写具体一点更容易命中：错误码、函数名、配置项名这类关键词向量检索不擅长，交给关键词那一路"},"top_k":{"type":"integer","description":"返回几条，默认 6，最多 20"}},"required":["query"]}
+                """,
+        },
+        new ToolDefinition
+        {
             Id = InvalidId,
             Name = "invalid",
+            DisplayName = "无效工具",
             Description = "无效工具：返回调用工具与错误信息，供内部在工具执行失败时辅助反馈。不出现在 AI 工具列表与工具页。",
             Source = ToolSource.Builtin,
             DangerLevel = ToolDangerLevel.Danger,
@@ -283,4 +344,26 @@ public static class BuiltinTools
             if (!tool.IsInternal) list.Add(tool);
         return list;
     }
+
+    /// <summary>调用名 → 内置工具定义。用于只有名字可查的地方（如历史消息里的工具卡）。</summary>
+    private static readonly Dictionary<string, ToolDefinition> ByName = BuildIndex();
+
+    private static Dictionary<string, ToolDefinition> BuildIndex()
+    {
+        var map = new Dictionary<string, ToolDefinition>(StringComparer.Ordinal);
+        foreach (var tool in GetAll()) map[tool.Name] = tool;
+        return map;
+    }
+
+    /// <summary>
+    /// 按调用名取用户可见名称（<c>task</c> → 「子代理」）。
+    /// 查不到（脚本 / MCP / 插件工具）就原样返回调用名 —— 它们的名字由各自的作者决定，
+    /// 宿主没有权力也没有信息去替它起一个中文别名。
+    /// </summary>
+    public static string DisplayOf(string? name)
+        => name is not null && ByName.TryGetValue(name, out var tool) ? tool.Display : name ?? "";
+
+    /// <summary>按调用名取图标码位；查不到就用默认扳手。</summary>
+    public static string IconOf(string? name)
+        => name is not null && ByName.TryGetValue(name, out var tool) ? tool.ResolvedIcon : ToolDefinition.DefaultIcon;
 }

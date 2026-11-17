@@ -6,6 +6,7 @@ using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Tools;
+using HtaciAI.Services.KnowledgeBase;
 
 namespace HtaciAI.Services;
 
@@ -90,5 +91,62 @@ public static class AppDefaults
         if (workspace is null) return plain.Value.Model;
 
         return plain.Value.At >= workspace.Value.At ? plain.Value.Model : workspace.Value.Model;
+    }
+
+    // ============================================================
+    // 知识库
+    // ============================================================
+
+    /// <summary>
+    /// 新建会话 / 打开会话时该用哪个知识库。顺序与模型那套一致：
+    /// 会话自己选的 → 工作空间默认 → 全局默认 → 上次用过的 → 不指定。
+    ///
+    /// <b>每一层都验一遍库还在不在</b>：知识库被删掉之后，会话上留着的 id 就是悬空的，
+    /// 直接返回它会让「选了知识库却查不到东西」变成无法解释的现象。
+    /// </summary>
+    public static async Task<string?> ResolveDefaultKnowledgeBaseIdAsync(
+        string? preferredId, string? workspaceDefaultId = null)
+    {
+        foreach (var candidate in new[] { preferredId, workspaceDefaultId, AppSettingsStore.Current.DefaultKnowledgeBaseId })
+        {
+            if (string.IsNullOrWhiteSpace(candidate)) continue;
+            if (await KnowledgeBaseRepository.GetAsync(candidate) is not null) return candidate;
+        }
+
+        var lastUsed = await GetLastUsedKnowledgeBaseIdAsync();
+        if (!string.IsNullOrWhiteSpace(lastUsed) &&
+            await KnowledgeBaseRepository.GetAsync(lastUsed) is not null)
+            return lastUsed;
+
+        return null;
+    }
+
+    /// <summary>
+    /// 上次在会话里选过的知识库。「上次用过的」不额外存一份设置 ——
+    /// 会话表上就有答案，多存一处只会多一个会不同步的地方。
+    /// </summary>
+    public static async Task<string?> GetLastUsedKnowledgeBaseIdAsync()
+    {
+        foreach (var session in await ChatRepository.GetAllAsync())
+        {
+            if (!string.IsNullOrWhiteSpace(session.KnowledgeBaseId)) return session.KnowledgeBaseId;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 向量库用的嵌入模型。设置里选的解析不出来（被删/被停用）就当没配，
+    /// 界面据此提示去配置，而不是悄悄退回某个模型 —— 换模型意味着向量空间变了，
+    /// 拿旧索引继续检索只会给出更差的结果。
+    /// </summary>
+    public static async Task<ModelDetails?> ResolveEmbeddingModelAsync()
+    {
+        var id = AppSettingsStore.Current.EmbeddingModelId;
+        if (string.IsNullOrWhiteSpace(id)) return null;
+
+        var model = await ModelCatalog.ResolveAsync(id);
+        if (model is null) return null;
+
+        return EmbeddingClient.CheckUsable(model) is null ? model : null;
     }
 }

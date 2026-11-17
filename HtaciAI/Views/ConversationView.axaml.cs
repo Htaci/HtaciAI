@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -401,6 +401,24 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         // 它会反过来同步控件显示。
         Input.PermissionMode = Profile.State.PermissionMode;
         Input.PermissionModeChanged += (_, mode) => _ = SetPermissionModeAsync(mode);
+
+        // 知识库选择器：回填会话上的值，改了就把选择落库。
+        // 清单本身由输入控件在菜单打开时按需重读，这里只接选择结果。
+        Input.SetKnowledgeBaseId(Profile.State.KnowledgeBaseId);
+        // 先注入一次清单：不清单的话按钮上只能显示「知识库」，
+        // 用户看不出这个会话到底挂了哪个库（清单在菜单打开时还会再刷一次）
+        _ = Input.LoadKnowledgeBasesAsync();
+        Input.KbSelector.SelectionChanged += (_, _) => _ = SetKnowledgeBaseIdAsync(Input.KbSelector.SelectedLibraryId);
+    }
+
+    /// <summary>把知识库选择落库，并同步到会话状态（下一次请求立即生效）。</summary>
+    private async Task SetKnowledgeBaseIdAsync(string libraryId)
+    {
+        var value = string.IsNullOrWhiteSpace(libraryId) ? null : libraryId;
+        if (Profile.State.KnowledgeBaseId == value) return;
+
+        Profile.State.KnowledgeBaseId = value;
+        await Profile.SaveAsync();
     }
 
     /// <summary>
@@ -421,7 +439,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         // 「全部同意」顺带把本会话权限改成自由 —— 之后的工具都不再询问。
         var approvalCard = card;
         SessionNotifier.Notify(SessionNoticeKind.Approval, Profile.State.SessionId, Profile.State.Title,
-            $"工具（{tool.Name}）待审批",
+            $"工具（{tool.Display}）待审批",
             workspaceName: Profile.WorkspaceName,
             onAction: async action =>
             {
@@ -3296,6 +3314,8 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         private readonly ScrollViewer _contentHost;
         private readonly RotateTransform _chevron;
         private readonly Border _header;
+        /// <summary>头部图标：按工具不同而不同（子代理是一群人，执行命令是终端窗口…）。</summary>
+        private readonly TextBlock _iconBlock;
         private readonly TextBlock _titleBlock;
         private readonly TextBlock _inputBlock;
         private readonly TextBlock _outputBlock;
@@ -3340,9 +3360,10 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
 
         public ToolCallCard()
         {
-            var icon = new TextBlock
+            // 图标跟着工具走（见 SetToolName）；先按默认扳手占位
+            _iconBlock = new TextBlock
             {
-                Text = "\uF35C", // Fluent System Icons：扳手（工具）
+                Text = ToolDefinition.DefaultIcon,
                 FontFamily = AppFonts.Icons,
                 FontSize = 14,
                 Foreground = new SolidColorBrush(Color.Parse("#333333")),
@@ -3385,7 +3406,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             };
             var iconHost = new Border
             {
-                Child = icon,
+                Child = _iconBlock,
                 Width = 20,
                 Height = 20,
                 Margin = new Thickness(0, 0, 8, 0),
@@ -3531,13 +3552,24 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         }
 
         /// <summary>
+        /// 头部显示「用户看得懂的名字 + 对应图标」，如 task → 「子代理」。
+        /// 发给模型、入库与路由用的仍是原始调用名 <paramref name="toolName"/>，
+        /// 这里只换显示，不换语义。脚本 / MCP / 插件工具没有别名，原名照旧。
+        /// </summary>
+        private void SetToolName(string toolName)
+        {
+            _titleBlock.Text = BuiltinTools.DisplayOf(toolName);
+            _iconBlock.Text = BuiltinTools.IconOf(toolName);
+        }
+
+        /// <summary>
         /// 参数正在流式接收：调用刚被模型吐出来，名字通常已经有了，入参照着分片一段段长。
         /// 这时候还没有输出，输出那一整段先收起来 —— 显示「（无输出）」会让人以为工具已经跑完了。
         /// </summary>
         public void SetStreaming(string toolName)
         {
             _terminal = false;
-            _titleBlock.Text = $"{toolName} 工具";
+            SetToolName(toolName);
             _rawInputJson = "";
             _inputFormatted = true;
             ShowOutput(false);
@@ -3545,7 +3577,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         }
 
         /// <summary>流式期间工具名的续片（服务端可能把名字切成几片，累积后的完整名由调用方给）。</summary>
-        public void SetStreamingName(string toolName) => _titleBlock.Text = $"{toolName} 工具";
+        public void SetStreamingName(string toolName) => SetToolName(toolName);
 
         /// <summary>
         /// 流式追加入参原文。分片很密，这里只累积原文：卡片默认折叠，没人看的内容一个字都不排版；
@@ -3569,7 +3601,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         public void SetRunning(string toolName, string inputJson)
         {
             _terminal = false;
-            _titleBlock.Text = $"{toolName} 工具";
+            SetToolName(toolName);
             _rawInputJson = inputJson;
             _inputFormatted = false;
             ShowOutput(false);
@@ -3606,7 +3638,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         public void SetData(string toolName, string inputJson, string output)
         {
             _terminal = true;
-            _titleBlock.Text = $"{toolName} 工具";
+            SetToolName(toolName);
             _outputBlock.Text = string.IsNullOrWhiteSpace(output) ? "（无输出）" : output;
             ShowOutput(true);
             SetStatus("");

@@ -142,3 +142,40 @@ print(hex(rev['ic_fluent_warning_24_regular']))"
 | 统计 | `data_bar_vertical_24_regular` | U+F340 | `Views/NewTabPage.axaml.cs` 的统计卡（「统计」页入口） |
 
 这两个提示图标点开都会跳到该模型的编辑页，补完保存即消失（见 `docs/model-table.md`）。
+
+## 内置工具的图标与显示名
+
+工具的定义里带 `DisplayName`（给用户看的名字）与 `Icon`（下面这些码位），都在
+`Services/Tools/BuiltinTools.cs` 里，改一处即可生效。界面统一走
+`BuiltinTools.DisplayOf(name)` / `BuiltinTools.IconOf(name)`：
+
+- **显示名只影响界面**。发给模型、入库、路由用的始终是 `Name`（`task`、`read`…），
+  所以日志、历史消息、脚本里看到的仍是调用名。
+- 查不到的工具（脚本 / MCP / 插件工具）原样显示调用名，图标退回默认扳手 `wrench_24_regular`。
+- 用到的码位：
+
+| 工具（调用名） | 显示名 | Fluent 图标名 | 码位 |
+|---|---|---|---|
+| `bash` | 执行命令 | `window_console_20_regular` | U+EE6F |
+| `read` | 读取文件 | `document_24_regular` | U+F379 |
+| `edit` | 编辑文件 | `edit_24_regular` | U+F3DE |
+| `write` | 写入文件 | `save_24_regular` | U+F680 |
+| `glob` | 查找文件 | `folder_24_regular` | U+F419 |
+| `grep` | 搜索内容 | `search_24_regular` | U+F690 |
+| `webfetch` | 抓取网页 | `globe_24_regular` | U+F45B |
+| `load_skill` | 加载技能 | `book_24_regular` | U+F8FE |
+| `unload_skill` | 卸载技能 | `book_open_24_regular` | U+E179 |
+| `create_tool` | 创建工具 | `wrench_24_regular` | U+F8C1 |
+| `create_skill` | 创建技能 | `book_add_24_regular` | U+E161 |
+| `view_image` | 查看图片 | `image_24_regular` | U+F489 |
+| `view_video` | 查看视频 | `video_24_regular` | U+F84D |
+| `view_video_frames` | 视频抽帧 | `filmstrip_24_regular` | U+EEFC |
+| `ask_user_question` | 询问用户 | `question_circle_24_regular` | U+F63E |
+| `ask_user_continue` | 请用户操作 | `person_24_regular` | U+F5BE |
+| `task` | 子代理 | `people_team_24_regular` | U+F5B9 |
+| `kb_search` | 查知识库 | `search_24_regular` | U+F690 |
+| （默认 / 未指定） | — | `wrench_24_regular` | U+F8C1 |
+
+>`create_tool` 与默认图标用的是同一枚扳手：它本身就是「做一个工具」这件事的最小符号。
+>想让某个工具换图标，先按上面那段脚本从 `cmap` 里读出码位，再改 `BuiltinTools.cs` 里的 `Icon`，
+>最后把这张表同步过来 —— 不要凭印象写码位。

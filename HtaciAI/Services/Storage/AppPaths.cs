@@ -52,6 +52,7 @@ public static class AppPaths
     private static string _pluginData = "";
     private static string _logs = "";
     private static string _docs = "";
+    private static string _knowledgeBases = "";
     private static string _requestedRoot = "";
     private static StorageMode _mode = StorageMode.Default;
     private static string? _initError;
@@ -90,6 +91,21 @@ public static class AppPaths
     /// 不点就一个文件都不落盘（只用对话功能的用户不该多出一堆文件）。
     /// </summary>
     public static string Docs { get { EnsureInitialized(); return _docs; } }
+
+    /// <summary>
+    /// 知识库的导入文件目录（<c>&lt;数据根&gt;/kb/&lt;库 id&gt;</c>）。
+    /// 导入的文件会被复制到这里，索引正文另存一份在库里 ——
+    /// 所以删掉这个目录不影响已索引的内容检索，只影响「重新读原文件再索引」。
+    /// </summary>
+    public static string KnowledgeBases { get { EnsureInitialized(); return _knowledgeBases; } }
+
+    /// <summary>某个知识库的导入文件目录，不存在时创建。</summary>
+    public static string KnowledgeBaseFiles(string libraryId)
+    {
+        var dir = Path.Combine(KnowledgeBases, libraryId);
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
 
     /// <summary>日志目录（插件日志、崩溃日志）。</summary>
     public static string Logs { get { EnsureInitialized(); return _logs; } }
@@ -210,6 +226,7 @@ public static class AppPaths
         _pluginData = Path.Combine(root, "plugin-data");
         _logs = Path.Combine(root, "logs");
         _docs = Path.Combine(root, "doc");
+        _knowledgeBases = Path.Combine(root, "kb");
     }
 
     /// <summary>Windows 下路径大小写不敏感；末尾分隔符差异也不该算作不同目录。</summary>

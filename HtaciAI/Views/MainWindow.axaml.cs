@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -311,6 +311,7 @@ public partial class MainWindow : Window
         newTabPage.McpSelected += OnMcpSelected;
         newTabPage.StatsSelected += OnStatsSelected;
         newTabPage.SubagentsSelected += OnSubagentsSelected;
+        newTabPage.KnowledgeBaseSelected += OnKnowledgeBaseSelected;
         AddTab("新标签页", newTabPage);
     }
 
@@ -364,6 +365,19 @@ public partial class MainWindow : Window
             if (index < 0) return;
 
             ReplaceTabContent(index, new PluginsPage(), "插件");
+        }
+    }
+
+    private void OnKnowledgeBaseSelected(object? sender, System.EventArgs e)
+    {
+        if (sender is NewTabPage newTabPage)
+        {
+            newTabPage.KnowledgeBaseSelected -= OnKnowledgeBaseSelected;
+
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
+            if (index < 0) return;
+
+            ReplaceTabContent(index, new KnowledgeBasePage(), "知识库");
         }
     }
 

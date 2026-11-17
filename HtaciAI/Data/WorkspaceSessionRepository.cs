@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -23,7 +23,7 @@ public static class WorkspaceSessionRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, workspace_id, agent_id, title, model, thinking, session_prompt, enabled_tool_ids, enabled_skills, mcp_servers, permission_mode, draft, last_message_at, created_at, updated_at
+            SELECT id, workspace_id, agent_id, title, model, thinking, session_prompt, enabled_tool_ids, enabled_skills, mcp_servers, permission_mode, draft, last_message_at, created_at, updated_at, kb_id
             FROM workspace_sessions
             WHERE workspace_id = $workspace_id AND is_deleted = 0
             ORDER BY COALESCE(last_message_at, created_at) DESC;
@@ -41,7 +41,7 @@ public static class WorkspaceSessionRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, workspace_id, agent_id, title, model, thinking, session_prompt, enabled_tool_ids, enabled_skills, mcp_servers, permission_mode, draft, last_message_at, created_at, updated_at
+            SELECT id, workspace_id, agent_id, title, model, thinking, session_prompt, enabled_tool_ids, enabled_skills, mcp_servers, permission_mode, draft, last_message_at, created_at, updated_at, kb_id
             FROM workspace_sessions WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -79,9 +79,9 @@ public static class WorkspaceSessionRepository
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT INTO workspace_sessions
-                (id, workspace_id, agent_id, title, model, thinking, session_prompt, enabled_tool_ids, enabled_skills, mcp_servers, permission_mode, draft, last_message_at, created_at, updated_at)
+                (id, workspace_id, agent_id, title, model, thinking, session_prompt, enabled_tool_ids, enabled_skills, mcp_servers, permission_mode, draft, last_message_at, created_at, updated_at, kb_id)
             VALUES
-                ($id, $workspace_id, $agent_id, $title, $model, $thinking, $session_prompt, $enabled_tool_ids, $enabled_skills, $mcp_servers, $permission_mode, $draft, $last_message_at, $created_at, $updated_at);
+                ($id, $workspace_id, $agent_id, $title, $model, $thinking, $session_prompt, $enabled_tool_ids, $enabled_skills, $mcp_servers, $permission_mode, $draft, $last_message_at, $created_at, $updated_at, $kb_id);
             """;
         cmd.Parameters.AddWithValue("$id", s.Id);
         cmd.Parameters.AddWithValue("$workspace_id", s.WorkspaceId);
@@ -94,6 +94,7 @@ public static class WorkspaceSessionRepository
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)Serialize(s.EnabledSkills) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$mcp_servers", (object?)Serialize(s.McpServers) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$permission_mode", (int)s.ToolPermissionMode);
+        cmd.Parameters.AddWithValue("$kb_id", (object?)s.KnowledgeBaseId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$draft", (object?)s.Draft ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$created_at", s.CreatedAt);
@@ -111,7 +112,7 @@ public static class WorkspaceSessionRepository
             UPDATE workspace_sessions
             SET title = $title, model = $model, thinking = $thinking, session_prompt = $session_prompt,
                 enabled_tool_ids = $enabled_tool_ids, enabled_skills = $enabled_skills,
-                mcp_servers = $mcp_servers, permission_mode = $permission_mode, draft = $draft,
+                mcp_servers = $mcp_servers, permission_mode = $permission_mode, draft = $draft, kb_id = $kb_id,
                 last_message_at = $last_message_at, updated_at = $updated_at
             WHERE id = $id;
             """;
@@ -124,6 +125,7 @@ public static class WorkspaceSessionRepository
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)Serialize(s.EnabledSkills) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$mcp_servers", (object?)Serialize(s.McpServers) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$permission_mode", (int)s.ToolPermissionMode);
+        cmd.Parameters.AddWithValue("$kb_id", (object?)s.KnowledgeBaseId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$draft", (object?)s.Draft ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$last_message_at", (object?)s.LastMessageAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$updated_at", s.UpdatedAt);
@@ -216,6 +218,7 @@ public static class WorkspaceSessionRepository
         EnabledSkills = r.IsDBNull(8) ? new() : ParseSkills(r.GetString(8)),
         McpServers = r.IsDBNull(9) ? new() : ParseMcp(r.GetString(9)),
         ToolPermissionMode = (PermissionMode)r.GetInt32(10),
+        KnowledgeBaseId = r.IsDBNull(15) ? null : r.GetString(15),
         Draft = r.IsDBNull(11) ? null : r.GetString(11),
         LastMessageAt = r.IsDBNull(12) ? null : r.GetInt64(12),
         CreatedAt = r.GetInt64(13),

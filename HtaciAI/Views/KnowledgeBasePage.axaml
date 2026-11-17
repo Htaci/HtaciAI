@@ -1,0 +1,150 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HtaciAI.Controls"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="600"
+             x:Class="HtaciAI.Views.KnowledgeBasePage">
+    <Grid ColumnDefinitions="280,*">
+        <!-- ====== 左侧：知识库列表 ====== -->
+        <Border Grid.Column="0"
+                Background="#99F9FAFB"
+                BorderBrush="#E5E7EB"
+                BorderThickness="0,0,1,0">
+            <Grid RowDefinitions="Auto,*"
+                  Margin="12,16">
+                <Grid Grid.Row="0"
+                      ColumnDefinitions="*,Auto,Auto"
+                      Margin="12,0,8,12">
+                    <TextBlock Grid.Column="0"
+                               Text="知识库"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="#1A1A2E"
+                               VerticalAlignment="Center"/>
+
+                    <!-- 主页：全部知识库总览（默认页）。进了某个库之后用它回到这里 -->
+                    <Button x:Name="HomeButton"
+                            Grid.Column="1"
+                            Width="28"
+                            Height="28"
+                            Padding="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="8"
+                            Cursor="Hand"
+                            ToolTip.Tip="知识库主页">
+                        <TextBlock Text="&#xF481;"
+                                   FontFamily="{StaticResource IconFont}"
+                                   FontSize="14"
+                                   Foreground="#4B5563"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Button>
+
+                    <!-- 新建知识库（这里放「添加」而不是「刷新」：列表随页面加载自动刷新，
+                         而新建是这个页面上唯一需要手动发起的动作） -->
+                    <Button x:Name="AddButton"
+                            Grid.Column="2"
+                            Width="28"
+                            Height="28"
+                            Padding="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="8"
+                            Cursor="Hand"
+                            ToolTip.Tip="新建知识库">
+                        <TextBlock Text="&#xF10A;"
+                                   FontFamily="{StaticResource IconFont}"
+                                   FontSize="14"
+                                   Foreground="#4B5563"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Button>
+                </Grid>
+
+                <controls:SmoothScrollViewer Grid.Row="1"
+                                             HorizontalScrollBarVisibility="Disabled"
+                                             VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="LibraryList"
+                                Spacing="2"/>
+                </controls:SmoothScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- ====== 右侧：主页 / 库内容 / 笔记编辑 ====== -->
+        <Grid Grid.Column="1"
+              RowDefinitions="Auto,*"
+              Margin="24,20">
+            <Grid Grid.Row="0"
+                  ColumnDefinitions="*,Auto"
+                  Margin="0,0,0,16">
+                <StackPanel Grid.Column="0">
+                    <TextBlock x:Name="HeaderTitle"
+                               Text="知识库"
+                               FontSize="20"
+                               FontWeight="Bold"
+                               Foreground="#1A1A2E"
+                               TextTrimming="CharacterEllipsis"/>
+                    <TextBlock x:Name="HeaderDesc"
+                               Text="笔记随时可写；向量库需要先配嵌入模型"
+                               FontSize="12"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,0"/>
+
+                    <!-- 库详情页的分页切换：笔记 / 向量库 -->
+                    <StackPanel x:Name="DetailTabs"
+                                Orientation="Horizontal"
+                                Spacing="18"
+                                Margin="0,12,0,0"
+                                IsVisible="False"/>
+                </StackPanel>
+
+                <StackPanel x:Name="HeaderActions"
+                            Grid.Column="1"
+                            Orientation="Horizontal"
+                            Spacing="16"
+                            VerticalAlignment="Top">
+                    <!-- 详情页右上角：这个库的操作（打开目录 / 重命名 / 删除） -->
+                    <StackPanel x:Name="DetailActions"
+                                Orientation="Horizontal"
+                                Spacing="18"
+                                VerticalAlignment="Center"
+                                IsVisible="False"/>
+
+                    <Border x:Name="OpenDirectoryButton"
+                            Height="36"
+                            CornerRadius="18"
+                            Background="Transparent"
+                            BorderBrush="#E5E7EB"
+                            BorderThickness="1"
+                            Padding="16,0"
+                            VerticalAlignment="Top"
+                            Cursor="Hand"
+                            IsVisible="False">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="8"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="&#xF42F;"
+                                       FontFamily="{StaticResource IconFont}"
+                                       FontSize="13"
+                                       Foreground="#4B5563"/>
+                            <TextBlock Text="打开文件目录"
+                                       FontSize="13"
+                                       Foreground="#4B5563"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+            <controls:SmoothScrollViewer Grid.Row="1"
+                                         HorizontalScrollBarVisibility="Disabled"
+                                         VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="DetailPanel"
+                            Spacing="12"/>
+            </controls:SmoothScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

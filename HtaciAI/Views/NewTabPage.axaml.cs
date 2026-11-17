@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
@@ -22,6 +22,7 @@ public partial class NewTabPage : UserControl
     public event EventHandler? PluginsSelected;
     public event EventHandler? McpSelected;
     public event EventHandler? StatsSelected;
+    public event EventHandler? KnowledgeBaseSelected;
 
     /// <summary>内置卡片的张数。<b>插件卡片永远追加在它们后面</b>，重建时从这里开始删。</summary>
     private int _builtInCardCount;
@@ -241,6 +242,20 @@ public partial class NewTabPage : UserControl
         //    TagFg = Color.FromArgb(0xFF, 0x6A, 0x4F, 0x94),
         //    OnClick = null
         //}));
+
+        CardsPanel.Children.Add(CreateCard(new CardData
+        {
+            Title = "知识库",
+            Description = "随手写笔记，导入文件做检索；AI 在会话里按需查它",
+            IconGlyph = "\uF8FE",                         // Book（与输入框知识库选择器一致）
+            Tags = new[] { "Knowledge", "笔记", "向量" },
+            MainColor = Color.FromArgb(0xFF, 0x0E, 0xA5, 0xE9),
+            LightBg = Color.FromArgb(0xFF, 0xEC, 0xF8, 0xFE),
+            GlowAlpha = 0x26,
+            TagBg = Color.FromArgb(0xFF, 0xE5, 0xF5, 0xFD),
+            TagFg = Color.FromArgb(0xFF, 0x02, 0x84, 0xC7),
+            OnClick = () => KnowledgeBaseSelected?.Invoke(this, EventArgs.Empty)
+        }));
 
         CardsPanel.Children.Add(CreateCard(new CardData
         {

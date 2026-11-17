@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -40,6 +40,9 @@ public partial class DefaultConfigPage : UserControl
 
     private ComboBox? _topicModelCombo;
     private ComboBox? _defaultModelCombo;
+    private ComboBox? _permissionCombo;
+    private ComboBox? _knowledgeBaseCombo;
+    private ComboBox? _embeddingCombo;
     private StackPanel? _mcpHost;
 
     public DefaultConfigPage()
@@ -57,6 +60,8 @@ public partial class DefaultConfigPage : UserControl
     {
         ContentPanel.Children.Add(CreateTopicNamingCard());
         ContentPanel.Children.Add(CreateDefaultModelCard());
+        ContentPanel.Children.Add(CreateKnowledgeBaseCard());
+        ContentPanel.Children.Add(CreatePermissionCard());
         ContentPanel.Children.Add(CreateToolsCard());
         ContentPanel.Children.Add(CreateSkillsCard());
         ContentPanel.Children.Add(CreateMcpCard());
@@ -116,7 +121,94 @@ public partial class DefaultConfigPage : UserControl
         return CreateCard("新会话默认模型", "新建会话时预选的模型。留空则沿用上次用过的模型。", body);
     }
 
-    // ---- 卡片三：默认工具 ----
+    // ---- 卡片三：默认知识库 ----
+
+    private Control CreateKnowledgeBaseCard()
+    {
+        _knowledgeBaseCombo = CreateCombo(280);
+        _knowledgeBaseCombo.SelectionChanged += (_, _) =>
+        {
+            _data.DefaultKnowledgeBaseId = (_knowledgeBaseCombo.SelectedItem as KnowledgeBaseOption)?.Id;
+            Persist();
+        };
+
+        _embeddingCombo = CreateCombo(280);
+        _embeddingCombo.SelectionChanged += (_, _) =>
+        {
+            _data.EmbeddingModelId = (_embeddingCombo.SelectedItem as ModelOption)?.Id;
+            Persist();
+            RefreshEmbeddingHint();
+        };
+
+        _embeddingHint = CreateEmptyHint("");
+        _embeddingHint.Margin = new Thickness(70, 2, 0, 0);
+
+        var body = new StackPanel { Spacing = 8 };
+        body.Children.Add(CreateFieldRow("默认知识库", _knowledgeBaseCombo));
+        body.Children.Add(CreateEmptyHint("新建会话默认查哪个知识库。留空则沿用上次会话用过的那个；会话里还能单独改。"));
+        body.Children.Add(CreateFieldRow("向量库嵌入模型", _embeddingCombo));
+        body.Children.Add(_embeddingHint);
+        body.Children.Add(CreateEmptyHint(
+            "向量库靠这个模型把文件切成片后存成向量。没有配置时，笔记照常可用，向量库不可用。"));
+
+        return CreateCard("知识库", null, body);
+    }
+
+    private TextBlock? _embeddingHint;
+
+    private void RefreshEmbeddingHint()
+    {
+        if (_embeddingHint is null) return;
+
+        var selected = (_embeddingCombo?.SelectedItem as ModelOption)?.Id;
+        if (string.IsNullOrEmpty(selected))
+        {
+            _embeddingHint.Text = "未配置：向量库不可用。";
+            _embeddingHint.Foreground = Danger;
+            return;
+        }
+
+        _embeddingHint.Text = "换模型后旧索引的向量空间会变，建议到知识库页重建一次索引。";
+        _embeddingHint.Foreground = TextFaint;
+    }
+
+    // ---- 卡片四：默认权限模式 ----
+
+    private Control CreatePermissionCard()
+    {
+        _permissionCombo = CreateCombo(280);
+        _permissionCombo.ItemsSource = new List<PermissionOption>
+        {
+            new("普通（安全工具自动通过）", PermissionMode.Normal),
+            new("严格（所有工具需确认）", PermissionMode.Strict),
+            new("宽松（安全/风险自动通过）", PermissionMode.Loose),
+            new("自由（所有工具免确认）", PermissionMode.Free),
+        };
+        _permissionCombo.DisplayMemberBinding = new Binding(nameof(PermissionOption.Label));
+
+        var index = _permissionCombo.ItemsSource is List<PermissionOption> options
+            ? Math.Max(0, options.FindIndex(o => (int)o.Mode == _data.DefaultPermissionMode))
+            : 0;
+        _permissionCombo.SelectedIndex = index;
+
+        _permissionCombo.SelectionChanged += (_, _) =>
+        {
+            if (_permissionCombo.SelectedItem is PermissionOption option)
+            {
+                _data.DefaultPermissionMode = (int)option.Mode;
+                Persist();
+            }
+        };
+
+        var body = new StackPanel { Spacing = 8 };
+        body.Children.Add(CreateFieldRow("权限模式", _permissionCombo));
+        body.Children.Add(CreateEmptyHint(
+            "新建会话时的初始档位。工作空间有自己的一套配置，新建其会话时用的是工作空间那边的值。"));
+
+        return CreateCard("默认权限模式", null, body);
+    }
+
+    // ---- 卡片五：默认工具 ----
 
     private Control CreateToolsCard()
     {
@@ -136,7 +228,7 @@ public partial class DefaultConfigPage : UserControl
             {
                 var check = new CheckBox
                 {
-                    Content = tool.Name,
+                    Content = tool.Display,
                     Tag = tool.Id,
                     FontSize = 13,
                     IsChecked = selected is null || selected.Contains(tool.Id)
@@ -262,6 +354,10 @@ public partial class DefaultConfigPage : UserControl
 
         FillModelCombo(_topicModelCombo, modelOptions, "（不指定，用首条消息）", _data.TopicNamingModelId);
         FillModelCombo(_defaultModelCombo, modelOptions, "（上次使用的模型）", _data.DefaultModelId);
+        FillModelCombo(_embeddingCombo, modelOptions, "（未配置）", _data.EmbeddingModelId);
+        RefreshEmbeddingHint();
+
+        await LoadKnowledgeBasesAsync();
 
         RefreshTopicModelEnabled();
 
@@ -281,6 +377,27 @@ public partial class DefaultConfigPage : UserControl
             ? 0
             : Math.Max(0, options.FindIndex(o => o.Id == selectedId));
         combo.SelectedIndex = index;
+    }
+
+    private async Task LoadKnowledgeBasesAsync()
+    {
+        if (_knowledgeBaseCombo is null) return;
+
+        List<KnowledgeBaseOption> options = new() { new("（上次用过的知识库）", null) };
+        try
+        {
+            foreach (var library in await KnowledgeBaseRepository.GetAllAsync())
+                options.Add(new KnowledgeBaseOption(library.Name, library.Id));
+        }
+        catch
+        {
+            // 数据库未就绪时只留哨兵项
+        }
+
+        _knowledgeBaseCombo.ItemsSource = options;
+        _knowledgeBaseCombo.SelectedIndex = _data.DefaultKnowledgeBaseId is null
+            ? 0
+            : Math.Max(0, options.FindIndex(o => o.Id == _data.DefaultKnowledgeBaseId));
     }
 
     private async Task LoadMcpServersAsync()
@@ -492,4 +609,8 @@ public partial class DefaultConfigPage : UserControl
 
     /// <summary>下拉项：Label 用于显示，Id 为 null 表示哨兵项（不指定）。</summary>
     private sealed record ModelOption(string Label, string? Id);
+
+    private sealed record KnowledgeBaseOption(string Label, string? Id);
+
+    private sealed record PermissionOption(string Label, PermissionMode Mode);
 }
