@@ -50,6 +50,41 @@ public partial class KnowledgeBasePage : UserControl
 
     private List<KnowledgeBase> _libraries = new();
 
+    /// <summary>
+    /// 保存前确认标题没被别的笔记占着。
+    ///
+    /// 同库内标题唯一（数据库上有索引），而 UpsertNoteAsync 是「按标题 upsert」：
+    /// 把 A 的标题改成已有的 B，冲突会落在 B 那一行上，结果 A 的内容搬进 B、A 自己消失，
+    /// 而 B 在界面上毫无动静 —— 用户看到的是「我的另一篇笔记不见了」。
+    /// 与其让它静默合并，不如在这里拦下来让用户换个标题。
+    /// </summary>
+    private async Task<bool> EnsureTitleFreeAsync(KbNote note, string title, TextBlock? status)
+    {
+        if (title.Length == 0)
+        {
+            if (status is not null)
+            {
+                status.Text = "标题不能为空";
+                status.Foreground = Danger;
+            }
+            return false;
+        }
+
+        var all = await KnowledgeBaseRepository.GetNotesAsync(note.LibraryId);
+        var taken = all.Any(n => n.Id != note.Id && string.Equals(n.Title, title, StringComparison.Ordinal));
+        if (taken)
+        {
+            if (status is not null)
+            {
+                status.Text = $"这个库里已经有「{title}」了，换一个标题";
+                status.Foreground = Danger;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
     /// <summary>当前展示的库；null = 在主页（或新建表单）。</summary>
     private KnowledgeBase? _current;
 
@@ -727,7 +762,10 @@ public partial class KnowledgeBasePage : UserControl
 
         save.Click += async (_, _) =>
         {
-            note.Title = titleBox.Text?.Trim() ?? "";
+            var title = titleBox.Text?.Trim() ?? "";
+            if (!await EnsureTitleFreeAsync(note, title, status)) return;
+
+            note.Title = title;
             note.Content = editor.Text ?? "";
             await KnowledgeBaseRepository.UpsertNoteAsync(note);
             preview.SetMarkdown(note.Content);
@@ -738,9 +776,12 @@ public partial class KnowledgeBasePage : UserControl
         back.Click += async (_, _) =>
         {
             // 返回前把改动存一下：用户点了「返回」通常以为已经写完了
-            if (note.Title != (titleBox.Text?.Trim() ?? "") || note.Content != (editor.Text ?? ""))
+            var title = titleBox.Text?.Trim() ?? "";
+            if (note.Title != title || note.Content != (editor.Text ?? ""))
             {
-                note.Title = titleBox.Text?.Trim() ?? "";
+                if (!await EnsureTitleFreeAsync(note, title, status)) return;
+
+                note.Title = title;
                 note.Content = editor.Text ?? "";
                 await KnowledgeBaseRepository.UpsertNoteAsync(note);
             }
@@ -950,8 +991,14 @@ public partial class KnowledgeBasePage : UserControl
         var remove = CreateGhostButton("移除", Danger);
         remove.Click += async (_, _) =>
         {
-            await KnowledgeBaseRepository.DeleteDocumentAsync(doc.Id);
-            // 只删记录与切片，不动导入目录里的文件 —— 用户可能想留着原文件
+            // 与 kb_remove 走同一条路：登记、切片、知识库目录里那份副本一起清掉。
+            // 只删登记不删副本的话，下次「扫描目录」会把这个文件重新登记回来。
+            var result = await KnowledgeBaseIndexer.RemoveDocumentAsync(doc);
+            if (!result.Ok)
+            {
+                await InfoAsync(result.Error ?? "删除失败", "移除失败");
+                return;
+            }
             await LoadAsync();
         };
 

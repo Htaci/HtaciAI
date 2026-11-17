@@ -278,6 +278,63 @@ public static class DatabaseService
             version = 31;
             SetVersion(conn, version);
         }
+
+        if (version < 32)
+        {
+            RunMigrationV32(conn);
+            version = 32;
+            SetVersion(conn, version);
+        }
+    }
+
+    /// <summary>
+    /// 笔记改用标题寻址，并给向量库的条目分出来源。
+    ///
+    /// <b>笔记为什么可以用标题当主键</b>：给 AI 一个 32 位十六进制 id，它会抄错、会臆造、
+    /// 会在改笔记时把 id 写进正文里；而标题是人本来就会说的东西（「把部署那条笔记改一下」）。
+    /// 代价是同库内标题必须唯一 —— 这条约束换来的是「AI 说标题就一定能定位到唯一一条」。
+    ///
+    /// <b>建唯一索引前要先清重</b>：老库里如果已经存在同名笔记（初始版本没有约束），
+    /// 直接建索引会抛 UNIQUE constraint failed，整个升级卡死。这里按 updated_at 保留最新的那条，
+    /// 其余删掉 —— 同名笔记里的旧内容本来也已经被覆盖掉了。
+    ///
+    /// <b>kb_documents 加 kind</b>：文件导入的条目归文件所有（删了会随下次索引复活），
+    /// AI 用工具插进来的文字没有磁盘文件对应（只能靠工具删）。这两种条目在删除行为上完全不同，
+    /// 得能分辨，否则「删除」要么删不动、要么删了又回来。
+    /// </summary>
+    private static void RunMigrationV32(SqliteConnection conn)
+    {
+        foreach (var sql in new[]
+                 {
+                     "ALTER TABLE kb_notes ADD COLUMN summary TEXT;",
+                     "ALTER TABLE kb_documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'file';",
+                 })
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
+
+        // ROW_NUMBER 而不是相关子查询：后者要针对每一行重算一次「同组最新」，
+        // 而且一旦子查询返回 NULL，NOT IN 会整体判假、一条都删不掉。
+        const string dedupe = """
+            DELETE FROM kb_notes WHERE rowid IN (
+                SELECT rowid FROM (
+                    SELECT rowid,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY library_id, title ORDER BY updated_at DESC
+                           ) AS rn
+                    FROM kb_notes
+                ) WHERE rn > 1
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_notes_title ON kb_notes(library_id, title);
+            """;
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = dedupe;
+            cmd.ExecuteNonQuery();
+        }
     }
 
     /// <summary>

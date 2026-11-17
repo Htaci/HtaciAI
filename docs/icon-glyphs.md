@@ -173,7 +173,15 @@ print(hex(rev['ic_fluent_warning_24_regular']))"
 | `ask_user_question` | 询问用户 | `question_circle_24_regular` | U+F63E |
 | `ask_user_continue` | 请用户操作 | `person_24_regular` | U+F5BE |
 | `task` | 子代理 | `people_team_24_regular` | U+F5B9 |
-| `kb_search` | 查知识库 | `search_24_regular` | U+F690 |
+| `kb_note_list` | 列笔记 | `list_24_regular` | U+F4EE |
+| `kb_note_read` | 读笔记 | `book_open_24_regular` | U+E179 |
+| `kb_note_write` | 写笔记 | `note_add_24_regular` | U+F56F |
+| `kb_note_edit` | 改笔记 | `edit_24_regular` | U+F3DE |
+| `kb_note_delete` | 删笔记 | `delete_24_regular` | U+F34D |
+| `kb_recall` | 召回知识库 | `search_24_regular` | U+F690 |
+| `kb_add_file` | 文件入库 | `folder_add_24_regular` | U+F41D |
+| `kb_add_text` | 文字入库 | `document_add_24_regular` | U+E4DC |
+| `kb_remove` | 移除条目 | `delete_dismiss_24_regular` | U+E47F |
 | （默认 / 未指定） | — | `wrench_24_regular` | U+F8C1 |
 
 >`create_tool` 与默认图标用的是同一枚扳手：它本身就是「做一个工具」这件事的最小符号。

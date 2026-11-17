@@ -108,6 +108,53 @@ public static class KnowledgeBaseIndexer
         return added;
     }
 
+    /// <summary>删除一个条目的结果。<see cref="FileRemoved"/> 表示知识库目录里那份副本也被删掉了。</summary>
+    public sealed record RemoveResult(bool Ok, bool FileRemoved, string? Error);
+
+    /// <summary>
+    /// 删掉一个条目：登记、切片，以及（文件导入的那种）知识库目录里那份副本。
+    ///
+    /// <b>只碰副本</b>：导入时把文件复制进 data 的那一刻就和源文件断了关系，这里删的从来
+    /// 不是用户自己的那一份。
+    ///
+    /// <b>副本不在了照删</b>：登记与切片各占一片数据，缺了文件不该让另外两片都删不掉 ——
+    /// 文件没了正是它再也嵌不进去的状态。但若副本还在、只是删不掉（被别的程序占着），
+    /// 就整个放弃：删掉登记之后下次扫描会把这个文件重新登记回来，变成「删了又复活」。
+    /// </summary>
+    public static async Task<RemoveResult> RemoveDocumentAsync(KbDocument doc)
+    {
+        var removed = false;
+
+        if (doc.Kind != "text" && doc.Path.Length > 0)
+        {
+            var dir = Path.GetFullPath(AppPaths.KnowledgeBaseFiles(doc.LibraryId));
+            var file = Path.GetFullPath(Path.Combine(dir, doc.Path));
+
+            // 登记里的 path 是写进库的字符串，歪成 ../.. 删的就是 data 目录外面了。
+            // 只认目录内的路径，别的一律按下落不明处理。
+            if (!file.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return new RemoveResult(false, false, $"这条记录的路径不在知识库目录里：{doc.Path}");
+
+            if (File.Exists(file))
+            {
+                try
+                {
+                    File.Delete(file);
+                    removed = true;
+                }
+                catch (Exception ex)
+                {
+                    return new RemoveResult(false, false,
+                        $"副本文件删不掉：{Path.GetFileName(file)}（{ex.Message}）。"
+                        + "它可能正被别的程序占用，关掉之后再试。");
+                }
+            }
+        }
+
+        await KnowledgeBaseRepository.DeleteDocumentAsync(doc.Id);
+        return new RemoveResult(true, removed, null);
+    }
+
     // ============================================================
     // 索引
     // ============================================================
@@ -187,6 +234,71 @@ public static class KnowledgeBaseIndexer
         await KnowledgeBaseRepository.UpsertDocumentAsync(doc);
         return new IndexResult(false, 0, error);
     }
+
+    /// <summary>
+    /// 把一段文字当成一篇文档写进向量库：切块 → 嵌入 → 落库。
+    ///
+    /// <b>为什么要有这条</b>：导入只认磁盘上的文件，而很多时候要存下来的东西
+    /// 就是一席对话里的结论、一段需求、一条命令 —— 没有文件，也不该为此先建一个文件。
+    ///
+    /// <b>没有磁盘文件，所以 <see cref="KbDocument.Path"/> 是 <c>text:&lt;id&gt;</c> 这样的占位</b>：
+    /// 它同时是「这条不是文件」的标记，删除时据此区分（文件的条目删了会被下次索引找回来）。
+    /// </summary>
+    public static async Task<IndexResult> AddTextAsync(
+        string libraryId, string title, string text, ModelDetails? embedModel, CancellationToken ct)
+    {
+        if (EmbeddingClient.CheckUsable(embedModel) is { } reason)
+            return new IndexResult(false, 0, reason);
+
+        var chunks = Split(title, text);
+        if (chunks.Count == 0)
+            return new IndexResult(false, 0, "这段文字里没有可索引的内容。");
+
+        var doc = new KbDocument
+        {
+            LibraryId = libraryId,
+            Path = "text:" + KnowledgeBaseRepository.NewId(),
+            Title = title,
+            Kind = "text",
+            Size = Encoding.UTF8.GetByteCount(text),
+            ModifiedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Hash = HashText(text),
+            Status = "pending",
+        };
+        doc.Id = await KnowledgeBaseRepository.UpsertDocumentAsync(doc);
+
+        List<float[]> vectors;
+        try
+        {
+            vectors = await EmbeddingClient.EmbedBatchAsync(
+                embedModel!, chunks.Select(c => c.Text).ToList(), ct);
+        }
+        catch (Exception ex)
+        {
+            return await FailAsync(doc, ex.Message);
+        }
+
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            chunks[i].Embedding = vectors[i];
+            chunks[i].Dim = vectors[i].Length;
+            chunks[i].ModelId = embedModel!.ModelName;
+        }
+
+        await KnowledgeBaseRepository.ReplaceChunksAsync(doc.Id, doc.LibraryId, chunks);
+
+        doc.ChunkCount = chunks.Count;
+        doc.IndexedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        doc.Status = "ok";
+        doc.Error = null;
+        await KnowledgeBaseRepository.UpsertDocumentAsync(doc);
+
+        return new IndexResult(true, chunks.Count, null);
+    }
+
+    /// <summary>纯文本的 hash（正文比较用，不涉及文件）。</summary>
+    public static string HashText(string text)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
     /// <summary>
     /// 切块。按 Markdown 标题分节；一节超过 <see cref="MaxChunkChars"/> 时再按空行切段，
@@ -304,14 +416,27 @@ public static class KnowledgeBaseIndexer
     /// 在一个库里检索。两条路并行：向量（有嵌入模型时）+ 关键词（笔记与切片正文）。
     /// 结果按「向量得分」与「关键词命中」合并去重 —— 纯向量对错误码、函数名这类查询很差，
     /// 而查资料时最常搜的恰恰是这类东西。
+    ///
+    /// <b>低于 <paramref name="minScore"/> 的向量命中直接丢掉，即使这样召回条数不够</b>：
+    /// 召回最坏的形态不是「没找到」，而是「找到一条不相干的」—— 模型会拿它当事实。
+    /// 余弦相似度在 -1~1，同语言同主题的句子通常落在 0.4 以上，0.35 是能滤掉噪声又不至于
+    /// 把弱相关但有用的内容一起扔掉的位置。
+    ///
+    /// <b>关键词命中不吃这个阈值</b>：它不是相似度，是字面出现了。把它也卡阈值，
+    /// 等于把「搜错误码」这条最可靠的路堵死。
     /// </summary>
     public static async Task<List<KbSearchHit>> SearchAsync(
-        string libraryId, string query, int topK, ModelDetails? embedModel, CancellationToken ct)
+        string libraryId, string query, int topK, ModelDetails? embedModel, CancellationToken ct,
+        double minScore = 0.35)
     {
         query = query?.Trim() ?? "";
         if (query.Length == 0 || string.IsNullOrEmpty(libraryId)) return new List<KbSearchHit>();
 
         var hits = new Dictionary<string, KbSearchHit>(StringComparer.Ordinal);
+        // 两路各自的排名，最终按 RRF 融合。不用「关键词固定给 0.5」那种假分数：
+        // 那样一来它跟向量分不可比，二来加了阈值以后 0.5 会被当成真的相似度。
+        var vectorRank = new Dictionary<string, int>(StringComparer.Ordinal);
+        var keywordRank = new Dictionary<string, int>(StringComparer.Ordinal);
 
         // 1) 向量
         if (EmbeddingClient.CheckUsable(embedModel) is null)
@@ -321,23 +446,30 @@ public static class KnowledgeBaseIndexer
                 var queryVector = await EmbeddingClient.EmbedAsync(embedModel!, query, ct);
                 var chunks = await KnowledgeBaseRepository.GetChunksAsync(libraryId);
 
+                var scored = new List<(string Key, double Score, KbChunk Chunk)>();
                 foreach (var chunk in chunks)
                 {
                     if (chunk.Embedding is not { Length: > 0 } vector) continue;
                     if (vector.Length != queryVector.Length) continue;   // 换过模型的老切片不参与
 
                     var score = Cosine(queryVector, vector);
-                    if (score <= 0) continue;
+                    if (score < minScore) continue;
 
-                    var key = "d:" + chunk.DocumentId + "#" + chunk.Ord;
-                    hits[key] = new KbSearchHit
+                    scored.Add(("d:" + chunk.DocumentId + "#" + chunk.Ord, score, chunk));
+                }
+
+                var index = 0;
+                foreach (var item in scored.OrderByDescending(s => s.Score).Take(topK * 2))
+                {
+                    vectorRank[item.Key] = index++;
+                    hits[item.Key] = new KbSearchHit
                     {
                         LibraryId = libraryId,
-                        Title = chunk.Title,
-                        Heading = chunk.Heading,
-                        Text = chunk.Text,
-                        Source = chunk.Source,
-                        Score = score,
+                        Title = item.Chunk.Title,
+                        Heading = item.Chunk.Heading,
+                        Text = item.Chunk.Text,
+                        Source = item.Chunk.Source,
+                        Score = item.Score,
                     };
                 }
             }
@@ -348,9 +480,12 @@ public static class KnowledgeBaseIndexer
         }
 
         // 2) 关键词（切片）
+        var index2 = 0;
         foreach (var chunk in await KnowledgeBaseRepository.SearchChunksByTextAsync(libraryId, query, topK * 4))
         {
             var key = "d:" + chunk.DocumentId + "#" + chunk.Ord;
+            keywordRank[key] = index2++;
+
             if (hits.TryGetValue(key, out var existing))
             {
                 existing.MatchedByKeyword = true;
@@ -364,15 +499,18 @@ public static class KnowledgeBaseIndexer
                 Heading = chunk.Heading,
                 Text = chunk.Text,
                 Source = chunk.Source,
-                Score = 0.5,          // 关键词命中给一个中等分，保证能排进结果
+                Score = 0,
                 MatchedByKeyword = true,
             };
         }
 
         // 3) 关键词（笔记）：笔记可能很长，截一段带标题的片段
+        var index3 = 0;
         foreach (var note in await KnowledgeBaseRepository.SearchNotesByTextAsync(libraryId, query, topK))
         {
             var key = "n:" + note.Id;
+            keywordRank[key] = index3++;
+
             if (hits.ContainsKey(key)) continue;
 
             hits[key] = new KbSearchHit
@@ -382,16 +520,27 @@ public static class KnowledgeBaseIndexer
                 Heading = "",
                 Text = Excerpt(note.Content, query),
                 Source = note.Id,
-                Score = 0.5,
+                Score = 0,
                 IsNote = true,
                 MatchedByKeyword = true,
             };
         }
 
-        return hits.Values
-            .OrderByDescending(h => h.MatchedByKeyword)
-            .ThenByDescending(h => h.Score)
+        // RRF：两路都命中的自然排在最前，只有一路的按各自名次往后排。
+        // 常数 60 是 RRF 的惯例值 —— 它让名次之间的差距在头部更明显、尾部更平缓。
+        double Rrf(string key)
+        {
+            var sum = 0.0;
+            if (vectorRank.TryGetValue(key, out var vr)) sum += 1.0 / (60 + vr + 1);
+            if (keywordRank.TryGetValue(key, out var kr)) sum += 1.0 / (60 + kr + 1);
+            return sum;
+        }
+
+        return hits
+            .OrderByDescending(kv => Rrf(kv.Key))
+            .ThenByDescending(kv => kv.Value.Score)
             .Take(topK)
+            .Select(kv => kv.Value)
             .ToList();
     }
 

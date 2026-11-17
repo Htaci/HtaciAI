@@ -185,7 +185,15 @@ public sealed class BuiltinToolExecutor
                 "ask_user_question" => await AskUserQuestionAsync(call, ctx, ct),
         "ask_user_continue" => await AskUserContinueAsync(call, ctx, ct),
                 "view_image" => ViewImage(call, ctx),
-                BuiltinTools.KbSearchName => await KbSearchAsync(call, ctx, ct),
+                BuiltinTools.KbNoteListName => await KbNoteListAsync(ctx),
+                BuiltinTools.KbNoteReadName => await KbNoteReadAsync(call, ctx),
+                BuiltinTools.KbNoteWriteName => await KbNoteWriteAsync(call, ctx),
+                BuiltinTools.KbNoteEditName => await KbNoteEditAsync(call, ctx),
+                BuiltinTools.KbNoteDeleteName => await KbNoteDeleteAsync(call, ctx),
+                BuiltinTools.KbRecallName => await KbRecallAsync(call, ctx, ct),
+                BuiltinTools.KbAddFileName => await KbAddFileAsync(call, ctx, ct),
+                BuiltinTools.KbAddTextName => await KbAddTextAsync(call, ctx, ct),
+                BuiltinTools.KbRemoveName => await KbRemoveAsync(call, ctx),
                 "view_video" => ViewVideo(call, ctx),
                 "view_video_frames" => await ViewVideoFramesAsync(call, ctx, ct),
                 BuiltinTools.TaskToolName => await RunTaskAsync(call, ctx, ct),
@@ -1351,31 +1359,180 @@ public sealed class BuiltinToolExecutor
 
     // ---- invalid ----
 
-    // ---- kb_search ----
+    // ---- 知识库：笔记 ----
+    //
+    // 笔记靠标题寻址，不传 id。理由见 BuiltinTools 里那行常量的注释：
+    // id 是 32 位十六进制，模型抄不准也记不住，而标题是人本来就会说的东西。
 
     /// <summary>
-    /// 查知识库。会话没选库时直接说清楚 —— 不偷偷去查某个默认库，
-    /// 否则「答得头头是道但引用的是别的项目」比答不出来更糟。
+    /// 取当前会话选定的知识库。没选 / 已删 / 不存在时返回 null 并给出可原样回给模型的失败结果。
+    ///
+    /// 统一的理由：不偷偷回落到某个默认库。答得头头是道但引用的是别的项目，
+    /// 比老老实实说「没选定」糟得多。
     /// </summary>
-    private static async Task<ToolExecution> KbSearchAsync(
+    private static async Task<(Models.KnowledgeBase? Library, ToolExecution? Error)> ResolveKbAsync(
+        BuiltinToolContext ctx)
+    {
+        if (string.IsNullOrWhiteSpace(ctx.KnowledgeBaseId))
+            return (null, ToolExecution.Fail(
+                "这个会话没有选定知识库。请让用户在输入框左侧的知识库选择器里选一个，"
+                + "或者告诉用户「当前没有可用知识库」。"));
+
+        var library = await KnowledgeBaseRepository.GetAsync(ctx.KnowledgeBaseId);
+        if (library is null)
+            return (null, ToolExecution.Fail("这个会话选定的知识库已经不存在了，请让用户重新选一个。"));
+
+        return (library, null);
+    }
+
+    private static async Task<ToolExecution> KbNoteListAsync(BuiltinToolContext ctx)
+    {
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
+
+        var notes = await KnowledgeBaseRepository.GetNotesAsync(library!.Id);
+        if (notes.Count == 0)
+            return ToolExecution.Ok($"知识库「{library.Name}」里还没有任何笔记。");
+
+        var sb = new StringBuilder();
+        sb.Append("知识库「").Append(library.Name).Append("」共 ").Append(notes.Count).AppendLine(" 篇笔记：");
+        foreach (var note in notes)
+        {
+            sb.Append("- ").Append(note.Title);
+            if (!string.IsNullOrWhiteSpace(note.Summary))
+                sb.Append("：").Append(note.Summary.Trim());
+            sb.Append("（").Append(FormatAgo(note.UpdatedAt)).AppendLine("）");
+        }
+        return ToolExecution.Ok(sb.ToString().TrimEnd());
+    }
+
+    private static async Task<ToolExecution> KbNoteReadAsync(ChatToolCall call, BuiltinToolContext ctx)
+    {
+        var title = (BuiltinToolContext.GetArg(call, "title") ?? "").Trim();
+        if (title.Length == 0) return ToolExecution.Fail("缺少 title 参数");
+
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
+
+        var note = await KnowledgeBaseRepository.GetNoteByTitleAsync(library!.Id, title);
+        if (note is null)
+        {
+            // 找不到时把相近的标题列出来：模型拿到的是一串真标题，下一轮就能改对。
+            // 只回「没有这篇」，它只会换一个同样错的标题再试一次。
+            var all = await KnowledgeBaseRepository.GetNotesAsync(library.Id);
+            if (all.Count == 0)
+                return ToolExecution.Fail($"知识库「{library.Name}」里还没有任何笔记。");
+
+            var sb = new StringBuilder();
+            sb.Append("没有标题为「").Append(title).AppendLine("」的笔记。现有笔记：");
+            foreach (var n in all) sb.Append("- ").AppendLine(n.Title);
+            return ToolExecution.Fail(sb.ToString().TrimEnd());
+        }
+
+        var text = new StringBuilder();
+        text.Append("# ").AppendLine(note.Title);
+        if (!string.IsNullOrWhiteSpace(note.Summary))
+            text.Append('>').AppendLine(note.Summary.Trim());
+        text.AppendLine();
+        text.Append(note.Content);
+        return ToolExecution.Ok(text.ToString().TrimEnd());
+    }
+
+    private static async Task<ToolExecution> KbNoteWriteAsync(ChatToolCall call, BuiltinToolContext ctx)
+    {
+        var title = (BuiltinToolContext.GetArg(call, "title") ?? "").Trim();
+        var content = BuiltinToolContext.GetArg(call, "content") ?? "";
+        var summary = (BuiltinToolContext.GetArg(call, "summary") ?? "").Trim();
+        if (title.Length == 0) return ToolExecution.Fail("缺少 title 参数");
+        if (content.Trim().Length == 0) return ToolExecution.Fail("content 是空的，没有可写的内容");
+
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
+
+        var existing = await KnowledgeBaseRepository.GetNoteByTitleAsync(library!.Id, title);
+        if (summary.Length == 0) summary = AutoSummary(content);
+
+        var note = existing ?? new KbNote { LibraryId = library.Id, Title = title };
+        note.Title = title;
+        note.Summary = summary;
+        note.Content = content;
+        await KnowledgeBaseRepository.UpsertNoteAsync(note);
+
+        return ToolExecution.Ok(existing is null
+            ? $"已创建笔记「{title}」。"
+            : $"已覆盖笔记「{title}」（原来的内容已被整篇替换）。");
+    }
+
+    private static async Task<ToolExecution> KbNoteEditAsync(ChatToolCall call, BuiltinToolContext ctx)
+    {
+        var title = (BuiltinToolContext.GetArg(call, "title") ?? "").Trim();
+        var oldText = BuiltinToolContext.GetArg(call, "old_text") ?? "";
+        var newText = BuiltinToolContext.GetArg(call, "new_text") ?? "";
+        if (title.Length == 0) return ToolExecution.Fail("缺少 title 参数");
+        if (oldText.Length == 0) return ToolExecution.Fail("old_text 不能为空");
+
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
+
+        var note = await KnowledgeBaseRepository.GetNoteByTitleAsync(library!.Id, title);
+        if (note is null)
+            return ToolExecution.Fail($"没有标题为「{title}」的笔记。先用 kb_note_list 看有哪些。");
+
+        // 出现多次就拒绝，不替模型挑一处：改错位置比不改更难发现 ——
+        // 它会在正文里留下一段语义重复的话，而看 diff 时很容易当成正常修改放过。
+        var hits = CountTextOccurrences(note.Content, oldText);
+        if (hits == 0)
+            return ToolExecution.Fail(
+                $"「{title}」里找不到这段原文。检查是否多了空格、换行或标点不一致；"
+                + "需要的话先 kb_note_read 看一眼当前内容。");
+        if (hits > 1)
+            return ToolExecution.Fail(
+                $"这段原文在「{title}」里出现了 {hits} 次，无法确定改哪一处。"
+                + "请在 old_text 里带上更多上下文，使它唯一。");
+
+        note.Content = note.Content.Replace(oldText, newText, StringComparison.Ordinal);
+        await KnowledgeBaseRepository.UpsertNoteAsync(note);
+        return ToolExecution.Ok($"已修改笔记「{title}」。");
+    }
+
+    private static async Task<ToolExecution> KbNoteDeleteAsync(ChatToolCall call, BuiltinToolContext ctx)
+    {
+        var title = (BuiltinToolContext.GetArg(call, "title") ?? "").Trim();
+        if (title.Length == 0) return ToolExecution.Fail("缺少 title 参数");
+
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
+
+        var note = await KnowledgeBaseRepository.GetNoteByTitleAsync(library!.Id, title);
+        if (note is null)
+            return ToolExecution.Fail($"没有标题为「{title}」的笔记。先用 kb_note_list 看有哪些。");
+
+        await KnowledgeBaseRepository.DeleteNoteAsync(note.Id);
+        return ToolExecution.Ok($"已删除笔记「{title}」。");
+    }
+
+    // ---- 知识库：向量库 ----
+
+    private static async Task<ToolExecution> KbRecallAsync(
         ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
     {
         var query = BuiltinToolContext.GetArg(call, "query") ?? "";
         if (string.IsNullOrWhiteSpace(query))
             return ToolExecution.Fail("缺少 query 参数");
 
-        if (string.IsNullOrWhiteSpace(ctx.KnowledgeBaseId))
-            return ToolExecution.Fail(
-                "这个会话没有选定知识库。请让用户在输入框左侧的知识库选择器里选一个，"
-                + "或者告诉用户「当前没有可用知识库」。");
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
 
         var topK = 6;
         if (int.TryParse(BuiltinToolContext.GetArg(call, "top_k"), out var parsed) && parsed > 0)
             topK = Math.Min(parsed, 20);
 
-        var library = await KnowledgeBaseRepository.GetAsync(ctx.KnowledgeBaseId);
-        if (library is null)
-            return ToolExecution.Fail("这个会话选定的知识库已经不存在了，请让用户重新选一个。");
+        // 阈值只对向量那一路生效（关键词是字面命中，卡阈值等于把「搜错误码」这条路堵死）。
+        var minScore = 0.35;
+        if (double.TryParse(BuiltinToolContext.GetArg(call, "min_score"),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var ms))
+            minScore = Math.Clamp(ms, 0, 1);
 
         var embedModel = await AppDefaults.ResolveEmbeddingModelAsync();
 
@@ -1383,7 +1540,7 @@ public sealed class BuiltinToolExecutor
         try
         {
             hits = await KnowledgeBaseIndexer.SearchAsync(
-                library.Id, query, topK, embedModel, ct);
+                library!.Id, query, topK, embedModel, ct, minScore);
         }
         catch (Exception ex)
         {
@@ -1394,12 +1551,12 @@ public sealed class BuiltinToolExecutor
         {
             var reason = embedModel is null
                 ? "（向量检索未启用：没有配置嵌入模型，这次只用了关键词匹配）"
-                : "";
-            return ToolExecution.Ok($"「{library.Name}」里没有找到相关内容。{reason}");
+                : $"（已按相似度 {minScore:0.00} 过滤，低于这个值的结果被丢掉了）";
+            return ToolExecution.Ok($"「{library!.Name}」里没有找到相关内容。{reason}");
         }
 
         var sb = new StringBuilder();
-        sb.Append("知识库「").Append(library.Name).Append("」里找到 ").Append(hits.Count).AppendLine(" 条：");
+        sb.Append("知识库「").Append(library!.Name).Append("」里找到 ").Append(hits.Count).AppendLine(" 条：");
         if (embedModel is null)
             sb.AppendLine("（向量检索未启用：没有配置嵌入模型，结果来自关键词匹配）");
         sb.AppendLine();
@@ -1413,12 +1570,150 @@ public sealed class BuiltinToolExecutor
                     ? $"{hit.Title} › {hit.Heading}"
                     : hit.Title;
 
-            sb.Append('[').Append(index++).Append("] ").AppendLine(where);
+            sb.Append('[').Append(index++).Append("] ").Append(where);
+            // 只有向量分是真分数，关键词命中没有可比的分值，硬报一个数字会误导模型
+            if (!hit.MatchedByKeyword) sb.Append("（相似度 ").Append(hit.Score.ToString("0.00")).Append('）');
+            sb.AppendLine();
             sb.AppendLine(hit.Text.Trim());
             sb.AppendLine();
         }
 
         return ToolExecution.Ok(sb.ToString().TrimEnd());
+    }
+
+    private static async Task<ToolExecution> KbAddFileAsync(
+        ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
+    {
+        var path = (BuiltinToolContext.GetArg(call, "path") ?? "").Trim();
+        if (path.Length == 0) return ToolExecution.Fail("缺少 path 参数");
+
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
+
+        var full = Path.GetFullPath(path, ctx.BaseDirectory);
+        if (!File.Exists(full))
+            return ToolExecution.Fail($"文件不存在：{full}");
+        if (!KnowledgeBaseIndexer.IsSupported(full))
+            return ToolExecution.Fail(
+                $"这个格式读不成文本：{Path.GetExtension(full)}。"
+                + "支持 md / txt / json / yaml / ini / csv / log / xml。");
+
+        var embedModel = await AppDefaults.ResolveEmbeddingModelAsync();
+        if (EmbeddingClient.CheckUsable(embedModel) is { } reason)
+            return ToolExecution.Fail(reason);
+
+        KbDocument doc;
+        try
+        {
+            doc = await KnowledgeBaseIndexer.ImportAsync(library!.Id, full);
+        }
+        catch (Exception ex)
+        {
+            return ToolExecution.Fail($"导入失败：{ex.Message}");
+        }
+
+        var result = await KnowledgeBaseIndexer.IndexDocumentAsync(doc, embedModel, ct);
+        return result.Ok
+            ? ToolExecution.Ok($"已把「{doc.Title}」导入知识库「{library!.Name}」并索引，切成 {result.Chunks} 块。")
+            : ToolExecution.Fail($"文件已导入，但索引失败：{result.Error}");
+    }
+
+    private static async Task<ToolExecution> KbAddTextAsync(
+        ChatToolCall call, BuiltinToolContext ctx, CancellationToken ct)
+    {
+        var title = (BuiltinToolContext.GetArg(call, "title") ?? "").Trim();
+        var body = BuiltinToolContext.GetArg(call, "text") ?? "";
+        if (title.Length == 0) return ToolExecution.Fail("缺少 title 参数");
+        if (body.Trim().Length == 0) return ToolExecution.Fail("text 是空的，没有可存的内容");
+
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
+
+        var embedModel = await AppDefaults.ResolveEmbeddingModelAsync();
+        if (EmbeddingClient.CheckUsable(embedModel) is { } reason)
+            return ToolExecution.Fail(reason);
+
+        var result = await KnowledgeBaseIndexer.AddTextAsync(
+            library!.Id, title, body, embedModel, ct);
+
+        return result.Ok
+            ? ToolExecution.Ok($"已存入知识库「{library.Name}」：{title}（{result.Chunks} 块）。")
+            : ToolExecution.Fail($"存入失败：{result.Error}");
+    }
+
+    private static async Task<ToolExecution> KbRemoveAsync(ChatToolCall call, BuiltinToolContext ctx)
+    {
+        var title = (BuiltinToolContext.GetArg(call, "title") ?? "").Trim();
+        if (title.Length == 0) return ToolExecution.Fail("缺少 title 参数");
+
+        var (library, error) = await ResolveKbAsync(ctx);
+        if (error is not null) return error;
+
+        var docs = await KnowledgeBaseRepository.GetDocumentsAsync(library!.Id);
+        var target = docs.FirstOrDefault(d => string.Equals(d.Title, title, StringComparison.Ordinal));
+
+        if (target is null)
+        {
+            if (docs.Count == 0)
+                return ToolExecution.Fail($"知识库「{library.Name}」里没有可删的条目。");
+
+            var sb = new StringBuilder();
+            sb.Append("知识库「").Append(library.Name)
+              .AppendLine("」里没有标题为「" + title + "」的条目。现有条目：");
+            foreach (var d in docs)
+                sb.Append("- ").Append(d.Title)
+                  .Append(d.Kind == "text" ? "（文字）" : "（文件）").AppendLine();
+            return ToolExecution.Fail(sb.ToString().TrimEnd());
+        }
+
+        // 文件导入的那种：删的是复制进 data 的那份副本 + 登记 + 切片。
+        // 源文件在导入那一刻就没被引用过，这里碰不到它。
+        var result = await KnowledgeBaseIndexer.RemoveDocumentAsync(target);
+        if (!result.Ok) return ToolExecution.Fail(result.Error ?? "删除失败");
+
+        var what = target.Kind == "text"
+            ? "文字条目"
+            : result.FileRemoved ? "文件条目及其副本" : "文件条目（副本已不在）";
+
+        return ToolExecution.Ok(
+            $"已从向量库移除「{target.Title}」：{what}，共 {target.ChunkCount} 块。"
+            + (target.Kind == "text" ? "" : "用户自己的源文件没有动。"));
+    }
+
+    // ---- 知识库辅助 ----
+
+    /// <summary>简介留空时取正文开头一段：列表里全是「（无简介）」比自动摘一句更难用。</summary>
+    private static string AutoSummary(string content)
+    {
+        var line = content
+            .Split('\n')
+            .Select(l => l.Trim().TrimStart('#', '>', '-', '*', ' '))
+            .FirstOrDefault(l => l.Length > 0) ?? "";
+        return line.Length <= 60 ? line : line[..60] + "…";
+    }
+
+    private static int CountTextOccurrences(string text, string needle)
+    {
+        if (needle.Length == 0) return 0;
+        var count = 0;
+        var at = 0;
+        while ((at = text.IndexOf(needle, at, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            at += needle.Length;
+        }
+        return count;
+    }
+
+    private static string FormatAgo(long millis)
+    {
+        if (millis <= 0) return "从未更新";
+        var span = DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(millis);
+        if (span.TotalMinutes < 1) return "刚刚";
+        if (span.TotalHours < 1) return $"{(int)span.TotalMinutes} 分钟前";
+        if (span.TotalDays < 1) return $"{(int)span.TotalHours} 小时前";
+        if (span.TotalDays < 30) return $"{(int)span.TotalDays} 天前";
+        return DateTimeOffset.FromUnixTimeMilliseconds(millis).LocalDateTime.ToString("yyyy-MM-dd");
     }
 
     private static ToolExecution Invalid(ChatToolCall call)

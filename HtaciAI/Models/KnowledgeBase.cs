@@ -30,7 +30,13 @@ public sealed class KnowledgeBase
     public int DocumentCount { get; set; }
 }
 
-/// <summary>知识库里的一篇笔记。正文是 Markdown，界面负责渲染与编辑。</summary>
+/// <summary>
+/// 知识库里的一篇笔记。正文是 Markdown，界面负责渲染与编辑。
+///
+/// <b>同一库内标题唯一</b>（数据库上有唯一索引）：AI 只用标题寻址，不碰 id ——
+/// 32 位十六进制 id 它抄不准，而标题是人本来就会说的东西。约束换来的是
+/// 「AI 说得出标题，就一定定位得到唯一一条」。
+/// </summary>
 public sealed class KbNote
 {
     public string Id { get; set; } = "";
@@ -38,6 +44,9 @@ public sealed class KbNote
     public string LibraryId { get; set; } = "";
 
     public string Title { get; set; } = "";
+
+    /// <summary>一句话简介。列表与召回结果里显示它，正文可能很长不适合当摘要。</summary>
+    public string Summary { get; set; } = "";
 
     public string Content { get; set; } = "";
 
@@ -59,6 +68,15 @@ public sealed class KbDocument
     public string Path { get; set; } = "";
 
     public string Title { get; set; } = "";
+
+    /// <summary>
+    /// 来源：<c>file</c> = 从磁盘导入的文件，<c>text</c> = AI 或用户直接写进去的一段文字。
+    ///
+    /// <b>为什么必须区分</b>：文件的条目归文件所有 —— 删掉登记、下次索引又会把它找回来，
+    /// 所以删除要走界面并把文件一起处理；文字条目没有磁盘对应物，删了就是删了。
+    /// 不区分的话「删除」这个动作要么删不动（立刻复活）、要么删掉用户的文件。
+    /// </summary>
+    public string Kind { get; set; } = "file";
 
     public string Hash { get; set; } = "";
 

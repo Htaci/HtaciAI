@@ -27,8 +27,23 @@ public static class BuiltinTools
     /// </summary>
     public const string TaskToolName = "task";
 
-    /// <summary>查知识库的工具名。名字直接说明它在查什么，模型不需要额外解释。</summary>
-    public const string KbSearchName = "kb_search";
+    /// <summary>
+    /// 知识库工具名。笔记与向量库分成两组：<b>笔记靠标题寻址，向量库靠内容召回</b>。
+    ///
+    /// 为什么不是一个大而全的 kb_search：这两件事的失败方式完全不同 ——
+    /// 笔记读不到是「标题写错了」（重试换个标题就行），召回召不到是「库里没有」
+    /// 或者「没配嵌入模型」（要告诉用户去配置）。合成一个工具，模型就分不清
+    /// 「查过但库里没有」和「关键词不对」，只会反复换词重试。
+    /// </summary>
+    public const string KbNoteListName = "kb_note_list";
+    public const string KbNoteReadName = "kb_note_read";
+    public const string KbNoteWriteName = "kb_note_write";
+    public const string KbNoteEditName = "kb_note_edit";
+    public const string KbNoteDeleteName = "kb_note_delete";
+    public const string KbRecallName = "kb_recall";
+    public const string KbAddFileName = "kb_add_file";
+    public const string KbAddTextName = "kb_add_text";
+    public const string KbRemoveName = "kb_remove";
 
     private const string IdBash = "builtin-bash";
     private const string IdRead = "builtin-read";
@@ -47,7 +62,15 @@ public static class BuiltinTools
     private const string IdCreateTool = "builtin-create-tool";
     private const string IdCreateSkill = "builtin-create-skill";
     private const string IdTask = "builtin-task";
-    private const string IdKbSearch = "builtin-kb-search";
+    private const string IdKbNoteList = "builtin-kb-note-list";
+    private const string IdKbNoteRead = "builtin-kb-note-read";
+    private const string IdKbNoteWrite = "builtin-kb-note-write";
+    private const string IdKbNoteEdit = "builtin-kb-note-edit";
+    private const string IdKbNoteDelete = "builtin-kb-note-delete";
+    private const string IdKbRecall = "builtin-kb-recall";
+    private const string IdKbAddFile = "builtin-kb-add-file";
+    private const string IdKbAddText = "builtin-kb-add-text";
+    private const string IdKbRemove = "builtin-kb-remove";
 
     /// <summary>自举工具名。<see cref="ToolDefinition.IsSelfExtension"/> 按它判定，界面与网关也认这两个常量。</summary>
     public const string CreateToolName = "create_tool";
@@ -300,15 +323,102 @@ public static class BuiltinTools
         },
         new ToolDefinition
         {
-            Id = IdKbSearch,
-            Name = KbSearchName,
-            DisplayName = "查知识库",
+            Id = IdKbNoteList,
+            Name = KbNoteListName,
+            DisplayName = "列笔记",
+            Icon = "\uF4EE",
+            Description = """
+                列出当前知识库里所有笔记的标题、简介与更新时间（不含正文）。
+                这是进知识库的第一件事：<b>别凭印象猜标题</b>，先看这里有哪些。
+                返回的标题就是后续读、改、删要用的名字 —— 笔记不用 id 寻址。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Safe,
+            InputSchemaJson = """
+                {"type":"object","properties":{}}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdKbNoteRead,
+            Name = KbNoteReadName,
+            DisplayName = "读笔记",
+            Icon = "\uE179",
+            Description = """
+                按标题读一篇笔记的全文（标题、简介、正文）。
+                标题必须来自 kb_note_list 的结果或用户原话；对不上时会返回相近的标题供你挑，
+                不要凭猜测反复试。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Safe,
+            InputSchemaJson = """
+                {"type":"object","properties":{"title":{"type":"string","description":"笔记标题（同库内唯一）"}},"required":["title"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdKbNoteWrite,
+            Name = KbNoteWriteName,
+            DisplayName = "写笔记",
+            Icon = "\uF56F",
+            Description = """
+                写入一篇笔记：标题不存在就新建，已存在就<b>整篇覆盖</b>。
+                写之前先用 kb_note_list 看一眼有没有同名笔记 —— 覆盖会把原来的内容全部丢掉。
+                只想改其中一处时用 kb_note_edit，不要整篇重写。
+                正文用 Markdown。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Risk,
+            InputSchemaJson = """
+                {"type":"object","properties":{"title":{"type":"string","description":"笔记标题，同库内唯一"},"summary":{"type":"string","description":"一句话简介，列笔记时显示。留空则自动取正文前几十字"},"content":{"type":"string","description":"Markdown 正文"}},"required":["title","content"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdKbNoteEdit,
+            Name = KbNoteEditName,
+            DisplayName = "改笔记",
+            Icon = "\uF3DE",
+            Description = """
+                按标题精确修改一篇笔记里的某处文字：把 old_text 换成 new_text。
+                old_text 要带上足够的上下文，保证在整篇里唯一 —— 匹配到多处时会报错而不是随便改一处。
+                这是改笔记的默认做法：比整篇覆盖安全，也不会把没打算动的段落一起丢掉。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Risk,
+            InputSchemaJson = """
+                {"type":"object","properties":{"title":{"type":"string","description":"笔记标题"},"old_text":{"type":"string","description":"要被替换掉的原文，需在整篇笔记里唯一"},"new_text":{"type":"string","description":"替换成的新内容"}},"required":["title","old_text","new_text"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdKbNoteDelete,
+            Name = KbNoteDeleteName,
+            DisplayName = "删笔记",
+            Icon = "\uF34D",
+            Description = """
+                按标题删除一篇笔记。<b>不可恢复</b>：删掉就是没了，没有回收站。
+                只在用户明确说要删的时候用；用户只是说「这笔记过时了」时，先问清楚是改还是删。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Danger,
+            InputSchemaJson = """
+                {"type":"object","properties":{"title":{"type":"string","description":"笔记标题"}},"required":["title"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdKbRecall,
+            Name = KbRecallName,
+            DisplayName = "召回知识库",
             Icon = "\uF690",
             Description = """
-                在当前会话选定的知识库里检索：向量相似度 + 关键词两条路合并。
-                返回命中的片段（含来源标题与标题链），命中之后按需再读全文。
+                在当前会话选定的知识库里按内容召回相关片段：向量相似度 + 关键词两条路合并。
+                返回命中的片段（含来源标题与标题链），拿到片段后可再用 kb_note_read 读笔记全文。
                 用途：查项目里已有的约定、规范、旧决策，或者用户导入过的资料。
                 不适合：查这个项目的代码（那用 glob / grep / read，知识库不索引代码）。
+                关于 min_score：低于这个相似度的结果直接丢掉，哪怕因此凑不满 top_k ——
+                宁可少给几条，也不要拿一条不相干的当依据。放宽它之前先想想是不是该换关键词。
                 没有选定知识库时直接返回提示，不要把查询改写成别的工具去猜。
                 """,
             Source = ToolSource.Builtin,
@@ -316,7 +426,64 @@ public static class BuiltinTools
             // 一次向量检索要现调一次嵌入接口，比纯本地工具慢，但远没到要让人等的地步
             TimeoutSeconds = 120,
             InputSchemaJson = """
-                {"type":"object","properties":{"query":{"type":"string","description":"要查的内容。写具体一点更容易命中：错误码、函数名、配置项名这类关键词向量检索不擅长，交给关键词那一路"},"top_k":{"type":"integer","description":"返回几条，默认 6，最多 20"}},"required":["query"]}
+                {"type":"object","properties":{"query":{"type":"string","description":"要查的内容。写具体一点更容易命中：错误码、函数名、配置项名这类关键词向量检索不擅长，交给关键词那一路"},"top_k":{"type":"integer","description":"最多返回几条，默认 6，最多 20。低于 min_score 的结果会被丢掉，实际可能更少"},"min_score":{"type":"number","description":"相似度下限，0~1，默认 0.35。调高更严格（只拿高度相关的），调低更宽松"}},"required":["query"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdKbAddFile,
+            Name = KbAddFileName,
+            DisplayName = "文件入库",
+            Icon = "\uF41D",
+            Description = """
+                把一个文件导入知识库并建立索引，之后 kb_recall 就能召回它的内容。
+                支持能读成文本的格式：md / txt / json / yaml / ini / csv / log / xml。
+                <b>会消耗嵌入额度</b>（按切块数量），一次一两个文件可以，不要循环批量导几百个。
+                用途：用户让你「把这个文件记下来」「把这份规范存进知识库」。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Risk,
+            TimeoutSeconds = 300,
+            InputSchemaJson = """
+                {"type":"object","properties":{"path":{"type":"string","description":"要导入的文件路径（绝对路径）"}},"required":["path"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdKbAddText,
+            Name = KbAddTextName,
+            DisplayName = "文字入库",
+            Icon = "\uE4DC",
+            Description = """
+                把一段文字存进知识库的向量库并建立索引，之后 kb_recall 能召回它。
+                适合：一席对话里得出的结论、一段需求、一条命令、用户口述的要点 —— 没有文件也不该先造一个文件。
+                <b>会消耗嵌入额度</b>。
+                标题要能让人一眼认出这是什么（「Nginx 反代的超时配置」而不是「笔记 1」）；
+                同标题再插一次会新增一条并列的条目，不做覆盖。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Risk,
+            TimeoutSeconds = 300,
+            InputSchemaJson = """
+                {"type":"object","properties":{"title":{"type":"string","description":"这段内容的标题，用于在召回结果里标明来源"},"text":{"type":"string","description":"要存的正文，Markdown 也可以"}},"required":["title","text"]}
+                """,
+        },
+        new ToolDefinition
+        {
+            Id = IdKbRemove,
+            Name = KbRemoveName,
+            DisplayName = "移除条目",
+            Icon = "\uE47F",
+            Description = """
+                从向量库里删掉一条条目（按标题定位），文字条目和文件导入的都行。
+                文件导入的那种，删的是导入时复制进知识库目录的那份副本与它的索引 ——
+                用户自己的源文件不会被碰到。副本已经不在了也照删。
+                用途：插错了、内容过时了。删之前先用 kb_recall 确认是哪一条，标题要精确。
+                """,
+            Source = ToolSource.Builtin,
+            DangerLevel = ToolDangerLevel.Risk,
+            InputSchemaJson = """
+                {"type":"object","properties":{"title":{"type":"string","description":"要删掉的那条条目的标题，必须与现有标题完全一致"}},"required":["title"]}
                 """,
         },
         new ToolDefinition

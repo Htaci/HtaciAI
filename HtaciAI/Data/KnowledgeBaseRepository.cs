@@ -154,7 +154,7 @@ public static class KnowledgeBaseRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, library_id, title, COALESCE(content, ''), created_at, updated_at
+            SELECT id, library_id, title, COALESCE(summary, ''), COALESCE(content, ''), created_at, updated_at
             FROM kb_notes WHERE library_id = $lib ORDER BY updated_at DESC;
             """;
         cmd.Parameters.AddWithValue("$lib", libraryId);
@@ -165,11 +165,38 @@ public static class KnowledgeBaseRepository
                 Id = r.GetString(0),
                 LibraryId = r.GetString(1),
                 Title = r.GetString(2),
-                Content = r.GetString(3),
-                CreatedAt = r.GetInt64(4),
-                UpdatedAt = r.GetInt64(5),
+                Summary = r.GetString(3),
+                Content = r.GetString(4),
+                CreatedAt = r.GetInt64(5),
+                UpdatedAt = r.GetInt64(6),
             });
         return list;
+    }
+
+    /// <summary>按标题取笔记（同一库内标题唯一，所以这是确定的一条）。</summary>
+    public static async Task<KbNote?> GetNoteByTitleAsync(string libraryId, string title)
+    {
+        await using var conn = DatabaseService.CreateConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, library_id, title, COALESCE(summary, ''), COALESCE(content, ''), created_at, updated_at
+            FROM kb_notes WHERE library_id = $lib AND title = $title;
+            """;
+        cmd.Parameters.AddWithValue("$lib", libraryId);
+        cmd.Parameters.AddWithValue("$title", title);
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return new KbNote
+        {
+            Id = r.GetString(0),
+            LibraryId = r.GetString(1),
+            Title = r.GetString(2),
+            Summary = r.GetString(3),
+            Content = r.GetString(4),
+            CreatedAt = r.GetInt64(5),
+            UpdatedAt = r.GetInt64(6),
+        };
     }
 
     public static async Task<KbNote?> GetNoteAsync(string id)
@@ -178,7 +205,7 @@ public static class KnowledgeBaseRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, library_id, title, COALESCE(content, ''), created_at, updated_at
+            SELECT id, library_id, title, COALESCE(summary, ''), COALESCE(content, ''), created_at, updated_at
             FROM kb_notes WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -198,21 +225,40 @@ public static class KnowledgeBaseRepository
     public static async Task UpsertNoteAsync(KbNote note)
     {
         var now = Now();
-        if (note.CreatedAt == 0) note.CreatedAt = now;
         note.UpdatedAt = now;
 
         await using var conn = DatabaseService.CreateConnection();
         await conn.OpenAsync();
+
+        // 标题才是身份：调用方大多没带 id，直接 INSERT 会撞唯一索引。
+        // 先按（库 + 标题）找已有那条，复用它的 id 与创建时间。
+        if (string.IsNullOrEmpty(note.Id))
+        {
+            using var find = conn.CreateCommand();
+            find.CommandText = "SELECT id, created_at FROM kb_notes WHERE library_id = $lib AND title = $title;";
+            find.Parameters.AddWithValue("$lib", note.LibraryId);
+            find.Parameters.AddWithValue("$title", note.Title);
+            await using var r = await find.ExecuteReaderAsync();
+            if (await r.ReadAsync())
+            {
+                note.Id = r.GetString(0);
+                note.CreatedAt = r.GetInt64(1);
+            }
+        }
+
+        if (note.CreatedAt == 0) note.CreatedAt = now;
+
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO kb_notes (id, library_id, title, content, created_at, updated_at)
-            VALUES ($id, $lib, $title, $content, $created_at, $updated_at)
-            ON CONFLICT(id) DO UPDATE SET
-                title = $title, content = $content, updated_at = $updated_at;
+            INSERT INTO kb_notes (id, library_id, title, summary, content, created_at, updated_at)
+            VALUES ($id, $lib, $title, $summary, $content, $created_at, $updated_at)
+            ON CONFLICT(library_id, title) DO UPDATE SET
+                summary = $summary, content = $content, updated_at = $updated_at;
             """;
         cmd.Parameters.AddWithValue("$id", note.Id);
         cmd.Parameters.AddWithValue("$lib", note.LibraryId);
         cmd.Parameters.AddWithValue("$title", note.Title);
+        cmd.Parameters.AddWithValue("$summary", (object?)note.Summary ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$content", note.Content);
         cmd.Parameters.AddWithValue("$created_at", note.CreatedAt);
         cmd.Parameters.AddWithValue("$updated_at", note.UpdatedAt);
@@ -241,7 +287,7 @@ public static class KnowledgeBaseRepository
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, library_id, path, title, COALESCE(hash, ''), size, modified_at,
-                   chunk_count, indexed_at, status, error
+                   chunk_count, indexed_at, status, error, COALESCE(kind, 'file')
             FROM kb_documents WHERE library_id = $lib ORDER BY path ASC;
             """;
         cmd.Parameters.AddWithValue("$lib", libraryId);
@@ -258,7 +304,7 @@ public static class KnowledgeBaseRepository
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, library_id, path, title, COALESCE(hash, ''), size, modified_at,
-                   chunk_count, indexed_at, status, error
+                   chunk_count, indexed_at, status, error, COALESCE(kind, 'file')
             FROM kb_documents WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -288,11 +334,11 @@ public static class KnowledgeBaseRepository
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT INTO kb_documents
-                (id, library_id, path, title, hash, size, modified_at, chunk_count, indexed_at, status, error, created_at, updated_at)
+                (id, library_id, path, title, kind, hash, size, modified_at, chunk_count, indexed_at, status, error, created_at, updated_at)
             VALUES
-                ($id, $lib, $path, $title, $hash, $size, $modified_at, $chunk_count, $indexed_at, $status, $error, $created_at, $updated_at)
+                ($id, $lib, $path, $title, $kind, $hash, $size, $modified_at, $chunk_count, $indexed_at, $status, $error, $created_at, $updated_at)
             ON CONFLICT(id) DO UPDATE SET
-                path = $path, title = $title, hash = $hash, size = $size, modified_at = $modified_at,
+                path = $path, title = $title, kind = $kind, hash = $hash, size = $size, modified_at = $modified_at,
                 chunk_count = $chunk_count, indexed_at = $indexed_at, status = $status, error = $error,
                 updated_at = $updated_at;
             """;
@@ -300,6 +346,7 @@ public static class KnowledgeBaseRepository
         cmd.Parameters.AddWithValue("$lib", doc.LibraryId);
         cmd.Parameters.AddWithValue("$path", doc.Path);
         cmd.Parameters.AddWithValue("$title", doc.Title);
+        cmd.Parameters.AddWithValue("$kind", doc.Kind);
         cmd.Parameters.AddWithValue("$hash", doc.Hash);
         cmd.Parameters.AddWithValue("$size", doc.Size);
         cmd.Parameters.AddWithValue("$modified_at", doc.ModifiedAt);
@@ -453,7 +500,7 @@ public static class KnowledgeBaseRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, library_id, title, COALESCE(content, ''), created_at, updated_at
+            SELECT id, library_id, title, COALESCE(summary, ''), COALESCE(content, ''), created_at, updated_at
             FROM kb_notes
             WHERE library_id = $lib AND (title LIKE $kw OR COALESCE(content, '') LIKE $kw)
             ORDER BY updated_at DESC
@@ -469,9 +516,10 @@ public static class KnowledgeBaseRepository
                 Id = r.GetString(0),
                 LibraryId = r.GetString(1),
                 Title = r.GetString(2),
-                Content = r.GetString(3),
-                CreatedAt = r.GetInt64(4),
-                UpdatedAt = r.GetInt64(5),
+                Summary = r.GetString(3),
+                Content = r.GetString(4),
+                CreatedAt = r.GetInt64(5),
+                UpdatedAt = r.GetInt64(6),
             });
         return list;
     }
@@ -546,6 +594,7 @@ public static class KnowledgeBaseRepository
         IndexedAt = r.GetInt64(8),
         Status = r.GetString(9),
         Error = r.IsDBNull(10) ? null : r.GetString(10),
+        Kind = r.GetString(11),
     };
 
     /// <summary>LIKE 的转义：用户搜的内容里带 % 或 _ 时不能当成通配符。</summary>
