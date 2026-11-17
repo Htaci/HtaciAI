@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -219,6 +219,9 @@ public sealed class ConversationRuntime
     /// <summary>本轮的活动状态变化（运行中 / 等待确认）。宿主转发给左侧列表。</summary>
     public event Action<SessionActivity>? ActivityChanged;
 
+    /// <summary>排队的那几条消息变了（增删、状态切换、正文改写）。宿主据此重画输入框上方那一栏。</summary>
+    public event Action? PendingChanged;
+
     /// <summary>
     /// 整轮结束。<b>返回的 Task 会被 await</b>（在运行标记仍然立着的时候）——
     /// 「重新生成」要求宿主整体重排一次历史，那件事必须发生在允许下一次发送之前。
@@ -337,6 +340,11 @@ public sealed class ConversationRuntime
         if (turn is { Success: true, FinalAssistant: { } finished } && finished.TurnId.Length > 0)
             _ = AutoSummarizeTurnAsync(finished.TurnId);
 
+        // 这一轮结束，排队里还有话等着发：接着发下一条。
+        // 放在最后（而不是 TurnEnded 事件里）：宿主在 TurnEnded 里做的事是重排界面，
+        // 若那时就开下一轮，重排与新一轮的增量会挤在一起，可能画出重复的一轮。
+        await DrainPendingAsync();
+
         return turn;
     }
 
@@ -389,6 +397,174 @@ public sealed class ConversationRuntime
 
     /// <summary>用户点「停止」：取消本轮。没有在跑时什么也不做。</summary>
     public void Cancel() => SendCts?.Cancel();
+
+    // ============================================================
+    // 排队 / 引导
+    // ============================================================
+
+    private readonly List<PendingInput> _pending = new();
+
+    /// <summary>当前排队的消息，按入队顺序。</summary>
+    public IReadOnlyList<PendingInput> Pending => _pending;
+
+    /// <summary>
+    /// 有人正在编辑队列里的某条 → 整条队列都不自动发送。
+    ///
+    /// 这是刻意的「全队列暂停」而不是「只暂停这一条」：用户点开编辑，是为了把话说清楚；
+    /// 这时让排在后面的那条照常发出去，模型会先回应后一条，用户正在改的那句再接上，
+    /// 顺序就乱了 —— 而顺序正是排队这件事唯一的意义。
+    /// </summary>
+    public bool PendingPaused => _pending.Any(p => p.State == PendingInputState.Editing);
+
+    private void RaisePendingChanged() => PendingChanged?.Invoke();
+
+    /// <summary>
+    /// 把一条消息排进队列。<paramref name="steer"/> = true 表示直接标成「等下一个轮边界插入」。
+    /// </summary>
+    public PendingInput Enqueue(string text, IReadOnlyList<ChatAttachment>? attachments,
+        TurnSettings settings, bool steer)
+    {
+        var item = new PendingInput
+        {
+            Text = text,
+            Attachments = attachments,
+            Settings = settings,
+            State = steer ? PendingInputState.Steer : PendingInputState.Queued,
+        };
+
+        _pending.Add(item);
+        RaisePendingChanged();
+        return item;
+    }
+
+    /// <summary>改成「等下一个轮边界插入」。消息已在跑着的那一轮里，下一轮请求就会带上它。</summary>
+    public void RequestSteer(string id)
+    {
+        if (_pending.FirstOrDefault(p => p.Id == id) is not { } item) return;
+        item.State = PendingInputState.Steer;
+        RaisePendingChanged();
+    }
+
+    /// <summary>
+    /// 撤回「引导插入」，退回普通排队。
+    ///
+    /// 已经取走的那批撤不回来：它们此刻在网关的 <c>messages</c> 里，本轮已经发出去了。
+    /// 所以这个方法只对还挂在队列里的那条有意义 —— 取走时就从队列里移除了，两边不会打架。
+    /// </summary>
+    public void CancelSteer(string id)
+    {
+        if (_pending.FirstOrDefault(p => p.Id == id) is not { } item) return;
+        if (item.State != PendingInputState.Steer) return;
+
+        item.State = PendingInputState.Queued;
+        RaisePendingChanged();
+    }
+
+    /// <summary>进入编辑：暂停自动发送，直到 <see cref="CommitPendingEdit"/> 或被取消。</summary>
+    public void BeginPendingEdit(string id)
+    {
+        if (_pending.FirstOrDefault(p => p.Id == id) is not { } item) return;
+        if (item.State == PendingInputState.Editing) return;
+
+        item.BeforeEdit = item.State;
+        item.State = PendingInputState.Editing;
+        RaisePendingChanged();
+    }
+
+    /// <summary>改完。回到编辑之前那一档，然后尝试继续发送（若此刻已经不忙）。</summary>
+    public async Task CommitPendingEditAsync(string id, string text)
+    {
+        if (_pending.FirstOrDefault(p => p.Id == id) is not { } item) return;
+
+        item.Text = text;
+        item.State = item.BeforeEdit;
+        RaisePendingChanged();
+
+        await DrainPendingAsync();
+    }
+
+    /// <summary>取消这一条，返回它（调用方负责把正文还回输入框）。没有这条时返回 null。</summary>
+    public PendingInput? RemovePending(string id)
+    {
+        if (_pending.FirstOrDefault(p => p.Id == id) is not { } item) return null;
+
+        _pending.Remove(item);
+        RaisePendingChanged();
+
+        // 队列可能因为这次移除而恢复「可以发」了（暂停的唯一原因就是有人正在编辑）。
+        // 不在这里试一次的话，剩下那几条要等到用户再发一条消息才会动 ——
+        // 界面上就是「队列还挂着，但什么都不会发生」。
+        _ = DrainPendingAsync();
+
+        return item;
+    }
+
+    /// <summary>
+    /// 取走所有「等插入」的消息。由网关在每一轮请求之前调用。
+    ///
+    /// 不 await、不加锁：它只被当前这一轮的工具循环调用，而那一轮在同一时刻只有一处
+    /// 在推进（网关的 for 循环是串行的）。加锁反而会让人以为这里支持并发。
+    /// </summary>
+    internal IReadOnlyList<SteerMessage> TakeSteers()
+    {
+        if (_pending.Count == 0) return Array.Empty<SteerMessage>();
+
+        // 有人正在编辑：整条队列都停着，引导也一样。
+        // 用户的意图是「等我改完再接着说」，这时候把另一条插进当前这一轮，
+        // 与他按下的那个暂停是矛盾的。
+        if (PendingPaused) return Array.Empty<SteerMessage>();
+
+        var taken = _pending.Where(p => p.State == PendingInputState.Steer).ToList();
+        if (taken.Count == 0) return Array.Empty<SteerMessage>();
+
+        foreach (var item in taken) _pending.Remove(item);
+        RaisePendingChanged();
+
+        return taken.Select(p => new SteerMessage(p.Text, p.Attachments)).ToList();
+    }
+
+    /// <summary>
+    /// 有空就发下一条排队消息。整轮结束、编辑提交之后各调一次。
+    ///
+    /// 三个前置条件缺一不可：没有任务在跑（否则会立刻被 SendAsync 挡回去）、
+    /// 没人在编辑（否则顺序会乱）、队首确实是「排队」而不是「等引导」的那条。
+    /// </summary>
+    private async Task DrainPendingAsync()
+    {
+        if (IsBusy || PendingPaused) return;
+
+        // 走到这里说明已经没有任务在跑了：还在等「下一个工具循环边界」的那些消息，
+        // 那个边界永远不会再来了。它们退回成普通排队消息 —— 否则它们会永远挂在这里，
+        // 用户看到的是「点了引导，什么也没发生，而且这条再也发不出去了」。
+        var stale = _pending.Where(p => p.State == PendingInputState.Steer).ToList();
+        if (stale.Count > 0)
+        {
+            foreach (var item in stale) item.State = PendingInputState.Queued;
+            RaisePendingChanged();
+        }
+
+        if (_pending.FirstOrDefault(p => p.State == PendingInputState.Queued) is not { } next) return;
+
+        _pending.Remove(next);
+        RaisePendingChanged();
+
+        var result = await SendAsync(new ConversationTurnRequest
+        {
+            Settings = next.Settings,
+            Text = next.Text,
+            Attachments = next.Attachments,
+            RequestPreview = next.Text,
+        });
+
+        // 没发出去（这期间用户自己发了一条、或插件抢先了）：放回队首，等下一次机会。
+        // 静默丢掉是最坏的处理 —— 用户看着它从列表里消失，却从来没被发出去过。
+        if (result is null)
+        {
+            next.State = PendingInputState.Queued;
+            _pending.Insert(0, next);
+            RaisePendingChanged();
+        }
+    }
 
     /// <summary>改权限档位（会话级）。</summary>
     public async Task SetPermissionModeAsync(PermissionMode mode)
@@ -529,7 +705,8 @@ public sealed class ConversationRuntime
                     Update = UpdatePersistedMessageAsync,
                 },
                 BeginRound,
-                ct);
+                ct,
+                takeSteers: TakeSteers);
 
             // 流式阶段的停止由网关内部按 interrupted 收尾并<b>正常返回</b>，不会走到下面的 catch。
             // 按「失败但没有错误信息」识别出来 —— 否则用户自己按的停止也会收到一条「任务出错」提醒。

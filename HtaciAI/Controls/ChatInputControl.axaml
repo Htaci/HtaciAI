@@ -57,6 +57,11 @@
     </UserControl.Styles>
 
     <StackPanel>
+        <!-- 排队中的消息（会话正在跑任务时又发的）：由宿主用 SetItems 填，空则整栏隐藏。
+             放在输入框上方而不是塞进工具栏：它是「接下来要发生的事」，和输入框里
+             「我正在写的事」是两件事，混在同一格里会让人分不清哪条已经发出去了。 -->
+        <controls:PendingQueueControl x:Name="PendingQueue" Margin="0,0,0,8"/>
+
         <!-- 附件没有单独的一栏：卡片就在正文里（见下面 ChatInputEditor 的说明）。
              早先是正文上方一条 chip 栏，附件跟正文的位置关系在那里是断的 ——
              用户看到的顺序和发出去的顺序并不一定一致。 -->

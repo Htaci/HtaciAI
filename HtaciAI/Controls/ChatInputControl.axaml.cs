@@ -27,7 +27,8 @@ namespace HtaciAI.Controls;
 /// <summary>一次提交：正文（占位字符已展开成真实路径） + 附件列表。</summary>
 /// <param name="Text">发给模型的正文。附件位置上是绝对路径。</param>
 /// <param name="Attachments">随正文一起发出的附件。</param>
-public sealed record InputSubmit(string Text, IReadOnlyList<ChatAttachment> Attachments);
+/// <param name="Steer">Ctrl+Enter 提交：任务进行中是要「立刻引导」，而不是排在队尾等任务结束。</param>
+public sealed record InputSubmit(string Text, IReadOnlyList<ChatAttachment> Attachments, bool Steer = false);
 
 /// <summary>提示行的语义色。</summary>
 public enum InputHintKind
@@ -109,6 +110,8 @@ public partial class ChatInputControl : UserControl
             // 用户手工改了正文（删掉一段、撤销）之后，正文里已经没有对应占位字符的附件
             // 要从草稿里清掉，否则卡片栏会显示一个正文里根本没有的附件。
             if (_draft.Prune(InputBox.Text)) RefreshAttachmentBar();
+            // 运行中框里出现内容，那颗键就从「停止」变回「发送」
+            RefreshSendGlyph();
             _ = SaveDraftAsync();
         };
 
@@ -265,6 +268,11 @@ public partial class ChatInputControl : UserControl
     public McpSelectorControl McpSelector => McpPicker;
     public KnowledgeBaseSelectorControl KbSelector => KbPicker;
 
+    /// <summary>
+    /// 排队中那一栏。队列本身归 runtime（视图重建后还在），这里只负责显示与转发点击。
+    /// </summary>
+    public PendingQueueControl Pending => PendingQueue;
+
     // ============================================================
     // 输入框
     // ============================================================
@@ -299,29 +307,44 @@ public partial class ChatInputControl : UserControl
     // ============================================================
 
     /// <summary>
-    /// 运行态：发送按钮在「发送（蓝底箭头）」与「停止（红底方块）」之间切换，并显示等待环。
-    /// 按钮始终保持可点 —— 运行中点它就是停止。
+    /// 运行态：不再无条件变成「停止」—— 这颗键表达的是「按下会发生什么」。
     ///
-    /// 由执行发送的宿主调用。新建页把发送交给页面去做，自己不调这个方法，
-    /// 于是那边永远不会出现「停止」，控件里也就没有「如果是新建页」这种分支。
+    /// 运行中框里有字时仍然是发送（排进队列 / 作为引导插入），只有框里空着才是停止。
+    /// 原先一概切成停止，导致任务跑着的时候没法把下一句排队：想发就得先点停止。
     /// </summary>
     public void SetRunning(bool running)
     {
         _running = running;
-
-        SendGlyph.IsVisible = !running;
-        StopGlyph.IsVisible = running;
-
-        var brush = new SolidColorBrush(Color.Parse(running ? "#DC2626" : "#4A90D9"));
-        SendBtn.Background = brush;
-        SendBtn.BorderBrush = brush;
 
         LoadingRing.IsVisible = running;
 
         // 运行中不许再压缩：压缩要在「这一轮发出去之前」定下上下文，
         // 中途插一条只会让本轮上下文前后不一致（请求已带旧历史发出，压缩记录却已落库）。
         foreach (var item in MoreItems) item.IsEnabled = !running;
+
+        RefreshSendGlyph();
     }
+
+    /// <summary>
+    /// 重算发送键的形态与配色。判据只有一条：此刻按下去是发还是停。
+    /// 运行中 + 框里有内容 → 发送（蓝）；运行中 + 框里空 → 停止（红）；没在跑 → 发送。
+    /// </summary>
+    private void RefreshSendGlyph()
+    {
+        var asStop = _running && IsBlank();
+
+        SendGlyph.IsVisible = !asStop;
+        StopGlyph.IsVisible = asStop;
+
+        var brush = new SolidColorBrush(Color.Parse(asStop ? "#DC2626" : "#4A90D9"));
+        SendBtn.Background = brush;
+        SendBtn.BorderBrush = brush;
+
+        ToolTip.SetTip(SendBtn, asStop ? "停止" : _running ? "排队发送（Ctrl+Enter 立即插入本轮）" : "发送");
+    }
+
+    /// <summary>框里没有任何要发的东西（纯附件也算有 —— 只发一个文件是合法操作）。</summary>
+    private bool IsBlank() => string.IsNullOrWhiteSpace(InputBox.Text) && _draft.IsEmpty;
 
     /// <summary>首个正文 / 思考分片到达：请求已进入输出阶段，收起等待指示。</summary>
     public void MarkFirstOutput() => LoadingRing.IsVisible = false;
@@ -555,8 +578,8 @@ public partial class ChatInputControl : UserControl
 
     private void OnSendClick(object? sender, RoutedEventArgs e)
     {
-        // 运行中这颗按钮是「停止」
-        if (_running)
+        // 运行中且框里空着：这颗键此刻是「停止」
+        if (_running && IsBlank())
         {
             StopRequested?.Invoke(this, EventArgs.Empty);
             return;
@@ -568,7 +591,12 @@ public partial class ChatInputControl : UserControl
     /// <summary>
     /// 提交当前内容。空文本且无附件时不发（纯附件也应该能发出去，所以两个条件都要看）。
     /// </summary>
-    public void Submit()
+    public void Submit() => Submit(steer: false);
+
+    /// <param name="steer">
+    /// Ctrl+Enter：任务进行中希望<b>立刻</b>插进当前这一轮，而不是等它跑完。没有任务在跑时无区别。
+    /// </param>
+    public void Submit(bool steer)
     {
         // 首尾空白在这里去掉。用户粘贴进来的文本可能自带尾部换行。
         // 只规范化本地这份「要发出去的文本」，<b>不动输入框里的内容</b> ——
@@ -582,7 +610,7 @@ public partial class ChatInputControl : UserControl
         var text = _draft.Expand(raw);
         var attachments = _draft.Items.Select(i => i.Info).ToList();
 
-        SendRequested?.Invoke(this, new InputSubmit(text, attachments));
+        SendRequested?.Invoke(this, new InputSubmit(text, attachments, steer));
     }
 
     // ============================================================
@@ -710,6 +738,9 @@ public partial class ChatInputControl : UserControl
             index >= 0 && index < _draft.Count ? ChipFor(_draft.Items[index]) : OrphanChip(index));
 
         InputBox.Redraw();
+
+        // 只贴了个文件、一个字没打，也算「有东西要发」：那颗键该从停止变回发送
+        RefreshSendGlyph();
     }
 
     /// <summary>
@@ -870,7 +901,10 @@ public partial class ChatInputControl : UserControl
 
             // 运行中回车不当作「停止」：那颗按钮的语义切换只对鼠标点击成立，
             // 键盘上误按回车就中止一轮生成太容易发生了。
-            if (!_running) Submit();
+            //
+            // 运行中回车现在有意义了：排队。是否真的排队由宿主判断（它才知道有没有任务在跑），
+            // 控件这边只负责把 Ctrl 的意图带出去。
+            Submit(steer: e.KeyModifiers.HasFlag(KeyModifiers.Control));
             return;
         }
 

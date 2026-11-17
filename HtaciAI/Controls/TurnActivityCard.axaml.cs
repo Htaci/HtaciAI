@@ -92,6 +92,19 @@ public partial class TurnActivityCard : UserControl
     public void SetFinished(int tools, int thinkings, TimeSpan? elapsed)
         => HeaderText!.Text = Join(elapsed is { } e ? $"用时 {FormatDuration(e)}" : "已处理", thinkings, tools);
 
+    /// <summary>
+    /// 中间段收尾：一轮被引导插入切成几段时，只有<b>最后一段</b>报用时 ——
+    /// 每段都带一个时长的话，同一轮看起来像跑了好几次，而那些时长加起来也不等于这一轮的总耗时。
+    /// 计数全为 0（这一段只有正文）时仍写「已处理」，头部不留空。
+    /// </summary>
+    public void SetSectionFinished(int tools, int thinkings)
+    {
+        var parts = new List<string>();
+        if (thinkings > 0) parts.Add($"{thinkings}次思考");
+        if (tools > 0) parts.Add($"{tools}次工具调用");
+        HeaderText!.Text = parts.Count == 0 ? "已处理" : string.Join("  ", parts);
+    }
+
     /// <summary>各段之间用两个空格分隔，计数为 0 的段直接不出现。</summary>
     private static string Join(string head, int thinkings, int tools)
     {

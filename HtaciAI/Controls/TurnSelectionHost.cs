@@ -39,6 +39,12 @@ public sealed class TurnSelectionHost
     private readonly Button _allBtn;
     private TurnActivityCard? _card;
 
+    /// <summary>
+    /// 最近一条「引导插入」气泡在 <see cref="ContentPanel"/> 里的下标，-1 表示还没有。
+    /// 下半段的聚合卡要靠它定位（见 <see cref="AppendCard"/>）。
+    /// </summary>
+    private int _segmentStart = -1;
+
     /// <summary>蓝色模式边框（内容区外框）。</summary>
     public Border Border { get; }
 
@@ -136,6 +142,33 @@ public sealed class TurnSelectionHost
     {
         _card = card;
         ContentPanel.Children.Insert(0, card);
+    }
+
+    /// <summary>
+    /// 追加一张聚合卡：一轮里被「引导插入」切开时，气泡之后的部分另起一张卡。
+    ///
+    /// 这种卡必须挂在<b>那个气泡的后面</b>，不能像首张卡那样插到顶部 ——
+    /// 插到顶部会让后半段的思考跑到引导消息上面去，顺序正好反了。
+    /// 也不能简单地追加到末尾：气泡后面往往已经排进了一段正文（新一轮开始时就建好了），
+    /// 卡要压在正文上面，否则「思考」会掉到「结论」下面。
+    /// </summary>
+    public void AppendCard(TurnActivityCard card)
+    {
+        _card = card;
+
+        var at = _segmentStart >= 0 ? _segmentStart + 1 : ContentPanel.Children.Count;
+        if (at >= 0 && at <= ContentPanel.Children.Count) ContentPanel.Children.Insert(at, card);
+        else ContentPanel.Children.Add(card);
+    }
+
+    /// <summary>
+    /// 放入一条「引导插入」的气泡，并把它记成后续聚合卡的挂载点。
+    /// </summary>
+    public void AddSteerBubble(Control bubble)
+    {
+        ContentPanel.Children.Add(bubble);
+        // 多次引导插入时以最后一个为准：下半段的卡只属于最近那个气泡之后
+        _segmentStart = ContentPanel.Children.Count - 1;
     }
 
     /// <summary>

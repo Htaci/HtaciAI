@@ -13,6 +13,16 @@ using HtaciAI.Services.Tools;
 namespace HtaciAI.Services;
 
 /// <summary>
+/// 用户在任务进行中「引导插入」的消息：在下一次请求之前并进历史。
+///
+/// <b>这不是「插进正在进行的请求」</b> —— API 是无状态的，每一轮都是一次完整的新请求，
+/// 历史全部重发，没有半边流可以半路塞东西进去。所谓引导，只是在工具循环的轮边界
+/// 把这条用户消息追加进历史，再让下一轮请求带着它发出去。
+/// 因此模型此前想过什么、做过什么调用都还在（它们本来就在历史里），思考不会丢。
+/// </summary>
+public sealed record SteerMessage(string Text, IReadOnlyList<ChatAttachment>? Attachments = null);
+
+/// <summary>
 /// 统一入口（兼容层/中间层）。对 UI 而言是唯一入口：
 /// 负责按模型解析客户端、管理 turn、编排多轮工具调用循环、统一落库。
 /// 各客户端返回统一参数，UI 无需关心底层是 OpenAI / Anthropic / Responses。
@@ -77,7 +87,8 @@ public sealed class ChatGateway
         ChatPersistSink store,
         Func<ChatMessage, ChatRoundSink> beginRound,
         CancellationToken ct,
-        string? continuedFrom = null)
+        string? continuedFrom = null,
+        Func<IReadOnlyList<SteerMessage>>? takeSteers = null)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -158,6 +169,43 @@ public sealed class ChatGateway
             // 上一轮工具刚跑完、用户这时按了停止：不要再发下一次请求。
             // 不检查的话，停止信号要等这次 HTTP 往返建连后才生效，看起来就是「点了没反应」。
             ct.ThrowIfCancellationRequested();
+
+            // 用户在任务进行中点「引导插入」：在这一轮请求之前把消息并进历史。
+            //
+            // 边界只能选在这里。上一轮的工具结果已经全部追加进 messages，此刻末尾是
+            // tool 消息；Anthropic 要求 tool_use 后面紧跟 tool_result，把用户文本插进
+            // 这两者之间，整轮请求直接 400。放在循环开头则永远是「工具结果之后」。
+            //
+            // 边界不是随时都有的：模型一口气写正文、一次工具都不调，这一轮跑完就结束了，
+            // 那时它退回成普通排队消息（下一轮再发）。
+            if (takeSteers?.Invoke() is { Count: > 0 } steers)
+            {
+                foreach (var steer in steers)
+                {
+                    var steerMsg = new ChatMessage
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        SessionId = sessionId,
+                        // 与这一轮的 assistant 消息同一个 turn：它是「这一轮中途插进来的话」，
+                        // 不是新的一轮。写成独立 turn 的话，重排历史时它会自成一个用户块落到
+                        // 整轮后面（用户看到的是「我明明在工具调用后插的，怎么跑到最后去了」），
+                        // 而它其实是在这一轮的第 N 次请求之前进去的。
+                        TurnId = aiTurnId,
+                        SequenceNumber = await ChatRepository.GetNextSequenceAsync(sessionId),
+                        Role = "user",
+                        Content = steer.Text,
+                        Metadata = steer.Attachments is { Count: > 0 }
+                            ? AttachmentJson.Serialize(steer.Attachments)
+                            : null,
+                        Status = "completed",
+                        ModelName = client.ModelName,
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    };
+                    await store.Insert(steerMsg);
+                    messages.Add(steerMsg);
+                }
+            }
 
             var assistantMsg = new ChatMessage
             {

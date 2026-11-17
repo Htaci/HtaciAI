@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -182,6 +182,12 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     private int _turnToolCount;
     private int _turnThinkingCount;
 
+    /// <summary>
+    /// 本轮已经被「引导插入」切过刀：之后的聚合卡要接在气泡后面（追加），不能置顶。
+    /// 每轮开头归位。
+    /// </summary>
+    private bool _activeSegmentAppend;
+
     /// <summary>插件插槽登记表变化的订阅。只在可见时持有。</summary>
     private IDisposable? _slotSubscription;
 
@@ -203,6 +209,10 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         _lease = lease;
         HookRuntime();
 
+        // 视图可能是重建出来的（切走标签页再切回来、缓存淘汰后重进）：排队里的消息在 runtime 上，
+        // 这里先按现状画一遍，否则回来看到的是一栏空的，好像排的全丢了。
+        OnPendingChanged();
+
         // 插件插槽：可见时才跟着登记表刷新（窗口被缓存挂着时不占这份开销）
         AttachedToVisualTree += (_, _) => HookPluginSlots();
         DetachedFromVisualTree += (_, _) => UnhookPluginSlots();
@@ -215,8 +225,16 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
 
         // 输入区（附件、粘贴、拖放、回车发送、光标处整体删占位符）全部由 ChatInputControl 自己处理，
         // 这里只接它抛出来的几件事。原因：新建页与对话页原先各有一份实现，于是附件只加在了后者身上。
-        Input.SendRequested += (_, submit) => _ = SendMessageAsync(submit.Text, submit.Attachments);
+        Input.SendRequested += (_, submit) => _ = SendMessageAsync(submit.Text, submit.Attachments, submit.Steer);
         Input.StopRequested += (_, _) => _runtime.Cancel();
+
+        // 队列那一栏的四个动作。队列本身在 runtime 里，这里只做「点到了 → 告诉 runtime」，
+        // 以及唯一一件必须由视图做的事：取消时把正文还回输入框。
+        Input.Pending.SteerRequested += item => _runtime.RequestSteer(item.Id);
+        Input.Pending.UnsteerRequested += item => _runtime.CancelSteer(item.Id);
+        Input.Pending.EditRequested += item => _runtime.BeginPendingEdit(item.Id);
+        Input.Pending.EditCommitted += (item, text2) => _ = _runtime.CommitPendingEditAsync(item.Id, text2);
+        Input.Pending.CancelRequested += item => RestorePending(item.Id);
 
         // 换模型 = 换上下文上限，占用读数要按新上限重算（用量本身取自历史，不变）
         Input.ModelSelector.SelectedModelChanged += (_, _) => RefreshContextUsage();
@@ -1130,9 +1148,37 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         }
     }
 
-    public async Task SendMessageAsync(string text, IReadOnlyList<ChatAttachment>? attachments = null)
+    public async Task SendMessageAsync(string text, IReadOnlyList<ChatAttachment>? attachments = null,
+        bool steer = false)
     {
-        if (_runtime.IsBusy || string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        // 任务在跑：不新开一轮，排进队列。
+        //
+        // 这条消息必须带上「此刻」的模型 / 思考档位 / 工具勾选：排队期间用户可能去改这些，
+        // 而这条消息是按下回车那一刻写下来的，等轮到自己时再去读界面，发的就不是他写的那条了。
+        if (_runtime.IsBusy)
+        {
+            var current = Input.ModelSelector.SelectedModel;
+            if (current is null)
+            {
+                Input.ShowHint("尚未配置模型：请到「设置 → 模型服务」添加并启用服务商与模型", InputHintKind.Fail, autoHide: false);
+                return;
+            }
+
+            var queueClient = await ResolveSendClientAsync(current);
+            if (queueClient is null) return;
+
+            var settings = new TurnSettings(current, queueClient, Input.ModelSelector.ThinkingMode,
+                Input.ToolSelector.SelectedToolIds);
+
+            // 先清输入框再入队：与正常发送同序（附件 chip 在这次 TextChanged 里被 Prune 掉），
+            // 否则消息已经排上了，框里还留着一份一模一样的正文和附件，看起来像没发出去。
+            Input.Text = "";
+
+            _runtime.Enqueue(text, attachments, settings, steer);
+            return;
+        }
 
         await WaitForHistoryAsync("发送");
 
@@ -1188,6 +1234,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         _runtime.MessageInserted += OnMessageInserted;
         _runtime.MessageUpdated += OnMessageUpdated;
         _runtime.BusyChanged += OnBusyChanged;
+        _runtime.PendingChanged += OnPendingChanged;
         _runtime.RetryScheduled += OnRetryScheduled;
         _runtime.ActivityChanged += ReportActivity;
         _runtime.TurnEnded += OnTurnEnded;
@@ -1250,6 +1297,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         _runtime.MessageInserted -= OnMessageInserted;
         _runtime.MessageUpdated -= OnMessageUpdated;
         _runtime.BusyChanged -= OnBusyChanged;
+        _runtime.PendingChanged -= OnPendingChanged;
         _runtime.RetryScheduled -= OnRetryScheduled;
         _runtime.ActivityChanged -= ReportActivity;
         _runtime.TurnEnded -= OnTurnEnded;
@@ -1459,6 +1507,31 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     /// <summary>
     /// 运行标记变化：切换输入区的发送 / 停止形态，并在本轮结束时收掉两件只在本轮有效的东西。
     /// </summary>
+    /// <summary>
+    /// 队列变了：重画输入框上方那一栏。
+    ///
+    /// 队列归 runtime，所以这个回调不只会在本窗口发消息时触发 —— 别的窗口、插件派发的轮次
+    /// 结束后的自动发送也会让队列变化。视图只按当前内容重画，不自己维护一份影子状态。
+    /// </summary>
+    private void OnPendingChanged() => Input.Pending.SetItems(_runtime.Pending, _runtime.PendingPaused);
+
+    /// <summary>
+    /// 取消一条排队消息：正文还回输入框。
+    ///
+    /// <b>输入框里已经有内容就不还</b> —— 用户正在写新东西，把一段旧文字塞进去顶掉它，
+    /// 等于替用户做了「不要你刚写的这句」的决定。这种情况下那条消息就真的丢掉了，
+    /// 但这正是「取消」该有的意思（他不是要编辑，是要撤掉）。
+    /// </summary>
+    private void RestorePending(string id)
+    {
+        if (_runtime.RemovePending(id) is not { } item) return;
+
+        if (!string.IsNullOrWhiteSpace(Input.Text)) return;
+
+        Input.Text = item.Text;
+        if (item.Attachments is { Count: > 0 } attachments) Input.AddAttachments(attachments);
+    }
+
     private void OnBusyChanged(bool running)
     {
         Input.SetRunning(running);
@@ -1820,7 +1893,14 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
 
             if (m.Role == "user")
             {
-                _turnGroups.Add((null, new List<ChatMessage> { m }));
+                // 引导插入的消息带着本轮 AI 的 turn id：它属于那一轮，得跟着那一轮一起画，
+                // 否则重排后它会变成一个独立的用户块跑到整轮后面去。
+                // 普通用户消息自带自己的 turn（与随后的 AI turn 不同），因此不会被这里收走。
+                var lastUser = _turnGroups.Count > 0 ? _turnGroups[^1] : default;
+                if (lastUser.TurnId is not null && m.TurnId is not null && lastUser.TurnId == m.TurnId)
+                    lastUser.Msgs.Add(m);
+                else
+                    _turnGroups.Add((null, new List<ChatMessage> { m }));
             }
             else if (m.Role is "assistant" or "tool" or "error")
             {
@@ -2064,6 +2144,11 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         var toolCount = 0;
         var thinkingCount = 0;
 
+        // 引导插入会把一轮切成前后两段：气泡之前一张卡、之后一张卡。
+        // _segmentStart 是当前这一段的起始下标，用来算「这一段」的用时。
+        var segmentStart = 0;
+        var split = false;
+
         // 整轮只有最后那段正文是结论（留在卡外），更早的正文都只是过程叙述，收进聚合卡里
         var lastContentIndex = -1;
         for (var i = 0; i < msgs.Count; i++)
@@ -2079,7 +2164,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
                 {
                     using (PerfTrace.Measure("     思考卡 ThinkingCard"))
                     {
-                        card ??= AttachActivityCard(host, expand: false);
+                        card ??= AttachActivityCard(host, expand: false, append: split);
                         var thinkCard = new ThinkingCard();
                         thinkCard.SetText(m.Thinking);
                         thinkCard.Show();
@@ -2099,7 +2184,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
                             host.AddBody(body);
                         else
                         {
-                            card ??= AttachActivityCard(host, expand: false);
+                            card ??= AttachActivityCard(host, expand: false, append: split);
                             host.AddNarration(body);
                         }
                     }
@@ -2109,12 +2194,28 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             {
                 using (PerfTrace.Measure("     工具卡 ToolCallCard"))
                 {
-                    card ??= AttachActivityCard(host, expand: false);
+                    card ??= AttachActivityCard(host, expand: false, append: split);
                     var toolCard = new ToolCallCard();
                     toolCard.SetData(m.ToolName ?? "工具", FindToolCallInput(m.ToolCallId), m.Content ?? "");
                     card.Steps.Children.Add(toolCard.Root);
                 }
                 toolCount++;
+            }
+            else if (m.Role == "user")
+            {
+                // 引导插入：它把这一轮切成两段。先把上一段的卡收尾，再把这个气泡放进内容流，
+                // 之后的一切（思考、工具、正文）都排在它后面、并另起一张卡。
+                // 不收尾、不换卡的话，后半段的思考会继续塞进同一张卡里 ——
+                // 那张卡在气泡上面，看起来就是「插入的消息跑到了自己触发的那段思考下面」。
+                card?.SetSectionFinished(toolCount, thinkingCount);
+                card = null;
+                toolCount = 0;
+                thinkingCount = 0;
+
+                host.AddSteerBubble(CreateSteerBubble(m));
+
+                segmentStart = i + 1;
+                split = true;
             }
             else if (ChatError.IsError(m))
             {
@@ -2127,7 +2228,9 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         }
 
         // 历史记录：聚合卡显示推算出的用时并保持折叠
-        card?.SetFinished(toolCount, thinkingCount, TurnDuration(msgs));
+        // 最后一张卡只算它自己那一段（引导插入之后的部分），前面几张在上面各自收尾了
+        card?.SetFinished(toolCount, thinkingCount,
+            TurnDuration(split ? msgs.GetRange(segmentStart, Math.Max(0, msgs.Count - segmentStart)) : msgs));
 
         // 本轮改动过的文件：排在正文之后、操作栏之前
         if (CreateFileChangesCard(msgs) is { } files)
@@ -2159,13 +2262,14 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     /// 创建并挂上一轮的空聚合卡（首次出现思考或工具调用时调用）。
     /// 实时轮出生即展开（<paramref name="expand"/> 默认 true），历史轮保持折叠。
     /// </summary>
-    private TurnActivityCard AttachActivityCard(TurnSelectionHost host, bool expand = true)
+    private TurnActivityCard AttachActivityCard(TurnSelectionHost host, bool expand = true, bool append = false)
     {
         var card = new TurnActivityCard();
         // 历史轮（没有在计时）显示「处理中」；实时轮直接带上当前耗时，避免先闪一下「处理中」
         card.SetProcessing(0, 0, ElapsedSinceTurnStart());
         if (expand) card.Expand();
-        host.SetCard(card);
+        // append：一轮被引导插入切开之后才开始的那张卡，位置必须接在气泡后面，不能置顶
+        if (append) host.AppendCard(card); else host.SetCard(card);
         return card;
     }
 
@@ -2266,6 +2370,11 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
                 sb.AppendLine("输出: " + (string.IsNullOrWhiteSpace(m.Content) ? "（无输出）" : m.Content.TrimEnd()));
                 sb.AppendLine();
             }
+            else if (m.Role == "user")
+            {
+                // 落进 turn 里的用户消息只有引导插入这一种（普通提问自成一轮）
+                sb.AppendLine("[引导] " + (m.Content ?? "").TrimEnd()).AppendLine();
+            }
             else if (ChatError.IsError(m))
             {
                 sb.AppendLine("[错误] " + (m.Content ?? "").TrimEnd()).AppendLine();
@@ -2310,7 +2419,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             return;
         }
 
-        _activeTurnCard ??= AttachActivityCard(_activeTurnHost);
+        _activeTurnCard ??= AttachActivityCard(_activeTurnHost, append: _activeSegmentAppend);
         // 卡外那段正文后面又来了工具调用，说明它只是过程叙述：先把它收进卡里，顺序正好在这次调用之前
         MoveActiveBodyToCard();
         _activeTurnCard.Steps.Children.Add(card.Root);
@@ -2326,7 +2435,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     private void MoveActiveBodyToCard()
     {
         if (_activeTurnBody is null || _activeTurnHost is null) return;
-        _activeTurnCard ??= AttachActivityCard(_activeTurnHost);
+        _activeTurnCard ??= AttachActivityCard(_activeTurnHost, append: _activeSegmentAppend);
         _activeTurnHost.MoveBodyIntoCard(_activeTurnBody);
         _activeTurnBody = null;
     }
@@ -2677,6 +2786,41 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     }
 
     /// <summary>
+    /// 引导插入的消息（用户在一轮任务中途插进来说的话）。
+    ///
+    /// 与普通用户气泡同形不同色：形状一样是因为它同样是一句用户说的话；换色是因为它
+    /// 出现在 AI 那一轮的内容区里，与前面那句独立的提问位置含义不同 ——
+    /// 薄荷绿在蓝系界面上足够分得开，又不至于像告警色那样刺眼。
+    /// 正文上方那行小字说明它是什么，避免用户翻历史时把两种位置搞混。
+    /// </summary>
+    private Control CreateSteerBubble(ChatMessage msg)
+    {
+        var block = new CustomSelectableTextBlock
+        {
+            Text = "",
+            FontSize = 14,
+            Foreground = new SolidColorBrush(Color.Parse("#1A1A2E")),
+            TextWrapping = TextWrapping.Wrap,
+            NativeSelectionEnabled = true,
+        };
+        SetUserBubbleContent(block, msg);
+
+        // 右边距给 0：顶上那句独立提问的气泡是靠 MessagesPanel 的 34 + 自己的 20 贴边的，
+        // 这里已经在 TurnSelectionHost（rootPanel 再缩 20）里面，再留 20 就会整体左移一截，
+        // 两句话的右边对不齐。上下不加 Margin，间距交给 ContentPanel 的 Spacing 统一管。
+        return new Border
+        {
+            CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(Color.Parse("#C9EED7")),
+            Padding = new Thickness(12, 10),
+            MaxWidth = 560,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(80, 0, 0, 0),
+            Child = block,
+        };
+    }
+
+    /// <summary>
     /// 用户气泡正文。正文里的附件标记（<c>[agent-file:///…]</c>）渲染成内联文件卡片
     /// （放在文本流里，所以「图片在句子的哪个位置」这个信息是可见的）。
     ///
@@ -2857,6 +3001,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
             _activeTurnBody = null;
             _turnToolCount = 0;
             _turnThinkingCount = 0;
+            _activeSegmentAppend = false;
             // 计时从请求发出算起（此刻紧接着就是本轮第一次 StreamAsync）
             _turnStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             StartTurnTimer();
@@ -2889,7 +3034,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
         // 首个思考分片到达时才建卡（此前不显示任何卡片），之后持续累积文本
         if (round.ThinkCard is null)
         {
-            _activeTurnCard ??= AttachActivityCard(round.Host);
+            _activeTurnCard ??= AttachActivityCard(round.Host, append: _activeSegmentAppend);
             round.ThinkCard = new ThinkingCard();
             round.ThinkCard.Show();
             _activeTurnCard.Steps.Children.Add(round.ThinkCard.Root);
@@ -2940,6 +3085,34 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
     /// <summary>按消息渲染：实时 user 气泡；历史加载走 RenderHistory 按 turn 分组，工具结果走 ToolCallCard。</summary>
     private void AddMessage(ChatMessage m)
     {
+        // 引导插入：落在正在进行的那一轮里，跟着内容区往后走。
+        // 此刻上一段正文还在内容区末尾，它会被推到聚合卡里去（见 MoveActiveBodyToCard），
+        // 于是这条气泡正好停在这一轮「刚跑完的那一步之后、下一步之前」。
+        if (m.TurnId is not null && m.TurnId == _activeTurnId && _activeTurnHost is not null)
+        {
+            // 气泡前面的那张卡到此为止：收尾（带上它自己那段的计数与用时），
+            // 否则后面那轮的思考会继续塞进这张卡 —— 而这张卡在气泡上面，
+            // 显示出来就成了「引导消息跑到它触发的思考下面」。
+            _activeTurnCard?.SetSectionFinished(_turnToolCount, _turnThinkingCount);
+            _activeTurnCard = null;
+            _turnToolCount = 0;
+            _turnThinkingCount = 0;
+            // 下半段的用时从这个气泡算起（上一段的耗时已经写进上一张卡了）
+            _turnStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            // 上半段那段正文就留在卡外、气泡之前，不再归任何人管：
+            // 不清掉 _activeTurnBody 的话，下一轮开始时 MoveActiveBodyToCard 会把它塞进
+            // 气泡之后的那张卡里 —— 引导消息之前的正文跑到引导消息后面去了。
+            _activeTurnBody = null;
+
+            _activeSegmentAppend = true;
+
+            _activeTurnHost.AddSteerBubble(CreateSteerBubble(m));
+            BringStatusRowToEnd();
+            ScrollToEnd();
+            return;
+        }
+
         switch (m.Role)
         {
             case "user":
