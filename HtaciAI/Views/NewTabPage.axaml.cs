@@ -247,7 +247,7 @@ public partial class NewTabPage : UserControl
         {
             Title = "知识库",
             Description = "随手写笔记，导入文件做检索；AI 在会话里按需查它",
-            IconGlyph = "\uF8FE",                         // Book（与输入框知识库选择器一致）
+            IconGlyph = "\uF2F2",                         // Collections（与输入框知识库选择器一致）
             Tags = new[] { "Knowledge", "笔记", "向量" },
             MainColor = Color.FromArgb(0xFF, 0x0E, 0xA5, 0xE9),
             LightBg = Color.FromArgb(0xFF, 0xEC, 0xF8, 0xFE),

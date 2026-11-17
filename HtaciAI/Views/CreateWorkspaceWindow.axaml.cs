@@ -8,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using HtaciAI.Data;
 using HtaciAI.Models;
 using HtaciAI.Services;
 using HtaciAI.Services.Skills;
@@ -25,6 +26,9 @@ public partial class CreateWorkspaceWindow : Window
 
     /// <summary>默认模型下拉项；<see cref="Id"/> 为 null 表示不指定。</summary>
     private sealed record ModelOption(string Label, string? Id);
+
+    /// <summary>默认知识库下拉项；<see cref="Id"/> 为 null 表示不指定。</summary>
+    private sealed record KbOption(string Label, string? Id);
 
     private static readonly PermOption[] PermissionModes =
     {
@@ -79,6 +83,7 @@ public partial class CreateWorkspaceWindow : Window
             ApplyNewWorkspaceDefaults();
 
         _ = LoadModelOptionsAsync();
+        _ = LoadKbOptionsAsync();
     }
 
     /// <summary>
@@ -104,6 +109,32 @@ public partial class CreateWorkspaceWindow : Window
         var wanted = _editing?.DefaultModelId;
         var idx = string.IsNullOrWhiteSpace(wanted) ? -1 : options.FindIndex(o => o.Id == wanted);
         ModelCombo.SelectedIndex = idx < 0 ? 0 : idx;   // 模型已被删除时退回「不指定」
+    }
+
+    /// <summary>
+    /// 拉取知识库列表填「默认知识库」下拉框，首项是「不指定」。
+    /// 与模型下拉同样在异步路径里回填，构造函数拿不到结果。
+    /// 已删除的知识库同样退回「不指定」—— 留着悬空 id 只会让新会话查不到东西。
+    /// </summary>
+    private async Task LoadKbOptionsAsync()
+    {
+        var options = new List<KbOption> { new("不指定（用默认知识库）", null) };
+        try
+        {
+            foreach (var kb in await KnowledgeBaseRepository.GetAllAsync())
+                options.Add(new KbOption(kb.Name, kb.Id));
+        }
+        catch
+        {
+            // 数据库未就绪时只留「不指定」
+        }
+
+        KbCombo.ItemsSource = options;
+        KbCombo.DisplayMemberBinding = new Binding(nameof(KbOption.Label));
+
+        var wanted = _editing?.DefaultKnowledgeBaseId;
+        var idx = string.IsNullOrWhiteSpace(wanted) ? -1 : options.FindIndex(o => o.Id == wanted);
+        KbCombo.SelectedIndex = idx < 0 ? 0 : idx;
     }
 
     /// <summary>
@@ -144,8 +175,10 @@ public partial class CreateWorkspaceWindow : Window
     {
         ToolsHost.Children.Clear();
         if (_tools.Count == 0) { ToolsHost.Children.Add(EmptyHint("暂无可用工具")); return; }
+        // 显示名而不是调用名：下拉里排的是给人看的，task / create_tool 那种 snake_case
+        // 是写给模型看的。脚本 / MCP / 插件工具没有别名，Display 会回退到 Name。
         foreach (var t in _tools)
-            ToolsHost.Children.Add(new CheckBox { Content = t.Name, Tag = t.Id, FontSize = 13 });
+            ToolsHost.Children.Add(new CheckBox { Content = t.Display, Tag = t.Id, FontSize = 13 });
     }
 
     private void BuildSkillChecks()
@@ -215,6 +248,7 @@ public partial class CreateWorkspaceWindow : Window
             .ToList() ?? new();
         ws.ToolPermissionMode = (PermissionCombo.SelectedItem as PermOption)?.Mode ?? PermissionMode.Normal;
         ws.DefaultModelId = (ModelCombo.SelectedItem as ModelOption)?.Id;
+        ws.DefaultKnowledgeBaseId = (KbCombo.SelectedItem as KbOption)?.Id;
 
         Result = ws;
         Close();

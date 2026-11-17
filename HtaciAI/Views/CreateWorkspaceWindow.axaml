@@ -156,6 +156,21 @@
                                TextWrapping="Wrap"/>
                 </StackPanel>
 
+                <!-- 默认知识库 -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="默认知识库"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#374151"/>
+                    <ComboBox x:Name="KbCombo"
+                              Height="34"
+                              CornerRadius="6"/>
+                    <TextBlock Text="不指定时，该工作空间的新会话用「设置 → 默认配置」里的默认知识库"
+                               FontSize="11"
+                               Foreground="#6B7280"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
                 <!-- MCP -->
                 <StackPanel Spacing="6">
                     <TextBlock Text="MCP 服务器 id（每行一个，预留）"

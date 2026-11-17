@@ -200,7 +200,7 @@ public partial class KnowledgeBasePage : UserControl
 
         var icon = new TextBlock
         {
-            Text = "\uF8FE",
+            Text = "\uF2F2",
             FontFamily = AppFonts.Icons,
             FontSize = 14,
             Foreground = isActive ? Accent : TextFaint,
