@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Markup.Xaml;
@@ -541,7 +541,15 @@ public class MarkdownStreamParser
         if (_previewChips.Remove(info.Path, out var reusable))
             chip = reusable;
 
-        chip ??= new AttachmentChip(info, null, compact: true, openOnClick: true);
+        if (chip is null)
+        {
+            chip = new AttachmentChip(info, null, compact: true, openOnClick: true);
+
+            // 内联卡片按行内控件排：卡片高 19、字面高 14，底边贴基线会让它比同行的字
+            // 高出一截（用户气泡那边同理，见 ConversationView.CreateBubbleChip）。
+            // 平移只改绘制、不改行高，正文不会被撑高。
+            chip.RenderTransform = new TranslateTransform(0, 2.5);
+        }
 
         _buildingChips?.TryAdd(info.Path, chip);
         return chip;

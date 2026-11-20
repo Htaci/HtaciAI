@@ -59,6 +59,20 @@ public partial class KnowledgeBaseSelectorControl : UserControl
         UpdateLabel();
     }
 
+    /// <summary>
+    /// 由代码代替用户选一次：同样广播 <see cref="SelectionChanged"/>，好让宿主的落库通路照常走。
+    ///
+    /// 套用角色时用这个而不是 <see cref="SetSelected"/> —— 套用出来的知识库属于这个会话，
+    /// 不落库的话切走再回来就丢了。
+    /// </summary>
+    public void SelectAsUser(string? libraryId)
+    {
+        SelectedLibraryId = libraryId ?? "";
+        RebuildMenuIfChanged();
+        UpdateLabel();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     private void Select(string libraryId)
     {
         if (SelectedLibraryId == libraryId) return;
@@ -81,9 +95,18 @@ public partial class KnowledgeBaseSelectorControl : UserControl
         _lastSignature = Signature();
         if (KbBtn.Flyout is not MenuFlyout menu) return;
 
-        var items = menu.Items;
-        items.Clear();
+        menu.Items.Clear();
+        FillMenu(menu.Items);
+    }
 
+    /// <summary>
+    /// 把「不指定 / 各知识库」这一组单选项装配进任意菜单集合。
+    ///
+    /// 分成公开方法是因为菜单有两处：控件自己的按钮，以及输入框的「更多」菜单里那个子菜单。
+    /// 建的是新实例 —— 一个 <see cref="MenuItem"/> 只能挂在一个父级下。
+    /// </summary>
+    public void FillMenu(ItemCollection items)
+    {
         var none = new MenuItem
         {
             Header = "不指定",

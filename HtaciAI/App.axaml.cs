@@ -9,12 +9,14 @@ using System;
 using System.Threading.Tasks;
 using Avalonia.Threading;
 using HtaciAI.Data;
+using HtaciAI.Services.Agents;
 using HtaciAI.Services.Mcp;
 using HtaciAI.Services.Network;
 using HtaciAI.Services.Plugins;
 using HtaciAI.Services.Skills;
 using HtaciAI.Services.Storage;
 using HtaciAI.Services.Subagents;
+using HtaciAI.Services.Tasks;
 using HtaciAI.Services.Tools;
 using HtaciAI.Views;
 
@@ -65,6 +67,9 @@ public partial class App : Application
         // 子 Agent 预设：放在工具注册表之后（预设里存的是工具 id，要先有工具才能解析）
         SubagentPresets.EnsureSeededAsync().GetAwaiter().GetResult();
 
+        // 角色预设：同上，两个内置角色（对话 / 任务）也要按工具名解析成 id
+        RolePresets.EnsureSeededAsync().GetAwaiter().GetResult();
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new MainWindow();
@@ -82,6 +87,10 @@ public partial class App : Application
             // 插件最后加载：它可能要用数据库、工具/技能注册表、主窗口。
             // 用 Post 而不是直接 await：让首帧先画出来，插件初始化慢不会把窗口卡成白屏。
             Dispatcher.UIThread.Post(() => _ = PluginManager.Instance.InitializeAsync());
+
+            // 定时任务调度器：与插件同一批 Post。调度器用 DispatcherTimer、跑任务还要借会话运行时，
+            // 两者都要求在 UI 线程上，所以不能在这里直接 Start。
+            Dispatcher.UIThread.Post(() => TaskClock.Shared.Start());
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -99,6 +108,17 @@ public partial class App : Application
         if (_shutdownStarted) return;
         _shutdownStarted = true;
         e.Cancel = true;
+
+        // 先停调度：已经在跑的那一轮会按「程序关闭，被中断」收尾，不再往里塞新任务。
+        // 它不 await，因为这一轮可能正在等 API 回应 —— 不能让关窗口卡在那儿。
+        try
+        {
+            TaskClock.Shared.Stop();
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Host("退出时停止定时任务调度失败：" + ex.Message, ex);
+        }
 
         try
         {

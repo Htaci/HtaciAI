@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -128,11 +128,19 @@ public partial class MainWindow : Window
             NotificationToast.DismissFor(sessionId);
     }
 
-    /// <summary>跳到某个会话：切到（没有就先用已有的）智能对话标签页，把窗口叫到前台，再打开会话。</summary>
+    /// <summary>
+    /// 跳到某个会话：切到（没有就新建一个）智能对话标签页，把窗口叫到前台，再打开会话。
+    /// <b>没有会话页就新建一个</b>：定时任务的运行历史点开时必须能打开，
+    /// 不能因为用户手上没有「智能对话」标签就什么都不发生。
+    /// </summary>
     private async Task JumpToSessionAsync(string sessionId)
     {
         var index = _tabs.FindIndex(t => t.Content is ConversationPage);
-        if (index < 0) return;
+        if (index < 0)
+        {
+            AddTab("智能对话", new ConversationPage());
+            index = _tabs.Count - 1;
+        }
 
         SelectTab(index);
         BringToFront();
@@ -306,13 +314,51 @@ public partial class MainWindow : Window
         var newTabPage = new NewTabPage();
         newTabPage.SmartChatSelected += OnConversationSelected;
         newTabPage.ToolsSelected += OnToolsSelected;
+        newTabPage.AssistantsSelected += OnAssistantsSelected;
         newTabPage.SkillsSelected += OnSkillsSelected;
         newTabPage.PluginsSelected += OnPluginsSelected;
         newTabPage.McpSelected += OnMcpSelected;
         newTabPage.StatsSelected += OnStatsSelected;
         newTabPage.SubagentsSelected += OnSubagentsSelected;
         newTabPage.KnowledgeBaseSelected += OnKnowledgeBaseSelected;
+        newTabPage.TasksSelected += OnTasksSelected;
         AddTab("新标签页", newTabPage);
+    }
+
+    /// <summary>
+    /// 新建页的「助手」卡片：换成助手配置页（同一页的 role 模式）。
+    /// </summary>
+    private void OnAssistantsSelected(object? sender, System.EventArgs e)
+    {
+        if (sender is NewTabPage newTabPage)
+        {
+            newTabPage.AssistantsSelected -= OnAssistantsSelected;
+
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
+            if (index < 0) return;
+
+            ReplaceTabContent(index, new AgentsPage(HtaciAI.Models.Agent.KindRole), "助手");
+        }
+    }
+
+    /// <summary>
+    /// 新建页的「自动化」卡片：换成定时任务页。
+    /// 页内点运行历史要打开那一轮会话，所以顺手把「打开会话」接回本窗口 —— 与点系统提醒同一条路。
+    /// </summary>
+    private void OnTasksSelected(object? sender, System.EventArgs e)
+    {
+        if (sender is NewTabPage newTabPage)
+        {
+            newTabPage.TasksSelected -= OnTasksSelected;
+
+            var index = _tabs.FindIndex(t => ReferenceEquals(t.Content, newTabPage));
+            if (index < 0) return;
+
+            var page = new TasksPage();
+            page.OpenSessionRequested += sessionId => _ = JumpToSessionAsync(sessionId);
+
+            ReplaceTabContent(index, page, "定时任务");
+        }
     }
 
     /// <summary>新建页的「智能对话」卡片：把占位页替换为统一会话页。</summary>

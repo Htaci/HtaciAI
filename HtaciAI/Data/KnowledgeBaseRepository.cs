@@ -244,6 +244,11 @@ public static class KnowledgeBaseRepository
                 note.Id = r.GetString(0);
                 note.CreatedAt = r.GetInt64(1);
             }
+            else
+            {
+                // 新笔记必须自己造 id：主键是 TEXT，留空串会让第一条之后的所有新笔记都撞主键。
+                note.Id = NewId();
+            }
         }
 
         if (note.CreatedAt == 0) note.CreatedAt = now;

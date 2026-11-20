@@ -145,15 +145,28 @@ public partial class McpSelectorControl : UserControl
         _lastSignature = Signature();
         // 通过按钮 Flyout 访问菜单，避免 Flyout 上 x:Name 字段的编译歧义（与 ModelSelector 相同的已知坑）
         if (RootBtn.Flyout is not MenuFlyout menu) return;
-        var items = menu.Items;
-        items.Clear();
+        menu.Items.Clear();
         _items.Clear();
+        _items.AddRange(FillMenu(menu.Items));
+        UpdateBadge();
+    }
+
+    /// <summary>
+    /// 把「不使用 / 各服务」这一组勾选项装配进任意菜单集合，返回其中可切换勾选的项。
+    ///
+    /// 分成公开方法是因为菜单有两处：控件自己的按钮，以及输入框「更多」菜单里的子菜单。
+    /// 建的是新实例 —— 一个 <see cref="MenuItem"/> 只能挂在一个父级下，两处不能共用控件。
+    /// 外部的那些项不进 <see cref="_items"/>：它们每次展开菜单都会整批重建，
+    /// 不需要跟着控件内部的勾选状态刷新。
+    /// </summary>
+    public List<MenuItem> FillMenu(ItemCollection items)
+    {
+        var toggles = new List<MenuItem>();
 
         if (_servers.Count == 0)
         {
             items.Add(new MenuItem { Header = "暂无 MCP 服务", IsEnabled = false });
-            UpdateBadge();
-            return;
+            return toggles;
         }
 
         var clear = new MenuItem { Header = "不使用任何 MCP 服务" };
@@ -174,11 +187,11 @@ public partial class McpSelectorControl : UserControl
                 Tag = id,
             };
             mi.Click += (_, _) => Toggle(id);
-            _items.Add(mi);
+            toggles.Add(mi);
             items.Add(mi);
         }
 
-        UpdateBadge();
+        return toggles;
     }
 
     private void Toggle(string id)

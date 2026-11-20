@@ -38,6 +38,10 @@ internal static class SessionProfileResolver
         if (await SubagentSessionRepository.GetAsync(sessionId) is { IsDeleted: false } subagent)
             return (SessionViewCache.KeyForSubagent(sessionId), new SubagentProfile(subagent));
 
+        // 定时任务运行 id 带 task-run- 前缀：一次运行就是一个会话，点系统提醒要能直接打开它
+        if (await TaskRepository.GetRunAsync(sessionId) is { IsDeleted: false } run)
+            return (SessionViewCache.KeyForTaskRun(sessionId), new TaskProfile(run));
+
         if (await WorkspaceSessionRepository.GetAsync(sessionId) is not { } session)
             return null;
 

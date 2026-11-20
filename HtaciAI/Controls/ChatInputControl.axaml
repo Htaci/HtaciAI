@@ -151,11 +151,12 @@
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"/>
                         </Button>
+                        <!-- 角色：这一轮用哪份「AI 该怎么干活」的配置。放在最前面是因为
+                             它是一次性的批量选择 —— 选中之后会把模型 / 工具 / 技能 / MCP / 知识库
+                             一起套到后面那排选择器上，用户再自己改。 -->
+                        <controls:RoleSelectorControl x:Name="RolePicker" Margin="5"/>
                         <controls:ToolSelectorControl x:Name="ToolPicker" Margin="5"/>
                         <controls:SkillSelectorControl x:Name="SkillPicker" Margin="5"/>
-                        <controls:McpSelectorControl x:Name="McpPicker" Margin="5"/>
-                        <!-- 知识库：这个会话查哪个库。按钮上直接写库名，与模型选择器同一形态 -->
-                        <controls:KnowledgeBaseSelectorControl x:Name="KbPicker" Margin="5"/>
                         <!-- 权限模式（严格/普通/宽松/自由）：文字写在按钮上，不再只给一个图标 -->
                         <Button x:Name="PermModeBtn"
                                 Height="28"
@@ -225,6 +226,15 @@
                                    VerticalAlignment="Center"
                                    Margin="2,0,0,0"
                                    IsVisible="False"/>
+                        <!-- MCP 与知识库不再占工具栏的一格：两者都是「一个会话很少改一次」的设置，
+                             放进来只是把常改的东西（工具 / 技能 / 权限）挤到后面。
+                             现在它们改成「更多」菜单里的两个子菜单 —— 但控件本身保留：
+                             清单维护、勾选状态、RefreshRequested / SelectionChanged 都在控件里，
+                             隐藏的按钮不参与布局，宿主（对话页 / 新建页）的接线因此一行都不用改。 -->
+                        <StackPanel x:Name="HiddenSelectors" IsVisible="False">
+                            <controls:McpSelectorControl x:Name="McpPicker"/>
+                            <controls:KnowledgeBaseSelectorControl x:Name="KbPicker"/>
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </Grid>

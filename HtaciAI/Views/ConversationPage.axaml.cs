@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -533,7 +533,19 @@ public partial class ConversationPage : UserControl
             return;
         }
 
-        if (await WorkspaceSessionRepository.GetAsync(sessionId) is not { } session) return;
+        if (await WorkspaceSessionRepository.GetAsync(sessionId) is not { } session)
+        {
+            // 其余会话类型（子 Agent 派发、定时任务的一次运行）不在左侧列表里，但同样要能打开：
+            // 从系统提醒点进来、从任务页的运行历史点进来走的都是这里。
+            // 解析入口只有 SessionProfileResolver 一处，直接借它的结果与缓存键。
+            if (await SessionProfileResolver.ResolveWithKeyAsync(sessionId) is { } resolved)
+            {
+                _activeSessionId = sessionId;
+                _activeWorkspaceId = null;
+                await ShowSessionViewAsync(resolved.Key, () => resolved.Profile);
+            }
+            return;
+        }
 
         var ws = _workspaces.FirstOrDefault(w => w.Id == session.WorkspaceId)
                  ?? await WorkspaceRepository.GetAsync(session.WorkspaceId);

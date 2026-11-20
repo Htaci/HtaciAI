@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using HtaciAI.Services.Storage;
@@ -285,6 +285,144 @@ public static class DatabaseService
             version = 32;
             SetVersion(conn, version);
         }
+
+        if (version < 33)
+        {
+            RunMigrationV33(conn);
+            version = 33;
+            SetVersion(conn, version);
+        }
+
+        if (version < 34)
+        {
+            RunMigrationV34(conn);
+            version = 34;
+            SetVersion(conn, version);
+        }
+    }
+
+    /// <summary>
+    /// 智能体定义（agents）扩成「角色 + 子 Agent」共用：新增 kind 分类列与角色的默认配置列。
+    ///
+    /// <b>为什么合一</b>：角色与子 Agent 的字段完全一样（提示词 + 工具 + 技能 + MCP），
+    /// 差别只在「谁选中它」—— 角色由用户在会话里选，子 Agent 由模型用 task 派发。
+    /// 单开一张表会让两边的编辑界面、seed、仓储全部重复一份。
+    ///
+    /// <b>历史行一律是 subagent</b>：V9 建表时这张表只服务子 Agent，默认值直接给 'subagent'，
+    /// 所以老数据不用回填。角色是新增的一类，只在新建时显式写 'role'。
+    /// </summary>
+    private static void RunMigrationV34(SqliteConnection conn)
+    {
+        const string schema = """
+            ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'subagent';
+            ALTER TABLE agents ADD COLUMN model TEXT;
+            ALTER TABLE agents ADD COLUMN kb_id TEXT;
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 定时任务：新建 task_defs（定义）与 task_runs（每次运行 = 一个会话）两张表。
+    ///
+    /// <b>为什么分成两张表</b>：定义是「每周一 08:30 跑这件事」，运行是「上周一那次跑成什么样」。
+    /// 前者只有一条、天天被调度器扫；后者会无限增长、只在点开时才看。合成一张表要么调度器
+    /// 每秒扫一遍历史，要么历史被反复覆盖。
+    ///
+    /// <b>task_runs 与 subagent_sessions 同构</b>：一行就是一个会话，消息照旧写 chat_message
+    /// （多态关联、无外键），上下文压缩、工具调用修复、持久化全部复用现有那套 —— 解析入口仍只有
+    /// <c>SessionProfileResolver</c> 一处，会话列表那些整表扫描一行都不用改。
+    ///
+    /// <b>下次触发时间落库</b>：程序关掉期间错过的触发靠 <c>next_run_at</c> 判断，
+    /// 调度器不必回头翻历史；一次性任务跑完后把它置 NULL 即自然停用。
+    /// </summary>
+    private static void RunMigrationV33(SqliteConnection conn)
+    {
+        const string schema = """
+            CREATE TABLE IF NOT EXISTS task_defs (
+                id                TEXT PRIMARY KEY,
+                title             TEXT NOT NULL,
+                prompt            TEXT NOT NULL,
+                base_directory    TEXT,
+                model             TEXT,
+                thinking          INTEGER NOT NULL DEFAULT 1,
+                enabled_tool_ids  TEXT,
+                enabled_skills    TEXT,
+                mcp_servers       TEXT,
+                permission_mode   INTEGER NOT NULL DEFAULT 1,
+                max_turns         INTEGER NOT NULL DEFAULT 20,
+                trigger_kind      TEXT NOT NULL DEFAULT 'daily'
+                                  CHECK (trigger_kind IN ('once','daily','weekly','monthly')),
+                trigger_days      TEXT,
+                trigger_time      TEXT,
+                once_at           INTEGER,
+                next_run_at       INTEGER,
+                last_run_at       INTEGER,
+                is_enabled        INTEGER NOT NULL DEFAULT 1,
+                failure_count     INTEGER NOT NULL DEFAULT 0,
+                is_deleted        INTEGER NOT NULL DEFAULT 0,
+                deleted_at        INTEGER,
+                created_at        INTEGER NOT NULL,
+                updated_at        INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_task_defs_due ON task_defs(is_enabled, next_run_at);
+
+            CREATE TABLE IF NOT EXISTS task_runs (
+                id                TEXT PRIMARY KEY,
+                task_id           TEXT NOT NULL,
+                title             TEXT NOT NULL,
+                model             TEXT,
+                thinking          INTEGER NOT NULL DEFAULT 1,
+                session_prompt    TEXT,
+                base_directory    TEXT,
+                enabled_tool_ids  TEXT,
+                enabled_skills    TEXT,
+                mcp_servers       TEXT,
+                permission_mode   INTEGER NOT NULL DEFAULT 1,
+                max_turns         INTEGER NOT NULL DEFAULT 20,
+                turn_count        INTEGER NOT NULL DEFAULT 0,
+                status            TEXT NOT NULL DEFAULT 'running'
+                                  CHECK (status IN ('running','ok','failed','skipped')),
+                error             TEXT,
+                summary           TEXT,
+                last_message_at   INTEGER,
+                finished_at       INTEGER,
+                is_deleted        INTEGER NOT NULL DEFAULT 0,
+                deleted_at        INTEGER,
+                created_at        INTEGER NOT NULL,
+                updated_at        INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id, created_at DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_task_run_delete_chat
+            AFTER DELETE ON task_runs
+            BEGIN
+                DELETE FROM chat_message WHERE session_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_task_orphan_runs
+            AFTER DELETE ON task_defs
+            BEGIN
+                DELETE FROM task_runs WHERE task_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_task_hide_runs
+            AFTER UPDATE OF is_deleted ON task_defs
+            WHEN NEW.is_deleted = 1 AND OLD.is_deleted = 0
+            BEGIN
+                UPDATE task_runs
+                SET is_deleted = 1, deleted_at = COALESCE(NEW.deleted_at, OLD.deleted_at)
+                WHERE task_id = NEW.id AND is_deleted = 0;
+            END;
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = schema;
+        cmd.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -752,7 +890,10 @@ public static class DatabaseService
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>自定义智能体蓝图：agents 表（系统提示词 + 默认工具/技能/MCP，均为 JSON 数组列）。</summary>
+    /// <summary>
+    /// 智能体定义：agents 表（系统提示词 + 默认工具/技能/MCP，均为 JSON 数组列）。
+    /// 建表时只服务子 Agent，V34 起加 kind 列与角色的默认配置列，一张表同时装「角色」和「子 Agent」。
+    /// </summary>
     private static void RunMigrationV9(SqliteConnection conn)
     {
         const string schema = """

@@ -15,7 +15,8 @@
                   Margin="12,16">
                 <Grid Grid.Row="0"
                       ColumnDefinitions="*,Auto">
-                    <TextBlock Text="子 Agent"
+                    <TextBlock x:Name="ListTitle"
+                               Text="子 Agent"
                                FontSize="15"
                                FontWeight="SemiBold"
                                Foreground="#1A1A2E"
@@ -180,9 +181,41 @@
                                  Padding="12,10"
                                  BorderBrush="#E5E7EB"/>
                     </StackPanel>
+                    <!-- 角色默认配置：只在角色模式可见。会话创建时继承，之后仍可在会话里改。 -->
+                    <StackPanel x:Name="RoleDefaultsPanel"
+                                Spacing="16"
+                                IsVisible="False">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="默认模型（新会话用这个模型）"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="#374151"/>
+                            <ComboBox x:Name="ModelCombo"
+                                      Height="34"
+                                      CornerRadius="6"/>
+                            <TextBlock Text="不指定时，新会话用「上次使用的模型」"
+                                       FontSize="11"
+                                       Foreground="#6B7280"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="默认知识库（新会话默认挂这个库）"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="#374151"/>
+                            <ComboBox x:Name="KbCombo"
+                                      Height="34"
+                                      CornerRadius="6"/>
+                            <TextBlock Text="不指定时不给新会话挂知识库，发送时仍可临时选"
+                                       FontSize="11"
+                                       Foreground="#6B7280"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </StackPanel>
                     <!-- 系统提示词 -->
                     <StackPanel Spacing="6">
-                        <TextBlock Text="系统提示词（这个子 Agent 的角色与输出要求，派发时注入它的会话）"
+                        <TextBlock x:Name="PromptLabel"
+                                   Text="系统提示词（这个子 Agent 的角色与输出要求，派发时注入它的会话）"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#374151"/>
@@ -198,7 +231,8 @@
                     </StackPanel>
                     <!-- 默认启用的工具 -->
                     <StackPanel Spacing="6">
-                        <TextBlock Text="可用工具（留空 = 继承父会话全部；实际范围还要与父会话取交集，task 永远剔除）"
+                        <TextBlock x:Name="ToolsLabel"
+                                   Text="可用工具（留空 = 继承父会话全部；实际范围还要与父会话取交集，task 永远剔除）"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#374151"/>
@@ -217,7 +251,8 @@
                     </StackPanel>
                     <!-- 默认启用的技能 -->
                     <StackPanel Spacing="6">
-                        <TextBlock Text="可用技能（留空 = 继承父会话允许的全部；技能全文不会被复制进子会话）"
+                        <TextBlock x:Name="SkillsLabel"
+                                   Text="可用技能（留空 = 继承父会话允许的全部；技能全文不会被复制进子会话）"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#374151"/>
@@ -236,7 +271,8 @@
                     </StackPanel>
                     <!-- MCP -->
                     <StackPanel Spacing="6">
-                        <TextBlock Text="MCP 服务器 id（每行一个，留空 = 继承父会话；只会收窄不会放开）"
+                        <TextBlock x:Name="McpLabel"
+                                   Text="MCP 服务器 id（每行一个，留空 = 继承父会话；只会收窄不会放开）"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#374151"/>

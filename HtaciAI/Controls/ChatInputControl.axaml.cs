@@ -133,8 +133,9 @@ public partial class ChatInputControl : UserControl
 
         LoadTools();
         SetupPermissionMode();
+        SetupMoreMenu();
 
-        // 三个选择器都在菜单打开时重读一次各自的清单 —— 工具 / 技能 / MCP 服务是用户随时
+        // 四个选择器都在菜单打开时重读一次各自的清单 —— 工具 / 技能 / MCP 服务 / 角色是用户随时
         // 会在设置页里改的东西，只在构造时注入一次的话，改完回到会话还是旧列表
         // （模型选择器早就是这么做的，见它自己的 RefreshRequested）。
         // 接在这里而不是各个宿主里：新建页与对话页共用这一个控件，接一处两边都对。
@@ -142,6 +143,82 @@ public partial class ChatInputControl : UserControl
         SkillSelector.RefreshRequested += (_, _) => LoadSkills();
         McpSelector.RefreshRequested += (_, _) => _ = LoadMcpServersAsync();
         KbSelector.RefreshRequested += (_, _) => _ = LoadKnowledgeBasesAsync();
+        RoleSelector.RefreshRequested += (_, _) => _ = LoadRolesAsync();
+        RoleSelector.SelectionChanged += (_, _) => OnRoleSelected();
+
+        // 初次灌一次角色清单：不灌的话按钮上只有「角色」两个字，用户不知道有哪些可选的
+        _ = LoadRolesAsync();
+    }
+
+    // ============================================================
+    // 角色
+    // ============================================================
+
+    /// <summary>
+    /// 角色选中后已经把这套默认值套到下面那排选择器上了。
+    ///
+    /// 宿主不需要为落库做任何事：工具 / 技能 / MCP / 知识库的选择变化各自都有
+    /// SelectionChanged → 落库的通路，套用走的是同一批 setter，所以自然就存下去了。
+    /// 这个事件只是给「想在套用之后再干点什么」的宿主留的。
+    /// </summary>
+    public event EventHandler<Agent>? RoleApplied;
+
+    /// <summary>把「助手」页里定义为角色的那些对象灌进选择器（只看启用的）。</summary>
+    private async Task LoadRolesAsync()
+    {
+        try
+        {
+            var all = await AgentRepository.GetAllAsync();
+            RoleSelector.Roles = all
+                .Where(a => a.Kind == Agent.KindRole && a.IsEnabled)
+                .OrderBy(a => a.Name, StringComparer.CurrentCulture)
+                .ToList();
+        }
+        catch
+        {
+            // 数据库未就绪时保持空列表，选择器显示「角色」
+        }
+    }
+
+    private void OnRoleSelected()
+    {
+        if (RoleSelector.SelectedRole is not { } role) return;
+        ApplyRole(role);
+        RoleApplied?.Invoke(this, role);
+    }
+
+    /// <summary>
+    /// 把角色的默认配置套到当前选择器上。按值套用，不锁定 —— 套完之后用户改哪一项都是
+    /// 会话自己的事，角色不再参与。
+    ///
+    /// 三处刻意的不对称，都是既有语义决定的：
+    /// <list type="bullet">
+    ///   <item><b>工具</b>：角色的空集合表示「全部工具」（见 <c>RolePresets</c> 的「任务」档），
+    ///         而工具选择器里空集合是「一个都不开」—— 所以这里要显式展开成全部工具的 id。</item>
+    ///   <item><b>技能</b>：空集合就是「这个角色不管技能」，保持用户当前的勾选不动。
+    ///         清空它没有道理，那两个内置角色也都没带技能。</item>
+    ///   <item><b>模型</b>：角色没指定模型时不动，那个选择器上可能已经有用户选好的。</item>
+    /// </list>
+    /// MCP 与知识库则按值套：它们是「这个会话挂哪份数据源」，角色说了算，空就是不挂。
+    /// </summary>
+    private void ApplyRole(Agent role)
+    {
+        if (!string.IsNullOrWhiteSpace(role.Model)
+            && ModelSelector.Models?.FirstOrDefault(m => m.ModelName == role.Model) is { } model)
+        {
+            ModelSelector.SelectedModel = model;
+        }
+
+        ToolSelector.SelectedToolIds = role.EnabledToolIds.Count > 0
+            ? role.EnabledToolIds.ToList()
+            : ToolRegistry.Instance.GetEnabled().Select(t => t.Id).ToList();
+
+        if (role.EnabledSkills.Count > 0)
+            SkillSelector.SelectedSkills = role.EnabledSkills.ToList();
+
+        McpSelector.SelectedServerIds = role.McpServers.ToList();
+
+        KbSelector.SelectAsUser(role.KnowledgeBaseId);
     }
 
     // ============================================================
@@ -263,6 +340,7 @@ public partial class ChatInputControl : UserControl
     // 加个前缀，改动面小、风险低。XAML 里的字段名（ModelPicker 等）刻意与属性名错开，
     // 否则生成的字段会与本属性同名冲突。
     public ModelSelectorControl ModelSelector => ModelPicker;
+    public RoleSelectorControl RoleSelector => RolePicker;
     public ToolSelectorControl ToolSelector => ToolPicker;
     public SkillSelectorControl SkillSelector => SkillPicker;
     public McpSelectorControl McpSelector => McpPicker;
@@ -410,8 +488,10 @@ public partial class ChatInputControl : UserControl
     /// 新增一个菜单项并挂上触发动作。
     ///
     /// 菜单（<see cref="MenuFlyout"/>）在这里按需装配，而不是写进 XAML：Flyout 内部的元素
-    /// 不在本控件的命名域里，给它的项写 x:Name 拿不到字段。宿主一个项都不注入时按钮保持无菜单，
-    /// 点它不会有任何反应（新建页就是这种情况 —— 它没有历史可压）。
+    /// 不在本控件的命名域里，给它的项写 x:Name 拿不到字段。
+    ///
+    /// 注入项排在 MCP / 知识库那两个子菜单之后（见 <see cref="SetupMoreMenu"/>）：那些是
+    /// 控件自己就有的内容，宿主注入的是「本页才知道能不能用」的动作（压缩上下文）。
     /// </summary>
     public void AddMoreItem(string header, Action onClick)
     {
@@ -420,12 +500,63 @@ public partial class ChatInputControl : UserControl
         MoreItems.Add(item);
 
         MoreMenu.Items.Add(item);
+        _moreHostSeparator.IsVisible = true;
         MoreBtn.Flyout = MoreMenu;
         ToolTip.SetTip(MoreBtn, "更多功能");
     }
 
     /// <summary>「更多功能」的菜单，随第一个注入项一起挂到按钮上。</summary>
     private MenuFlyout MoreMenu { get; } = new MenuFlyout();
+
+    /// <summary>「更多」里的 MCP 服务子菜单。</summary>
+    private readonly MenuItem _mcpMoreItem = new() { Header = "MCP 服务" };
+
+    /// <summary>「更多」里的知识库子菜单。</summary>
+    private readonly MenuItem _kbMoreItem = new() { Header = "知识库" };
+
+    /// <summary>把宿主注入项与控件自带项隔开的那条线；没有注入项时也不显示。</summary>
+    private readonly Separator _moreHostSeparator = new() { IsVisible = false };
+
+    /// <summary>
+    /// 装配「更多」菜单：控件自带的两项（MCP / 知识库）常常有内容，所以这个按钮从构造起
+    /// 就有菜单，不再是「等宿主注入第一项才出现」。
+    ///
+    /// 子菜单的内容每次展开时重建：清单是用户随时会在设置页改的东西，只在构造时灌一次的话，
+    /// 改完回到会话还是旧列表（与工具 / 技能选择器同一个理由）。
+    /// </summary>
+    private void SetupMoreMenu()
+    {
+        MoreMenu.Items.Add(_mcpMoreItem);
+        MoreMenu.Items.Add(_kbMoreItem);
+        MoreMenu.Items.Add(_moreHostSeparator);
+
+        // 先按现有内容立即装配一次：菜单已经在展开了，等异步读完库再填会闪一下空白
+        MoreMenu.Opening += (_, _) =>
+        {
+            RebuildMoreSubmenus();
+            _ = RefreshMoreSubmenusAsync();
+        };
+
+        MoreBtn.Flyout = MoreMenu;
+        ToolTip.SetTip(MoreBtn, "更多功能");
+    }
+
+    /// <summary>重读清单并把两个子菜单重装一遍。</summary>
+    private async Task RefreshMoreSubmenusAsync()
+    {
+        await LoadMcpServersAsync();
+        await LoadKnowledgeBasesAsync();
+        RebuildMoreSubmenus();
+    }
+
+    private void RebuildMoreSubmenus()
+    {
+        _mcpMoreItem.Items.Clear();
+        McpSelector.FillMenu(_mcpMoreItem.Items);
+
+        _kbMoreItem.Items.Clear();
+        KbSelector.FillMenu(_kbMoreItem.Items);
+    }
 
     // 说明：附件按钮没有做下拉菜单。粘贴走 Ctrl+V（含截图直接粘贴），
     // 上传走按钮本身 —— 再套一层菜单只是多一个会失效的入口。

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -297,7 +297,10 @@ public static class SubagentRunner
     {
         if (string.IsNullOrWhiteSpace(nameOrId)) return null;
 
-        var agents = await AgentRepository.GetAllAsync();
+        // 只认子 Agent：agents 表与「角色」共用，角色不该被 task 派发出去。
+        var agents = (await AgentRepository.GetAllAsync())
+            .Where(a => !string.Equals(a.Kind, Agent.KindRole, StringComparison.Ordinal))
+            .ToList();
         var key = nameOrId.Trim();
 
         return agents.FirstOrDefault(a => string.Equals(a.Id, key, StringComparison.Ordinal))
@@ -308,7 +311,7 @@ public static class SubagentRunner
     private static async Task<string> UnknownAgentTextAsync(string requested)
     {
         var names = (await AgentRepository.GetAllAsync())
-            .Where(a => a.IsEnabled)
+            .Where(a => a.IsEnabled && !string.Equals(a.Kind, Agent.KindRole, StringComparison.Ordinal))
             .Select(a => a.Name)
             .ToList();
 

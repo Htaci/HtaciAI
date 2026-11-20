@@ -1,0 +1,61 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="120" d:DesignHeight="28"
+             x:Class="HtaciAI.Controls.RoleSelectorControl">
+    <!--
+        角色选择器（可复用控件）：
+        按钮显示「人像图标 + 当前角色名 + 右箭头」，没选时显示「角色」。
+        与模型 / 知识库选择器同一形态 —— 当前值直接写在按钮上，不再只给一个图标。
+
+        不给 MinWidth：这一格的内容就是「图标 + 两三个字 + 箭头」，
+        定死最小宽度只会在短名字（对话 / 任务）右侧留出一段空白，
+        看着像是按钮没画完。宽度交给内容，长度上限由 LabelText.MaxWidth 兜住。
+
+        箭头朝右（ChevronRight）：这一格是「再点一下进到下一层」，不是可展开的折叠区。
+
+        选中角色不改写会话本身：它只是把角色上的默认模型 / 工具 / 技能 / MCP / 知识库
+        套到下面那排选择器上一次，之后用户怎么改都还是会话自己的事。
+        所以这里不需要「锁定」，也不能锁定。
+    -->
+    <UserControl.Styles>
+        <Style Selector="Button#RoleBtn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#F1F3F5"/>
+        </Style>
+        <Style Selector="Button#RoleBtn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="#E5E7EB"/>
+        </Style>
+    </UserControl.Styles>
+
+    <Button x:Name="RoleBtn"
+            Height="28"
+            Padding="8,0,6,0"
+            CornerRadius="8"
+            Background="Transparent">
+        <Button.Flyout>
+            <MenuFlyout/>
+        </Button.Flyout>
+        <StackPanel Orientation="Horizontal">
+            <TextBlock x:Name="IconText"
+                       Text="&#xF5BE;"
+                       FontFamily="{StaticResource IconFont}"
+                       FontSize="14"
+                       Margin="0,0,6,0"
+                       VerticalAlignment="Center"/>
+            <TextBlock x:Name="LabelText"
+                       Text="角色"
+                       FontSize="12"
+                       MaxWidth="120"
+                       TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center"/>
+            <TextBlock x:Name="Chevron"
+                       Text="&#xF2B1;"
+                       FontFamily="{StaticResource IconFont}"
+                       FontSize="10"
+                       Foreground="#9CA3AF"
+                       Margin="3,0,0,0"
+                       VerticalAlignment="Center"/>
+        </StackPanel>
+    </Button>
+</UserControl>

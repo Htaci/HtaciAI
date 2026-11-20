@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -8,8 +8,9 @@ using Microsoft.Data.Sqlite;
 namespace HtaciAI.Data;
 
 /// <summary>
-/// 智能体仓储（agents 表）：读写自定义 Agent 蓝图。工具/技能/MCP 以 JSON 数组文本存储，
-/// 复用 ChatRepository 的序列化约定（enabled_tool_ids 为 string 数组、enabled_skills 为含 id/status 的对象数组）。
+/// 智能体仓储（agents 表）：读写智能体定义 —— 角色与子 Agent 共用这张表，由 kind 列区分。
+/// 工具/技能/MCP 以 JSON 数组文本存储，复用 ChatRepository 的序列化约定
+/// （enabled_tool_ids 为 string 数组、enabled_skills 为含 id/status 的对象数组）。
 /// </summary>
 public static class AgentRepository
 {
@@ -22,7 +23,7 @@ public static class AgentRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, description, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, is_enabled, created_at, updated_at
+            SELECT id, kind, name, description, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, model, kb_id, is_enabled, created_at, updated_at
             FROM agents ORDER BY created_at ASC;
             """;
         await using var r = await cmd.ExecuteReaderAsync();
@@ -37,7 +38,7 @@ public static class AgentRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, description, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, is_enabled, created_at, updated_at
+            SELECT id, kind, name, description, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, model, kb_id, is_enabled, created_at, updated_at
             FROM agents WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -55,16 +56,19 @@ public static class AgentRepository
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO agents (id, name, description, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, is_enabled, created_at, updated_at)
-            VALUES ($id, $name, $description, $system_prompt, $enabled_tool_ids, $enabled_skills, $mcp_servers, $is_enabled, $created_at, $updated_at);
+            INSERT INTO agents (id, kind, name, description, system_prompt, enabled_tool_ids, enabled_skills, mcp_servers, model, kb_id, is_enabled, created_at, updated_at)
+            VALUES ($id, $kind, $name, $description, $system_prompt, $enabled_tool_ids, $enabled_skills, $mcp_servers, $model, $kb_id, $is_enabled, $created_at, $updated_at);
             """;
         cmd.Parameters.AddWithValue("$id", a.Id);
+        cmd.Parameters.AddWithValue("$kind", string.IsNullOrWhiteSpace(a.Kind) ? Agent.KindSubagent : a.Kind);
         cmd.Parameters.AddWithValue("$name", a.Name);
         cmd.Parameters.AddWithValue("$description", (object?)a.Description ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$system_prompt", (object?)a.SystemPrompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeToolIds(a.EnabledToolIds) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)SerializeSkills(a.EnabledSkills) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$mcp_servers", (object?)SerializeMcp(a.McpServers) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$model", (object?)a.Model ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$kb_id", (object?)a.KnowledgeBaseId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$is_enabled", a.IsEnabled ? 1 : 0);
         cmd.Parameters.AddWithValue("$created_at", a.CreatedAt);
         cmd.Parameters.AddWithValue("$updated_at", a.UpdatedAt);
@@ -79,18 +83,22 @@ public static class AgentRepository
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             UPDATE agents
-            SET name = $name, description = $description, system_prompt = $system_prompt,
+            SET kind = $kind, name = $name, description = $description, system_prompt = $system_prompt,
                 enabled_tool_ids = $enabled_tool_ids, enabled_skills = $enabled_skills,
-                mcp_servers = $mcp_servers, is_enabled = $is_enabled, updated_at = $updated_at
+                mcp_servers = $mcp_servers, model = $model, kb_id = $kb_id,
+                is_enabled = $is_enabled, updated_at = $updated_at
             WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", a.Id);
+        cmd.Parameters.AddWithValue("$kind", string.IsNullOrWhiteSpace(a.Kind) ? Agent.KindSubagent : a.Kind);
         cmd.Parameters.AddWithValue("$name", a.Name);
         cmd.Parameters.AddWithValue("$description", (object?)a.Description ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$system_prompt", (object?)a.SystemPrompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$enabled_tool_ids", (object?)SerializeToolIds(a.EnabledToolIds) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$enabled_skills", (object?)SerializeSkills(a.EnabledSkills) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$mcp_servers", (object?)SerializeMcp(a.McpServers) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$model", (object?)a.Model ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$kb_id", (object?)a.KnowledgeBaseId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$is_enabled", a.IsEnabled ? 1 : 0);
         cmd.Parameters.AddWithValue("$updated_at", a.UpdatedAt);
         await cmd.ExecuteNonQueryAsync();
@@ -111,15 +119,18 @@ public static class AgentRepository
     private static Agent Map(SqliteDataReader r) => new()
     {
         Id = r.GetString(0),
-        Name = r.GetString(1),
-        Description = r.IsDBNull(2) ? "" : r.GetString(2),
-        SystemPrompt = r.IsDBNull(3) ? "" : r.GetString(3),
-        EnabledToolIds = r.IsDBNull(4) ? new() : ParseToolIds(r.GetString(4)),
-        EnabledSkills = r.IsDBNull(5) ? new() : ParseSkills(r.GetString(5)),
-        McpServers = r.IsDBNull(6) ? new() : ParseMcp(r.GetString(6)),
-        IsEnabled = r.GetInt32(7) != 0,
-        CreatedAt = r.GetInt64(8),
-        UpdatedAt = r.GetInt64(9),
+        Kind = r.IsDBNull(1) ? Agent.KindSubagent : r.GetString(1),
+        Name = r.GetString(2),
+        Description = r.IsDBNull(3) ? "" : r.GetString(3),
+        SystemPrompt = r.IsDBNull(4) ? "" : r.GetString(4),
+        EnabledToolIds = r.IsDBNull(5) ? new() : ParseToolIds(r.GetString(5)),
+        EnabledSkills = r.IsDBNull(6) ? new() : ParseSkills(r.GetString(6)),
+        McpServers = r.IsDBNull(7) ? new() : ParseMcp(r.GetString(7)),
+        Model = r.IsDBNull(8) ? "" : r.GetString(8),
+        KnowledgeBaseId = r.IsDBNull(9) ? "" : r.GetString(9),
+        IsEnabled = r.GetInt32(10) != 0,
+        CreatedAt = r.GetInt64(11),
+        UpdatedAt = r.GetInt64(12),
     };
 
     private static string SerializeToolIds(List<string> ids)

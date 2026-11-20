@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
@@ -16,6 +16,7 @@ namespace HtaciAI.Views;
 public partial class NewTabPage : UserControl
 {
     public event EventHandler? SmartChatSelected;
+    public event EventHandler? AssistantsSelected;
     public event EventHandler? ToolsSelected;
     public event EventHandler? SkillsSelected;
     public event EventHandler? SubagentsSelected;
@@ -23,6 +24,9 @@ public partial class NewTabPage : UserControl
     public event EventHandler? McpSelected;
     public event EventHandler? StatsSelected;
     public event EventHandler? KnowledgeBaseSelected;
+
+    /// <summary>「自动化」卡片：定时任务页。</summary>
+    public event EventHandler? TasksSelected;
 
     /// <summary>内置卡片的张数。<b>插件卡片永远追加在它们后面</b>，重建时从这里开始删。</summary>
     private int _builtInCardCount;
@@ -132,6 +136,20 @@ public partial class NewTabPage : UserControl
             TagBg = Color.FromArgb(0xFF, 0xED, 0xF4, 0xFC),
             TagFg = Color.FromArgb(0xFF, 0x3A, 0x7B, 0xC8),
             OnClick = () => SmartChatSelected?.Invoke(this, EventArgs.Empty)
+        }));
+
+        CardsPanel.Children.Add(CreateCard(new CardData
+        {
+            Title = "助手",
+            Description = "会话开始时选中的角色：决定默认工具、模型与知识库",
+            IconGlyph = "\uF5BE",                          // Person
+            Tags = new[] { "角色", "预设" },
+            MainColor = Color.FromArgb(0xFF, 0xD9, 0x77, 0x06),
+            LightBg = Color.FromArgb(0xFF, 0xFD, 0xF4, 0xE6),
+            GlowAlpha = 0x26,
+            TagBg = Color.FromArgb(0xFF, 0xFC, 0xEE, 0xDA),
+            TagFg = Color.FromArgb(0xFF, 0xB4, 0x5F, 0x06),
+            OnClick = () => AssistantsSelected?.Invoke(this, EventArgs.Empty)
         }));
 
         CardsPanel.Children.Add(CreateCard(new CardData
@@ -274,7 +292,7 @@ public partial class NewTabPage : UserControl
         CardsPanel.Children.Add(CreateCard(new CardData
         {
             Title = "自动化",
-            Description = "规划定时任务和自动化流程",
+            Description = "定时任务：到点自动跑一轮 Agent 对话，结果留在运行历史里",
             IconGlyph = "\uF827",                          // Stopwatch
             Tags = new[] { "Automation", "Scheduling" },
             MainColor = Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
@@ -282,7 +300,7 @@ public partial class NewTabPage : UserControl
             GlowAlpha = 0x26,
             TagBg = Color.FromArgb(0xFF, 0xFE, 0xF7, 0xEC),
             TagFg = Color.FromArgb(0xFF, 0xD4, 0x89, 0x1A),
-            OnClick = null
+            OnClick = () => TasksSelected?.Invoke(this, EventArgs.Empty)
         }));
 
         //CardsPanel.Children.Add(CreateCard(new CardData

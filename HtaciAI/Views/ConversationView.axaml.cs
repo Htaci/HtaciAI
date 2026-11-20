@@ -2853,7 +2853,7 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
 
             // 路径解析不出来（不该发生，Scan 已保证非空）时退回纯文本，绝不吞掉内容
             if (AttachmentMarker.ToAttachment(span.Path) is { } info)
-                inlines.Add(new InlineUIContainer(new AttachmentChip(info, null, compact: true)));
+                inlines.Add(new InlineUIContainer(CreateBubbleChip(info)));
             else
                 inlines.Add(new Run(text.Substring(span.Start, span.Length)));
 
@@ -2865,6 +2865,31 @@ public partial class ConversationView : UserControl, IInteractionHost, IDisposab
 
         block.Inlines = inlines;
     }
+
+    /// <summary>
+    /// 气泡正文里的附件卡片，已经和后面那句文字对齐好。
+    ///
+    /// 卡片的高度固定（19），而正文里的文字字面只有 14 高：文字按基线落位时，
+    /// 字面中线在基线上方约 3.5px，卡片的中线却在基线上方 9.5px —— 直接放进
+    /// <see cref="InlineUIContainer"/> 会整个骑在字顶，看起来比旁边的文字高一截。
+    ///
+    /// 输入框里没有这个问题，是因为那是 AvaloniaEdit 的内联对象，它认
+    /// <c>TextBlock.BaselineOffset</c>；<see cref="SelectableTextBlock"/> 的 TextLayout
+    /// 不认（改了只会把行撑高，卡片位置照旧）。所以这里用 <see cref="RenderTransform"/>
+    /// 把这颗卡片单独平移半个身高差：只影响绘制，不改行高，气泡不会被撑高。
+    /// </summary>
+    private static AttachmentChip CreateBubbleChip(ChatAttachment info)
+    {
+        var chip = new AttachmentChip(info, null, compact: true);
+        chip.RenderTransform = new TranslateTransform(0, BubbleChipDrop);
+        return chip;
+    }
+
+    /// <summary>
+    /// 气泡内联卡片相对文字要往下挪的量：(卡片高 19 − 字面高 14) / 2。
+    /// 正文换成别的字号时要跟着改。
+    /// </summary>
+    private const double BubbleChipDrop = 2.5;
 
     private async Task CopyText(string text)
     {

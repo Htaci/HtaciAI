@@ -82,12 +82,16 @@ public sealed class SessionViewCache
     /// <summary>插件会话的键。同样只带会话 id：插件会话 id 自带 <c>plugin-</c> 前缀、全局唯一。</summary>
     public static string KeyForPluginSession(string sessionId) => "p:" + sessionId;
 
-    /// <summary>从缓存键里取回会话 id（键的三种格式见上面）。会话 id 本身不含冒号。</summary>
+    /// <summary>定时任务运行的键。会话 id 自带 <c>task-run-</c> 前缀、全局唯一，同样只带 id。</summary>
+    public static string KeyForTaskRun(string sessionId) => "t:" + sessionId;
+
+    /// <summary>从缓存键里取回会话 id（键的几种格式见上面）。会话 id 本身不含冒号。</summary>
     public static string SessionIdOf(string key)
     {
         if (key.StartsWith("s:", StringComparison.Ordinal)) return key[2..];
         if (key.StartsWith("a:", StringComparison.Ordinal)) return key[2..];
         if (key.StartsWith("p:", StringComparison.Ordinal)) return key[2..];
+        if (key.StartsWith("t:", StringComparison.Ordinal)) return key[2..];
 
         var index = key.IndexOf(':', 2);
         return index < 0 ? key : key[(index + 1)..];
@@ -186,6 +190,7 @@ public sealed class SessionViewCache
     {
         Evict(KeyForSession(sessionId));
         Evict(KeyForSubagent(sessionId));
+        Evict(KeyForTaskRun(sessionId));
         EvictWhere(key => key.StartsWith("w:", StringComparison.Ordinal) &&
                           key.EndsWith(":" + sessionId, StringComparison.Ordinal));
     }
